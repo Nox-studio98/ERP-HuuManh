@@ -6,6 +6,7 @@ import { Badge, Button, Sheet, Spinner } from "./components/ui";
 import { useQueue, syncQueue } from "./offline";
 import { get } from "./api";
 import { ROLES } from "./format";
+import { PushToggle } from "./components/PushToggle";
 import Login, { ChangePassword } from "./screens/Login";
 
 const Pos = lazy(() => import("./screens/Pos"));
@@ -28,10 +29,14 @@ const Bank = lazy(() => import("./screens/b2b/Bank"));
 const Suppliers = lazy(() => import("./screens/b2b/Suppliers"));
 const Integrations = lazy(() => import("./screens/b2b/Integrations"));
 const Exports = lazy(() => import("./screens/b2b/Exports"));
+const OnlineOrders = lazy(() => import("./screens/online/OnlineOrders"));
+const Website = lazy(() => import("./screens/online/Website"));
+const Zones = lazy(() => import("./screens/online/Zones"));
+const ShopAccounts = lazy(() => import("./screens/online/ShopAccounts"));
 
 const I = (d: string) => <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 type Nav = { path: string; label: string; icon: ReactNode; perms: string[]; el: ReactNode; hidden?: boolean; group?: string; pri?: number };
-const G = { retail: "Bán lẻ", stock: "Kho & hàng", b2b: "Bán sỉ", fin: "Tài chính", admin: "Quản trị" };
+const G = { retail: "Bán lẻ", stock: "Kho & hàng", b2b: "Bán sỉ", fin: "Tài chính", admin: "Quản trị", online: "Bán online" };
 const NAV: Nav[] = [
   { path: "/pos", label: "Bán hàng", group: G.retail, pri: 1, perms: ["pos.sell"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z"), el: <Pos /> },
   { path: "/orders", label: "Đơn hàng", group: G.retail, pri: 3, perms: ["orders.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"), el: <Orders /> },
@@ -43,6 +48,10 @@ const NAV: Nav[] = [
   { path: "/quotes", label: "Báo giá", group: G.b2b, perms: ["b2b.view"], icon: I("M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h6"), el: <Quotes /> },
   { path: "/b2b-orders", label: "Đơn sỉ", group: G.b2b, perms: ["b2b.view"], icon: I("M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10"), el: <B2bOrders /> },
   { path: "/deliveries", label: "Soạn & giao", group: G.b2b, pri: 2, perms: ["b2b.deliver"], icon: I("M3 6h11v10H3zM14 9h4l3 3v4h-7zM7 19a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm10 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"), el: <Delivery /> },
+  { path: "/online-orders", label: "Đơn online", group: G.online, perms: ["orders.online.manage"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2zM13 3l3 3-3 3"), el: <OnlineOrders /> },
+  { path: "/website", label: "Website", group: G.online, perms: ["products.write"], icon: I("M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"), el: <Website /> },
+  { path: "/delivery-zones", label: "Khu vực giao", group: G.online, perms: ["orders.online.manage"], icon: I("M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"), el: <Zones /> },
+  { path: "/shop-accounts", label: "Tài khoản khách", group: G.online, perms: ["customers.view_pii"], icon: I("M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0"), el: <ShopAccounts /> },
   { path: "/finance", label: "Thu chi", group: G.fin, perms: ["finance.view", "finance.shift_reconcile"], icon: I("M3 7h18v12H3zM3 11h18M16 15h2"), el: <Finance /> },
   { path: "/debts", label: "Công nợ", group: G.fin, perms: ["debt.view"], icon: I("M12 3v18M16.5 7.5C16 6 14.2 5 12 5S8 6.2 8 8c0 4.5 8 2.5 8 7 0 1.8-1.8 3-4 3s-4-1-4.5-2.5"), el: <Debts /> },
   { path: "/invoices", label: "Hoá đơn", group: G.fin, perms: ["debt.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3"), el: <Invoices /> },
@@ -98,6 +107,7 @@ function Shell() {
         ))}
         <div className="foot stack">
           <div className="small muted">{user?.fullName} · {ROLES[user?.role ?? ""] ?? user?.role}</div>
+          <PushToggle />
           <Button variant="ghost" size="sm" onClick={logout}>Đăng xuất</Button>
         </div>
       </nav>
@@ -133,6 +143,7 @@ function Shell() {
           ))}
           {can("pos.shift") && <a href="/shift-close" className="btn ghost" style={{ justifyContent: "flex-start" }} onClick={(e) => { onLink(e, "/shift-close"); setMore(false); }}>Chốt ca</a>}
           <div className="small muted">{user?.fullName} · {ROLES[user?.role ?? ""] ?? user?.role}</div>
+          <PushToggle />
           <Button variant="danger" onClick={logout}>Đăng xuất</Button>
         </div>
       </Sheet>

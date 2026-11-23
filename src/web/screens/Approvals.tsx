@@ -5,9 +5,10 @@ import { Obj } from "./Inventory";
 import { toast } from "../components/toast";
 import { fmtDateTime, money } from "../format";
 import { Lnk } from "./b2b/kit";
+import { navigate } from "../router";
 
 /** Loại yêu cầu thật của backend (routes/pos.ts, finance.ts, inventory.ts, prices.ts). */
-const TYPES: Record<string, string> = { "order.below_cost": "Bán dưới giá vốn", "order.discount": "Giảm giá vượt ngưỡng", "stock_doc.post": "Chứng từ kho cần duyệt", "cash_voucher.post": "Chi tiền lớn", "price.activate": "Đổi giá bán", "order.credit_override": "Đơn sỉ vượt hạn mức công nợ", "quote.approve": "Báo giá giảm sâu / dưới giá vốn", "debt_adjustment.post": "Điều chỉnh công nợ" };
+const TYPES: Record<string, string> = { "order.below_cost": "Bán dưới giá vốn", "order.discount": "Giảm giá vượt ngưỡng", "stock_doc.post": "Chứng từ kho cần duyệt", "cash_voucher.post": "Chi tiền lớn", "price.activate": "Đổi giá bán", "order.credit_override": "Đơn sỉ vượt hạn mức công nợ", "quote.approve": "Báo giá giảm sâu / dưới giá vốn", "debt_adjustment.post": "Điều chỉnh công nợ", "shop.b2b_link": "Khách web xin liên kết khách sỉ" };
 const CREDIT: Record<string, string> = { overdue: "Khách đang có nợ quá hạn", over_limit: "Vượt hạn mức công nợ" };
 const ADJ: Record<string, string> = { discount: "Chiết khấu", write_off: "Xoá nợ", offset: "Cấn trừ" };
 export default function Approvals() {
@@ -32,9 +33,11 @@ const detail = (x: any) => {
   else if (String(x.type).startsWith("order.")) { d["Tổng đơn"] = money(p.total); d["Giá trị giảm"] = money(p.discountValue); }
   else if (x.type === "cash_voucher.post") { d["Phiếu"] = p.code; d["Số tiền"] = money(p.amount); }
   else if (x.type === "price.activate") { d["Giá mới"] = money(p.unitPrice); d["Mặt hàng #"] = p.productId; d["Có hiệu lực từ"] = fmtDateTime(p.effectiveFrom); if (p.belowCost) d["Cảnh báo"] = "Thấp hơn giá vốn"; }
+  else if (x.type === "shop.b2b_link") { d["Công ty"] = p.companyName; d["Mã số thuế"] = p.taxCode; if (p.note) d["Ghi chú"] = p.note; d["Tài khoản web #"] = x.refId; }
   else if (x.refType) d["Tham chiếu"] = `${x.refType} #${x.refId}`;
   return d;
 };
+  const isLink = sel?.type === "shop.b2b_link";
   return (
     <div className="stack">
       {a.data.map((x) => (
@@ -45,7 +48,7 @@ const detail = (x: any) => {
           {x.type === "order.credit_override" && <div className="small" style={{ marginTop: 2 }}><b>{x.payload?.orderCode}</b> · {money(x.payload?.total)}</div>}
         </button>
       ))}
-      <Sheet open={!!sel} onClose={() => setSel(null)} title={sel ? `Yêu cầu #${sel.id}` : ""} footer={<><Button variant="danger" disabled={busy} onClick={() => decide("rejected")}>Từ chối</Button><Button className="grow" loading={busy} onClick={() => decide("approved")}>Duyệt</Button></>}>
+      <Sheet open={!!sel} onClose={() => setSel(null)} title={sel ? `Yêu cầu #${sel.id}` : ""} footer={<><Button variant="danger" disabled={busy} onClick={() => decide("rejected")}>Từ chối</Button>{isLink ? <Button className="grow" onClick={() => { const id = sel.refId; setSel(null); navigate(`/shop-accounts?id=${id}`); }}>Chọn khách sỉ để liên kết</Button> : <Button className="grow" loading={busy} onClick={() => decide("approved")}>Duyệt</Button>}</>}>
         {sel && <div className="stack"><Card className="flat"><Obj v={detail(sel)} /></Card>
           {sel.type === "order.credit_override" && <Lnk to={`/b2b-orders/${sel.refId}`}>Xem đơn</Lnk>}
           {sel.type === "debt_adjustment.post" && sel.payload?.partnerId && <Lnk to={`/debts?statement=${sel.payload.partnerType}:${sel.payload.partnerId}`}>Xem sao kê đối tác</Lnk>}<TextArea label="Ghi chú quyết định" value={note} onChange={(e) => setNote(e.target.value)} /></div>}

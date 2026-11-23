@@ -34,3 +34,15 @@ self.addEventListener("fetch", (e) => {
     }),
   );
 });
+
+/* Web Push cho nhân viên (đơn online mới) */
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Hữu Mạnh", { body: d.body || "", icon: "/icon.svg", data: { url: d.url || "/online-orders" } }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "/online-orders";
+  e.waitUntil(self.clients.matchAll({ type: "window" }).then((cs) => { for (const c of cs) { if ("focus" in c) { c.navigate(url).catch(() => {}); return c.focus(); } } return self.clients.openWindow(url); }));
+});
