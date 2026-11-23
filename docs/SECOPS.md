@@ -94,3 +94,18 @@ Mục tiêu: bảo vệ **tiền** (đơn, thu chi, công nợ), **tồn kho**, 
 | Hằng tháng | Rà soát tài khoản & quyền (ai nghỉ việc, ai đổi vai trò) |
 | Hằng quý | Diễn tập khôi phục từ backup; xoay vòng token/secret; pentest nhẹ (OWASP ASVS L1) |
 | Trước mỗi đợt go-live | Security review diff, kiểm thử phân quyền, quét DAST (OWASP ZAP) trên staging |
+
+## 9. Bổ sung Đợt 3 — website & app khách (bề mặt tấn công công khai)
+
+| # | Mối đe doạ | Biện pháp |
+|---|---|---|
+| T14 | Website công khai bị khai thác để vào ERP | **Worker riêng** `huu-manh-shop`, không chứa route ERP; ERP đặt sau **Cloudflare Access** (chỉ nhân viên). Hai Worker chung D1 nhưng shop chỉ chạy các truy vấn trong `src/shop/worker`. |
+| T15 | Bot đăng ký / nhồi mật khẩu / đặt đơn rác giữ hết tồn | Turnstile ở đăng ký, đăng nhập, quên mật khẩu, đặt hàng vãng lai; Workers Rate Limiting theo IP; đơn chuyển khoản chưa trả tự huỷ sau `online.hold_minutes_transfer` phút và nhả tồn; khung giờ giới hạn số đơn. |
+| T16 | Sửa giá / phí giao ở client | Server luôn tính lại giá (`resolvePrice`), phí giao, tổng; giá khác dự kiến → 409 `price_changed` (EC-11). |
+| T17 | Dò đơn của người khác (IDOR) | Tra cứu khách vãng lai cần `trackingToken` 192-bit + 4 số cuối SĐT; khách đăng nhập chỉ thấy đơn của mình; OrderView không chứa giá vốn, lô, ghi chú nội bộ. |
+| T18 | Lộ tồn kho thật cho đối thủ | `availableMilli` công khai bị làm tròn và chặn trần 99 đơn vị. |
+| T19 | Webhook thanh toán giả | HMAC + cửa sổ thời gian + idempotency `webhook_events`; không tin trang "return" của cổng — chỉ webhook/đối soát sao kê mới đổi `payment_status`. |
+| T20 | Upload file độc hại (ảnh sản phẩm/CMS) | Kiểm magic bytes jpg/png/webp, ≤ 2 MB, tên file do server sinh (uuid), phục vụ qua `/img/` chỉ prefix `products/`, `cms/`; nội dung bài viết là markdown render không HTML thô; banner chỉ link nội bộ. |
+| T21 | Lộ dữ liệu cá nhân khách (NĐ 13/2023) | Khách tự xoá tài khoản → ẩn danh hoá; email/push chỉ chứa mã đơn + trạng thái + link; NV không có `customers.view_pii` thấy SĐT đã che. |
+
+Secrets thêm cho shop: `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRIVATE_KEY` (ERP + shop), var `VAPID_PUBLIC_KEY`, `SHOP_BASE_URL`.
