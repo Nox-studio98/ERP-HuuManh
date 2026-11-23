@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { vnDay } from "./lib/time";
 import { enqueueDebtReminders, sweepJobs } from "./services/jobs";
+import { cancelExpiredAwaitingPayment } from "./services/online-payments";
 import { swapBadReservations } from "./services/reservations";
 import { sysAudit } from "./services/sysaudit";
 
@@ -20,6 +21,11 @@ export async function runScheduled(event: ScheduledController, env: Env) {
   }
   if (event.cron === "*/5 * * * *") {
     await sweepJobs(env);
+    try {
+      await cancelExpiredAwaitingPayment(env); // EC-05: huỷ đơn online chờ chuyển khoản quá hạn
+    } catch (e) {
+      console.error(JSON.stringify({ level: "error", msg: "cancel_expired_online", err: String((e as Error)?.message).slice(0, 200) }));
+    }
     return;
   }
   if (event.cron === "0 1 * * *") {

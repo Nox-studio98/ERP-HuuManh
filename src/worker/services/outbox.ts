@@ -7,7 +7,8 @@ import type { Env } from "../env";
  *  3. Cron mỗi 5 phút quét job quá hạn (phòng khi Queue lỗi) — xem services/jobs.ts (processJob, sweepJobs).
  * Không bao giờ gọi API ngoài trong request của nhân viên quầy.
  */
-export type JobType = "einvoice.issue" | "einvoice.adjust" | "einvoice.cancel" | "debt.remind" | "fresco.ack";
+export type JobType = "einvoice.issue" | "einvoice.adjust" | "einvoice.cancel" | "debt.remind" | "fresco.ack"
+  | "notify.order_status" | "notify.staff_new_order" | "notify.email";
 
 export function enqueueJobStmt(db: D1Database, type: JobType, refType: string, refId: number, payload: unknown = {}) {
   return db
