@@ -23,5 +23,22 @@
   "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }] },
   "vars": { "APP_ENV": "production" },
   "observability": { "enabled": true },
-  "workers_dev": true
+  "workers_dev": true,
+  "env": {
+    // Staging: D1/R2/Queue RIÊNG của staging — tuyệt đối không trỏ vào dữ liệu production
+    "staging": {
+      "name": "huu-manh-shop-staging",
+      "vars": { "APP_ENV": "staging" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "huu-manh-erp-staging",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }],
+      "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs-staging" }] }
+    }
+  }
 }
