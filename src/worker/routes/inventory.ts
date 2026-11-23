@@ -429,6 +429,8 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
 function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
   const db = c.env.DB;
   return [
+    // Khoá chống post trùng: lần thứ hai vi phạm PRIMARY KEY → cả batch rollback (migrations/0002)
+    db.prepare(`INSERT INTO stock_doc_post_guard(doc_id) VALUES (?)`).bind(doc.id),
     db
       .prepare(`UPDATE stock_docs SET status='posted', posted_at=?, total_amount=?, approved_by=?, version=version+1 WHERE id=? AND status IN ('draft','pending_approval')`)
       .bind(new Date().toISOString(), plan.total, approvedBy, doc.id),
