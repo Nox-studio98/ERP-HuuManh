@@ -60,6 +60,21 @@ app.route("/api/v1", v1);
 app.all("/api/*", (c) => c.json({ error: { code: "not_found", message: "Không tìm thấy" } }, 404));
 app.onError(onError);
 
+// Ảnh sản phẩm / CMS từ R2 (cùng quy tắc với shop worker): chỉ prefix products/ và cms/, chặn "..".
+app.get("/img/*", async (c) => {
+  const key = decodeURIComponent(c.req.path.slice("/img/".length));
+  if (!/^(products|cms)\//.test(key) || key.includes("..") || key.includes("\\")) return c.text("Not found", 404);
+  const obj = await c.env.FILES.get(key);
+  if (!obj) return c.text("Not found", 404);
+  return new Response(obj.body, {
+    headers: {
+      "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff",
+    },
+  });
+});
+
 // Ngoài /api: trả SPA tĩnh (Workers Static Assets, not_found_handling = single-page-application)
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

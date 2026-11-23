@@ -125,3 +125,15 @@ describe("CMS banner + bài viết (M8-10)", () => {
     expect((await api("manager", "GET", `/api/v1/cms/posts/${a.body.id}`)).status).toBe(404);
   });
 });
+
+describe("ERP /img route", () => {
+  it("serves product images and blocks other prefixes / traversal", async () => {
+    const { testEnv } = await import("./helpers");
+    const { app } = await import("../src/worker/index");
+    await testEnv.FILES.put("products/1/x.png", new Uint8Array([137, 80, 78, 71]), { httpMetadata: { contentType: "image/png" } });
+    await testEnv.FILES.put("backups/secret.ndjson", "secret");
+    expect((await app.request("/img/products/1/x.png", {}, testEnv)).status).toBe(200);
+    expect((await app.request("/img/backups/secret.ndjson", {}, testEnv)).status).toBe(404);
+    expect((await app.request("/img/products/../backups/secret.ndjson", {}, testEnv)).status).toBe(404);
+  });
+});
