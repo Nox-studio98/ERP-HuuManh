@@ -4,7 +4,7 @@ import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, MoneyInput, N
 import { Scanner } from "../components/Scanner";
 import { Receipt } from "../components/Receipt";
 import { toast } from "../components/toast";
-import { METHODS, money, qtyText, unitLabel, uuid } from "../format";
+import { METHODS, money, qtyText, unitLabel, uuid, withShown } from "../format";
 import { enqueue, useQueue, syncQueue } from "../offline";
 import { navigate } from "../router";
 import { useCan } from "../store";
@@ -108,7 +108,7 @@ function Sell({ shift }: { shift: any }) {
             {prods.data.map((p) => (
               <button key={p.id} className="ptile" onClick={() => add(p)} aria-label={`Thêm ${p.name}`}>
                 <span className="n">{p.name}</span>
-                <span className="small muted">{p.sellByWeight ? "Bán theo cân" : "Bán theo " + unitLabel(p.baseUnit)}{p.availableMilli != null ? ` · tồn ${qtyText(p.availableMilli)}` : ""}</span>
+                <span className="small muted">{p.sellByWeight ? "Bán theo cân" : "Bán theo " + unitLabel(p.baseUnit)}{p.availableMilli != null ? ` · tồn ${qtyText(p.availableMilli, p.baseUnit)}` : ""}</span>
                 <span className="p">{priceOf(p) ? `${money(priceOf(p))}/${unitLabel(p.baseUnit)}` : "Chưa có giá"}</span>
               </button>
             ))}
@@ -171,7 +171,7 @@ function Sell({ shift }: { shift: any }) {
       {weighing && <WeightSheet p={weighing.p} unit={weighing.unit ?? weighing.p.baseUnit} onClose={() => setWeighing(null)} onAdd={(n) => { add(weighing.p, weighing.unit, n); setWeighing(null); }} />}
       {checkout && (
         <CheckoutSheet total={total} payloadBase={payloadBase} onClose={() => setCheckout(false)} noteValue={note} onNote={setNote}
-          onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...order, change }, names }); reset(); }}
+          onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); reset(); }}
           onQueued={() => { setCheckout(false); reset(); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
       )}
       <Sheet open={!!receipt} onClose={() => setReceipt(null)} title="Hoá đơn" footer={<Button block onClick={() => setReceipt(null)}>Đơn mới</Button>}>
@@ -241,7 +241,7 @@ function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValu
           <div key={i} className="card flat" style={{ padding: 12, outline: active === i ? "2px solid var(--accent)" : undefined }} onClick={() => setActive(i)}>
             <div className="row">
               <div className="chips grow" role="radiogroup" aria-label="Hình thức thanh toán">
-                {[["cash", "Tiền mặt"], ["transfer", "Chuyển khoản/QR"], ["card", "Thẻ"]].map(([m, l]) => (
+                {[["cash", "Tiền mặt"], ["transfer", "Chuyển khoản"], ["qr", "QR"], ["card", "Thẻ"]].map(([m, l]) => (
                   <button key={m} className="chip" role="radio" aria-checked={p.method === m} aria-pressed={p.method === m} onClick={() => setPays((ps) => ps.map((x, j) => (j === i ? { ...x, method: m } : x)))}>{l}</button>
                 ))}
               </div>
@@ -256,7 +256,7 @@ function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValu
             )}
           </div>
         ))}
-        {pays.length < 3 && <Button variant="ghost" onClick={() => { setPays((ps) => [...ps, { method: ps.some((p) => p.method === "transfer") ? "card" : "transfer", amount: Math.max(0, remaining) }]); setActive(pays.length); }}>+ Chia thanh toán</Button>}
+        {pays.length < 3 && <Button variant="ghost" onClick={() => { setPays((ps) => [...ps, { method: ps.some((p) => p.method === "qr") ? "transfer" : "qr", amount: Math.max(0, remaining) }]); setActive(pays.length); }}>+ Chia thanh toán</Button>}
         <div className="totals">
           <div><span className="muted">Đã nhận</span><span className="money">{money(paid)}</span></div>
           {remaining > 0 && <div style={{ color: "var(--danger)" }}><span>Còn thiếu</span><span className="money">{money(remaining)}</span></div>}

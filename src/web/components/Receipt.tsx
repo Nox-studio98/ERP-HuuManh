@@ -6,7 +6,7 @@ export type ReceiptOrder = any;
 export const lineName = (l: any, names?: Record<number, string>) => l.productName ?? l.name ?? names?.[l.productId] ?? `Sản phẩm #${l.productId}`;
 
 export function receiptText(o: ReceiptOrder, names?: Record<number, string>) {
-  const L = (o.lines ?? []).map((l: any) => `${lineName(l, names)} ${qtyText(l.qtyMilli, l.unit)} x ${money(l.unitPrice)} = ${money(l.lineTotal)}`);
+  const L = (o.lines ?? []).map((l: any) => `${lineName(l, names)} ${qtyText(l.qtyShown ?? l.qtyMilli, l.unit)} x ${money(l.priceShown ?? l.unitPrice)} = ${money(l.lineTotal)}`);
   return [`Hữu Mạnh — Hoá đơn ${o.code ?? ""}`, fmtDateTime(o.createdAt), ...L, `Tổng: ${money(o.total)}`].join("\n");
 }
 
@@ -33,7 +33,7 @@ export function Receipt({ order, names, change }: { order: ReceiptOrder; names?:
         {(o.lines ?? []).map((l: any, i: number) => (
           <div key={l.id ?? i} style={{ marginBottom: 6 }}>
             <div>{lineName(l, names)}</div>
-            <div className="l"><span>{qtyText(l.qtyMilli, l.unit)} × {money(l.unitPrice)}</span><span>{money(l.lineTotal)}</span></div>
+            <div className="l"><span>{qtyText(l.qtyShown ?? l.qtyMilli, l.unit)} × {money(l.priceShown ?? l.unitPrice)}</span><span>{money(l.lineTotal)}</span></div>
             {l.discount ? <div className="l"><span>Giảm</span><span>-{money(l.discount)}</span></div> : null}
           </div>
         ))}

@@ -39,3 +39,19 @@ export const uuid = () =>
     ? crypto.randomUUID()
     : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); });
 export const downloadHref = (path: string) => `/api/v1${path}`;
+
+/* ---- Quy đổi hiển thị theo đơn vị của dòng ----
+   Backend lưu qty_milli theo ĐƠN VỊ CHÍNH và unit_price theo ĐƠN VỊ CHÍNH; `unit` của dòng chỉ là đơn vị người dùng đã chọn. */
+export type UnitInfo = { id: number; baseUnit: string; units?: { unit: string; factorMilli: number }[] };
+export const unitFactor = (p: UnitInfo | undefined, unit: string) => (!p || unit === p.baseUnit ? 1000 : p.units?.find((u) => u.unit === unit)?.factorMilli ?? 1000);
+/** Gắn qtyShown (milli theo đơn vị của dòng) và priceShown (giá / đơn vị của dòng) cho các dòng đơn/chứng từ. */
+export function withShown<T extends { lines?: any[] }>(doc: T, pmap?: Map<number, UnitInfo>): T {
+  if (!doc?.lines) return doc;
+  return {
+    ...doc,
+    lines: doc.lines.map((l: any) => {
+      const f = unitFactor(pmap?.get(l.productId), l.unit);
+      return { ...l, factor: f, qtyShown: l.qtyMilli != null ? (l.qtyMilli * 1000) / f : l.qtyMilli, docQtyShown: l.docQtyMilli != null ? (l.docQtyMilli * 1000) / f : l.docQtyMilli, priceShown: l.unitPrice != null ? Math.round((l.unitPrice * f) / 1000) : l.unitPrice };
+    }),
+  };
+}

@@ -82,7 +82,7 @@ function VoucherForm({ funds, cats, onClose, onSaved }: { funds: any[]; cats: an
 function ReverseSheet({ v, onClose, onDone }: { v: any; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   return (
-    <Sheet open onClose={onClose} title={`Đảo phiếu ${v.code}`} footer={<Button block variant="danger" loading={busy} disabled={!reason.trim()} onClick={async () => { setBusy(true); try { await post(`/vouchers/${v.id}/reverse`, { reason, note: reason }); toast("Đã tạo phiếu đảo", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>Tạo phiếu đảo {money(v.amount)}</Button>}>
+    <Sheet open onClose={onClose} title={`Đảo phiếu ${v.code}`} footer={<Button block variant="danger" loading={busy} disabled={!reason.trim()} onClick={async () => { setBusy(true); try { await post(`/vouchers/${v.id}/reverse`, { reason }); toast("Đã tạo phiếu đảo", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>Tạo phiếu đảo {money(v.amount)}</Button>}>
       <div className="stack"><Banner>Phiếu cũ không bị sửa; hệ thống tạo phiếu đảo ở kỳ hiện tại.</Banner><TextArea label="Lý do đảo" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
     </Sheet>
   );
@@ -94,12 +94,12 @@ function Recon() {
   return (
     <div className="stack">
       <div style={{ maxWidth: 200 }}><Input label="Ngày" type="date" value={day} max={todayVN()} onChange={(e) => setDay(e.target.value)} /></div>
-      {r.loading ? <Spinner /> : <DataTable rows={r.data ?? []} rowKey={(x) => x.id} empty="Không có ca trong ngày" rowClass={(x) => (x.diffCash ?? (x.countedCash != null && x.expectedCash != null ? x.countedCash - x.expectedCash : 0) ? "bad" : "")} cols={[
-        { key: "s", label: "Ca", title: true, render: (x) => <b>#{x.id} {x.userName ?? x.fullName ?? ""}</b> },
+      {r.loading ? <Spinner /> : <DataTable rows={r.data ?? []} rowKey={(x) => x.id} empty="Không có ca trong ngày" rowClass={(x) => (x.diff ? "bad" : "")} cols={[
+        { key: "s", label: "Ca", title: true, render: (x) => <b>#{x.id} {x.cashierName ?? ""}</b> },
         { key: "t", label: "Giờ", render: (x) => `${fmtTime(x.openedAt)} – ${x.closedAt ? fmtTime(x.closedAt) : "đang mở"}` },
         { key: "e", label: "Dự kiến", right: true, render: (x) => money(x.expectedCash) },
-        { key: "c", label: "Kiểm đếm", right: true, render: (x) => money(x.countedCash) },
-        { key: "d", label: "Chênh lệch", right: true, render: (x) => { const d = x.diffCash ?? (x.countedCash != null && x.expectedCash != null ? x.countedCash - x.expectedCash : 0); return d ? <Badge tone="warn">{money(d)}</Badge> : <Badge tone="ok">Khớp</Badge>; } },
+        { key: "c", label: "Kiểm đếm", right: true, render: (x) => x.countedCash != null ? money(x.countedCash) : "—" },
+        { key: "d", label: "Chênh lệch", right: true, render: (x) => { if (x.status !== "closed") return <Badge>Đang mở</Badge>; const d = x.diff ?? 0; return d ? <Badge tone="warn">{money(d)}</Badge> : <Badge tone="ok">Khớp</Badge>; } },
         { key: "r", label: "Lý do", render: (x) => x.diffReason ?? "—" },
       ]} />}
     </div>

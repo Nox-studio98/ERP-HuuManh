@@ -28,7 +28,7 @@ export default function Login() {
 
 export function ChangePassword() {
   const [cur, setCur] = useState(""), [n1, setN1] = useState(""), [n2, setN2] = useState(""), [busy, setBusy] = useState(false);
-  const err = n1 && n1.length < 8 ? "Mật khẩu mới tối thiểu 8 ký tự" : n2 && n1 !== n2 ? "Mật khẩu nhập lại chưa khớp" : "";
+  const err = n1 && n1.length < 10 ? "Mật khẩu mới tối thiểu 10 ký tự" : n2 && n1 !== n2 ? "Mật khẩu nhập lại chưa khớp" : "";
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); if (err) return; setBusy(true);
     try { await changePassword(cur, n1); toast("Đã đổi mật khẩu", "ok"); } catch {} finally { setBusy(false); }

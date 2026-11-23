@@ -3,13 +3,14 @@ import { ApiError, get, items, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
 import { Scanner } from "../components/Scanner";
 import { toast } from "../components/toast";
-import { DOC_STATUS, DOC_TYPES, fmtDate, fmtDateTime, money, qtyText, todayVN, unitLabel } from "../format";
+import { DOC_STATUS, DOC_TYPES, fmtDate, fmtDateTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
+import { useUnitMap } from "../units";
 import { useCan } from "../store";
 import type { Product } from "./Pos";
 
 const REASONS = [["dap", "Dập"], ["heo", "Héo"], ["het_han", "Hết hạn"], ["hao_can", "Hao cân"], ["khac", "Khác"]];
 const docTone = (s: string) => (s === "posted" ? "ok" : s === "pending_approval" ? "warn" : s === "cancelled" ? "danger" : "info") as any;
-const remain = (l: any) => l.remainingMilli ?? l.qtyMilli ?? l.onHandMilli ?? l.availableMilli;
+const remain = (l: any) => l.qtyOnHandMilli ?? l.onHandMilli ?? l.remainingMilli ?? l.availableMilli;
 const pname = (x: any) => x.productName ?? x.name ?? `#${x.productId}`;
 
 export default function Inventory() {
@@ -39,6 +40,8 @@ export default function Inventory() {
 
 function Alerts() {
   const a = useAsync(() => get("/stock/alerts"), []);
+  const pmap = useUnitMap();
+  const bu = (x: any) => pmap?.get(x.productId ?? x.id)?.baseUnit ?? x.baseUnit;
   if (a.loading) return <Spinner />;
   const d = a.data ?? {};
   const low = d.lowStock ?? [], soon = d.expiringSoon ?? [], exp = d.expired ?? [];
@@ -52,16 +55,16 @@ function Alerts() {
       {exp.length > 0 && <Banner tone="danger">Có {exp.length} lô đã hết hạn — chỉ được xuất bằng phiếu huỷ hàng.</Banner>}
       <Card title="Tồn thấp"><DataTable rows={low} rowKey={(x: any) => x.productId ?? x.id} empty="Không có mặt hàng dưới mức tồn tối thiểu" cols={[
         { key: "n", label: "Hàng", title: true, render: (x: any) => pname(x) },
-        { key: "a", label: "Tồn", right: true, render: (x: any) => qtyText(x.availableMilli ?? x.qtyMilli, x.baseUnit ?? "kg") },
-        { key: "m", label: "Tối thiểu", right: true, render: (x: any) => qtyText(x.minStockMilli, x.baseUnit ?? "kg") },
+        { key: "a", label: "Tồn", right: true, render: (x: any) => qtyText(x.onHandMilli, bu(x)) },
+        { key: "m", label: "Tối thiểu", right: true, render: (x: any) => qtyText(x.minStockMilli, bu(x)) },
       ]} /></Card>
       <div className="grid3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", alignItems: "start" }}>
         {[["Sắp hết hạn", soon, "warn"], ["Đã hết hạn", exp, "danger"]].map(([t, rows, tn]: any) => (
-          <Card key={t} title={t}><DataTable rows={rows} rowKey={(x: any) => x.lotId ?? x.id ?? x.lotCode} empty="Không có lô nào" cols={[
+          <Card key={t} title={t}><DataTable rows={rows} rowKey={(x: any) => x.id} empty="Không có lô nào" cols={[
             { key: "n", label: "Hàng", title: true, render: (x: any) => pname(x) },
             { key: "l", label: "Lô", render: (x: any) => <span className="num">{x.lotCode}</span> },
             { key: "e", label: "HSD", render: (x: any) => <Badge tone={tn}>{fmtDate(x.expiresAt)}</Badge> },
-            { key: "q", label: "Còn", right: true, render: (x: any) => qtyText(remain(x), x.baseUnit ?? "kg") },
+            { key: "q", label: "Còn", right: true, render: (x: any) => qtyText(remain(x), bu(x)) },
           ]} /></Card>
         ))}
       </div>
@@ -129,10 +132,11 @@ function LotPick({ onPick }: { onPick: (lot: any, p: Product) => void }) {
 function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number; onClose: () => void }) {
   const [id, setId] = useState<number | undefined>(id0);
   const doc = useAsync(() => (id ? get(`/stock-docs/${id}`) : Promise.resolve(null)), [id]);
+  const pmap = useUnitMap();
   const type = doc.data?.type ?? t0 ?? "receipt";
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
-  const d = doc.data;
+  const d = doc.data && pmap ? withShown(doc.data, pmap) : doc.data;
   const editable = !d || d.status === "draft";
   const lines: any[] = d?.lines ?? [];
 
@@ -148,15 +152,15 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
   return (
     <Sheet open onClose={onClose} wide title={`${DOC_TYPES[type] ?? type}${d ? " · " + d.code : ""}`}
       footer={d && editable ? <><Button variant="ghost" onClick={() => act("cancel")} disabled={busy}>Huỷ phiếu</Button><Button className="grow" loading={busy} disabled={!lines.length} onClick={() => act("post")}>Ghi sổ</Button></> : undefined}>
-      {!id ? <CreateDoc type={type} onCreated={setId} /> : doc.loading && !d ? <Spinner /> : (
+      {!id ? <CreateDoc type={type} onCreated={setId} /> : !d ? <Spinner /> : (
         <div className="stack">
           <div className="row wrap"><Badge tone={docTone(d.status)}>{DOC_STATUS[d.status] ?? d.status}</Badge>{d.supplierRef && <span className="muted small">Số CT NCC: {d.supplierRef}</span>}{d.reason && <span className="muted small">{d.reason}</span>}</div>
           {d.status === "pending_approval" && <Banner>Phiếu đang chờ quản lý duyệt.</Banner>}
           <DataTable rows={lines} rowKey={(l) => l.id} empty="Chưa có dòng nào" cols={[
             { key: "n", label: "Hàng / lô", title: true, render: (l) => <>{pname(l)}{l.lotCode ? ` · ${l.lotCode}` : ""}</> },
-            { key: "dq", label: type === "count" ? "Hệ thống" : "Theo CT", right: true, render: (l) => (l.docQtyMilli != null ? qtyText(l.docQtyMilli) : "—") },
-            { key: "q", label: type === "count" ? "Đếm" : "Thực tế", right: true, render: (l) => <b>{qtyText(l.qtyMilli, l.unit)}</b> },
-            { key: "c", label: "Giá vốn", right: true, hideMobile: type !== "receipt", render: (l) => (l.unitCost != null ? money(l.unitCost) : "—") },
+            { key: "dq", label: type === "count" ? "Hệ thống" : "Theo CT", right: true, render: (l) => (l.docQtyShown != null ? qtyText(l.docQtyShown, l.unit) : "—") },
+            { key: "q", label: type === "count" ? "Đếm" : "Thực tế", right: true, render: (l) => <b>{qtyText(l.qtyShown ?? l.qtyMilli, l.unit)}</b> },
+            { key: "c", label: "Giá vốn/đv chính", right: true, hideMobile: type !== "receipt", render: (l) => (l.unitCost != null ? money(l.unitCost) : "—") },
             { key: "e", label: type === "waste" ? "Lý do" : "HSD", render: (l) => (type === "waste" ? REASONS.find((r) => r[0] === l.reason)?.[1] ?? l.reason ?? "—" : fmtDate(l.expiresAt)) },
             ...(editable ? [{ key: "x", label: "", render: (l: any) => <Button size="sm" variant="ghost" aria-label="Xoá dòng" onClick={async () => { try { await api_del(id, l.id); doc.reload(); } catch {} }}>✕</Button> }] : []),
           ]} />
@@ -257,13 +261,40 @@ function Obj({ v, depth = 0 }: { v: any; depth?: number }) {
 }
 const fmtVal = (k: string, v: any) => (typeof v === "string" && /At$|^at$|Date$/.test(k) && /^\d{4}-\d\d-\d\dT/.test(v) ? fmtDateTime(v) : /Milli$/.test(k) && typeof v === "number" ? qtyText(v) : /(price|cost|amount|total)$/i.test(k) && typeof v === "number" ? money(v) : String(v ?? "—"));
 
+const MOVE: Record<string, string> = { receipt: "Nhập kho", sale: "Bán", return: "Trả hàng", waste: "Huỷ hàng", adjust: "Điều chỉnh", transfer_in: "Chuyển đến", transfer_out: "Chuyển đi" };
+/** Backend: { lot, receipt:{code,postedAt,supplierName,supplierRef}|null, moves[{at,moveType,qtyDeltaMilli}], orders[{code,kind,channel,status,createdAt,qtyMilli}] } */
 function Trace() {
   const [code, setCode] = useState("");
-  const r = useAsync(() => (code ? get(`/stock/lots/${encodeURIComponent(code)}/trace`) : Promise.resolve(null)), [code]);
+  const r = useAsync(async () => { if (!code) return null; try { return await get(`/stock/lots/${encodeURIComponent(code)}/trace`, undefined, { silent: true }); } catch { return null; } }, [code]);
+  const pmap = useUnitMap();
+  const d = r.data;
+  const bu = d ? pmap?.get(d.lot?.productId)?.baseUnit : undefined;
   return (
     <div className="stack">
       <Card title="Truy vết lô hàng"><Scanner onCode={setCode} /></Card>
-      {code && (r.loading ? <Spinner /> : r.data ? <Card title={`Lô ${code}`}><Obj v={r.data} /></Card> : <EmptyState title="Không tìm thấy lô" />)}
+      {code && (r.loading ? <Spinner /> : d ? (
+        <>
+          <Card title={`Lô ${d.lot.lotCode} · ${d.lot.productName}`}>
+            <div className="stack">
+              <div className="kv row between"><span className="muted small">Nhập</span><span>{qtyText(d.lot.qtyInMilli, bu)}</span></div>
+              <div className="kv row between"><span className="muted small">Còn lại</span><span>{qtyText(d.lot.qtyOnHandMilli, bu)}</span></div>
+              <div className="kv row between"><span className="muted small">Hạn dùng</span><span>{d.lot.expiresAt ? fmtDate(d.lot.expiresAt) : "—"} {d.lot.expired && <Badge tone="danger">Hết hạn</Badge>}</span></div>
+              <div className="kv row between"><span className="muted small">Nhà cung cấp</span><span>{d.receipt?.supplierName ?? "—"}</span></div>
+              <div className="kv row between"><span className="muted small">Phiếu nhập</span><span>{d.receipt ? `${d.receipt.code} · ${fmtDateTime(d.receipt.postedAt)}` : "—"}{d.receipt?.supplierRef ? ` · CT ${d.receipt.supplierRef}` : ""}</span></div>
+            </div>
+          </Card>
+          <Card title="Đơn đã bán từ lô này"><DataTable rows={d.orders ?? []} rowKey={(x: any) => `${x.id}-${x.qtyMilli}`} empty="Chưa bán đơn nào từ lô này" cols={[
+            { key: "c", label: "Đơn", title: true, render: (x: any) => <b>{x.code}</b> },
+            { key: "t", label: "Thời gian", render: (x: any) => fmtDateTime(x.createdAt) },
+            { key: "q", label: "Lượng", right: true, render: (x: any) => qtyText(x.qtyMilli, bu) },
+          ]} /></Card>
+          <Card title="Biến động kho"><DataTable rows={d.moves ?? []} rowKey={(x: any) => x.id} cols={[
+            { key: "t", label: "Thời gian", title: true, render: (x: any) => fmtDateTime(x.at) },
+            { key: "m", label: "Loại", render: (x: any) => MOVE[x.moveType] ?? x.moveType },
+            { key: "q", label: "Số lượng", right: true, render: (x: any) => <b style={{ color: x.qtyDeltaMilli < 0 ? "var(--danger)" : "var(--accent)" }}>{x.qtyDeltaMilli > 0 ? "+" : ""}{qtyText(x.qtyDeltaMilli, bu)}</b> },
+          ]} /></Card>
+        </>
+      ) : <EmptyState title="Không tìm thấy lô" hint="Kiểm tra lại mã lô (dạng L…)." />)}
     </div>
   );
 }

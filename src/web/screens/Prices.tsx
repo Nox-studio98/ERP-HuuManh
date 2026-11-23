@@ -22,24 +22,26 @@ export default function Prices() {
   );
 }
 
+const KINDS: Record<string, string> = { base: "Giá nền", group: "Theo nhóm khách", promo: "Khuyến mại", customer: "Theo khách" };
+const CH: Record<string, string> = { ...CHANNELS, all: "Tất cả kênh" };
 function Lists({ canWrite }: { canWrite: boolean }) {
   const l = useAsync(() => get("/price-lists").then((r) => items<any>(r)), []);
   const [add, setAdd] = useState(false);
-  const [f, setF] = useState({ name: "", channel: "pos", kind: "retail", priority: 10 });
+  const [f, setF] = useState({ name: "", channel: "pos", kind: "promo", priority: 10 });
   return (
     <div className="stack">
       {canWrite && <div><Button onClick={() => setAdd(true)}>+ Bảng giá mới</Button></div>}
       {l.loading ? <Spinner /> : <DataTable rows={l.data ?? []} rowKey={(x) => x.id} cols={[
         { key: "n", label: "Tên", title: true, render: (x) => <b>{x.name}</b> },
-        { key: "c", label: "Kênh", render: (x) => CHANNELS[x.channel] ?? x.channel },
-        { key: "k", label: "Loại", render: (x) => x.kind },
+        { key: "c", label: "Kênh", render: (x) => CH[x.channel] ?? x.channel },
+        { key: "k", label: "Loại", render: (x) => KINDS[x.kind] ?? x.kind },
         { key: "p", label: "Ưu tiên", right: true, render: (x) => x.priority },
       ]} />}
       <Sheet open={add} onClose={() => setAdd(false)} title="Bảng giá mới" footer={<Button block disabled={!f.name} onClick={async () => { try { await post("/price-lists", f); toast("Đã tạo bảng giá", "ok"); setAdd(false); l.reload(); } catch {} }}>Tạo</Button>}>
         <div className="stack">
           <Input label="Tên bảng giá" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-          <Select label="Kênh" value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{Object.entries(CHANNELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-          <Input label="Loại (retail, wholesale, promo…)" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })} />
+          <Select label="Kênh" value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{[["pos", "Tại quầy"], ["online", "Online"], ["b2b", "Sỉ"], ["all", "Tất cả kênh"]].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+          <Select label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
           <Input label="Ưu tiên (số lớn thắng)" type="number" value={f.priority} onChange={(e) => setF({ ...f, priority: Number(e.target.value) })} />
         </div>
       </Sheet>
@@ -59,13 +61,14 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
   const [note, setNote] = useState("");
   const [res, setRes] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const lid = listId || String(lists.data?.[0]?.id ?? "");
+  // Mặc định: bảng giá nền áp cho quầy (kind=base, kênh all/pos) — không phải bảng sỉ/nhóm khách có priority cao hơn.
+  const lid = listId || String((lists.data?.find((l) => l.kind === "base" && (l.channel === "all" || l.channel === "pos")) ?? lists.data?.[0])?.id ?? "");
   const changed = useMemo(() => Object.entries(edits).filter(([id, v]) => v > 0 && v !== priceOf(prods.data?.find((p) => p.id === Number(id)) as Product)), [edits, prods.data]);
   const submit = async () => {
     setBusy(true);
     try {
       const r = await post("/prices/bulk", { priceListId: Number(lid), effectiveFrom: new Date(eff + ":00+07:00").toISOString(), items: changed.map(([id, v]) => ({ productId: Number(id), unitPrice: v })), ...(note ? { note } : {}) });
-      setRes(r); setEdits({}); toast(r?.status === "pending" ? "Đã gửi duyệt giá" : "Đã áp dụng giá mới", "ok"); prods.reload();
+      setRes(r); setEdits({}); toast(r?.status === "pending_approval" ? "Đã gửi duyệt giá" : "Đã áp dụng giá mới", "ok"); prods.reload();
     } catch {} finally { setBusy(false); }
   };
   const below = new Set<number>((res?.belowCost ?? []).map(Number));
@@ -76,8 +79,8 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
         <Input label="Hiệu lực từ" type="datetime-local" value={eff} onChange={(e) => setEff(e.target.value)} />
         <Input label="Tìm hàng" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {res?.belowCost?.length > 0 && <Banner>Cảnh báo: {res.belowCost.length} mặt hàng có giá mới thấp hơn giá vốn bình quân. {res.status === "pending" ? "Đang chờ duyệt." : ""}</Banner>}
-      {res?.status === "pending" && <Banner tone="info">Thay đổi giá cần quản lý duyệt trước khi có hiệu lực.</Banner>}
+      {res?.belowCost?.length > 0 && <Banner>Cảnh báo: {res.belowCost.length} mặt hàng có giá mới thấp hơn giá vốn bình quân. {res.status === "pending_approval" ? "Đang chờ duyệt." : ""}</Banner>}
+      {res?.status === "pending_approval" && <Banner tone="info">Thay đổi giá cần quản lý duyệt trước khi có hiệu lực.</Banner>}
       {prods.loading ? <Spinner /> : (
         <DataTable rows={prods.data ?? []} rowKey={(p) => p.id} rowClass={(p) => (edits[p.id] && p.avgCost && edits[p.id] < p.avgCost) || below.has(p.id) ? "bad" : ""} cols={[
           { key: "n", label: "Hàng", title: true, render: (p) => <b>{p.name}</b> },
@@ -103,9 +106,10 @@ function History() {
   const [prod, setProd] = useState<Product | null>(null);
   const found = useAsync(() => (dq ? get("/products", { q: dq, limit: 6 }).then((r) => items<Product>(r)) : Promise.resolve([])), [dq]);
   const h = useAsync(() => (prod ? get("/prices/history", { productId: prod.id }) : Promise.resolve(null)), [prod?.id]);
-  const rows: any[] = items(h.data?.items ?? h.data?.sell ?? h.data);
-  const buys: any[] = h.data?.purchases ?? h.data?.buy ?? [];
-  const pts = [...rows].reverse().map((r) => ({ label: (r.effectiveFrom ?? "").slice(5, 10), value: r.unitPrice })).filter((x) => x.value);
+  const rows: any[] = h.data?.sell ?? [];
+  const buys: any[] = h.data?.purchases ?? [];
+  const basePl = rows.find((x) => x.kind === "base" && x.status === "active")?.priceListId ?? rows.find((x) => x.status === "active")?.priceListId;
+  const pts = rows.filter((r) => r.status === "active" && r.priceListId === basePl).reverse().map((r) => ({ label: (r.effectiveFrom ?? "").slice(5, 10), value: r.unitPrice })).filter((x) => x.value);
   useEffect(() => { setQ(""); }, [prod]);
   return (
     <div className="stack">
@@ -114,16 +118,18 @@ function History() {
       {prod && (h.loading ? <Spinner /> : (
         <Card title={`Giá bán: ${prod.name}`}>
           {pts.length ? <LineChart points={pts} /> : <div className="muted">Chưa có lịch sử giá.</div>}
-          <DataTable rows={rows} rowKey={(r: any) => r.id ?? r.effectiveFrom} cols={[
+          <DataTable rows={rows} rowKey={(r: any) => r.id} cols={[
             { key: "f", label: "Hiệu lực từ", title: true, render: (r: any) => fmtDateTime(r.effectiveFrom) },
+            { key: "pl", label: "Bảng giá", render: (r: any) => r.priceListName },
             { key: "t", label: "Đến", render: (r: any) => (r.effectiveTo ? fmtDateTime(r.effectiveTo) : "Hiện hành") },
             { key: "p", label: "Giá", right: true, render: (r: any) => <b>{money(r.unitPrice)}</b> },
-            { key: "s", label: "TT", render: (r: any) => (r.status && r.status !== "active" ? <Badge tone="warn">{r.status}</Badge> : "") },
+            { key: "s", label: "TT", render: (r: any) => (r.status && r.status !== "active" ? <Badge tone="warn">{({ pending: "Chờ duyệt", rejected: "Từ chối" } as Record<string, string>)[r.status] ?? r.status}</Badge> : "") },
           ]} />
-          {buys.length > 0 && <><h3 style={{ margin: "16px 0 8px" }}>Giá mua theo lô / NCC</h3><DataTable rows={buys} rowKey={(r: any, i?: any) => r.lotCode ?? r.id ?? i} cols={[
+          {buys.length > 0 && <><h3 style={{ margin: "16px 0 8px" }}>Giá mua theo lô / NCC</h3><DataTable rows={buys} rowKey={(r: any) => r.lotId} cols={[
             { key: "l", label: "Lô", title: true, render: (r: any) => r.lotCode ?? "—" },
+            { key: "d", label: "Ngày nhập", render: (r: any) => fmtDateTime(r.receivedAt) },
             { key: "s", label: "NCC", render: (r: any) => r.supplierName ?? "—" },
-            { key: "c", label: "Giá mua", right: true, render: (r: any) => money(r.unitCost) },
+            { key: "c", label: "Giá mua", right: true, render: (r: any) => <>{money(r.unitCost)}/{unitLabel(prod.baseUnit)}</> },
           ]} /></>}
         </Card>
       ))}
