@@ -10,6 +10,7 @@ import { vnDate } from "../lib/time";
 import { addDays, BILL_OUTSTANDING_SQL, INVOICE_OUTSTANDING_SQL } from "../services/debt";
 import { enqueueJobStmt, kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
+import { matchOnlineOrder } from "../services/online-payments";
 import { getSettingInt } from "../services/settings";
 import { guarded, parseBody } from "../services/http";
 import {
@@ -574,6 +575,7 @@ const bankRow = (r: any) => camel(r);
 async function autoMatch(c: Ctx, txn: { id: number; fund_id: number; amount: number; description: string; bank_ref: string }): Promise<boolean> {
   const db = c.env.DB;
   if (txn.amount <= 0 || !txn.description) return false;
+  if (await matchOnlineOrder(c, txn)) return true; // Đợt 3: nội dung chứa mã đơn online DH... + đúng số tiền intent pending
   const inv = await db
     .prepare(`SELECT id, customer_id FROM invoices WHERE customer_id IS NOT NULL AND status='open' AND instr(upper(?1), upper(code)) > 0`)
     .bind(txn.description)

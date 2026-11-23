@@ -4,6 +4,7 @@ import { getProvider, loadInvoiceDoc } from "./einvoice";
 import { INVOICE_OUTSTANDING_SQL, addDays } from "./debt";
 import { enqueueJobStmt } from "./outbox";
 import { sysAudit, sysAuditStmt } from "./sysaudit";
+import { notifyEmail, notifyOrderStatus, notifyStaffNewOrder } from "./notify";
 
 /** Backoff sau lần thất bại thứ n (1-based): 1 phút, 5 phút, 30 phút, 2 giờ, 12 giờ. */
 export const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000];
@@ -33,7 +34,7 @@ export type ProcessOutcome =
 /** Che secret + cắt 500 ký tự trước khi lưu last_error. */
 export function sanitizeError(e: unknown, env: Env): string {
   let m = String((e as Error)?.message ?? e ?? "Lỗi không xác định");
-  for (const s of [env.MISA_PASSWORD, env.MISA_USERNAME, env.MISA_APP_ID, env.MISA_TAX_CODE, env.FRESCO_WEBHOOK_SECRET, env.BOOTSTRAP_TOKEN]) {
+  for (const s of [env.MISA_PASSWORD, env.MISA_USERNAME, env.MISA_APP_ID, env.MISA_TAX_CODE, env.FRESCO_WEBHOOK_SECRET, env.BOOTSTRAP_TOKEN, env.VAPID_PRIVATE_KEY]) {
     if (s && s.length >= 4) m = m.split(s).join("***");
   }
   m = m.replace(/\bbearer\s+\S+/gi, "Bearer ***").replace(/(authorization|password|token)\s*[:=]\s*\S+/gi, "$1=***");
@@ -93,9 +94,20 @@ async function dispatch(env: Env, job: JobRow): Promise<unknown> {
       return debtRemind(env, job);
     case "fresco.ack":
       return { noop: true }; // TODO: gọi API xác nhận đơn của Fresco khi có tài liệu API
+    case "notify.order_status":
+      return notifyOrderStatus(env, orderRef(job), JSON.parse(job.payload_json || "{}"));
+    case "notify.staff_new_order":
+      return notifyStaffNewOrder(env, orderRef(job));
+    case "notify.email":
+      return notifyEmail(env, JSON.parse(job.payload_json || "{}"));
     default:
       throw new Error(`Loại job không hỗ trợ: ${job.type}`);
   }
+}
+
+function orderRef(job: JobRow) {
+  if (job.ref_type !== "order" || !job.ref_id) throw new Error("Job thiếu tham chiếu đơn hàng");
+  return job.ref_id;
 }
 
 function invoiceIdOf(job: JobRow) {
