@@ -11,12 +11,12 @@ Có 9 mô-đun (M1–M9). **Đợt 1** gồm M1, M2, M3, M6.
 | M1 | Bán hàng tại quầy (ca, đơn, thanh toán, trả hàng, huỷ đơn) | 1 |
 | M2 | Kho & danh mục hàng hoá (lô, FEFO, chứng từ nhập/xuất/hao hụt/kiểm kê, quét mã) | 1 |
 | M3 | Giá (bảng giá, lịch sử giá, duyệt giá dưới vốn) | 1 |
-| M4 | Khách hàng (mở rộng: nhóm, công nợ, điểm) | 2 (bản tối thiểu có trong Đợt 1) |
-| M5 | [Cần xác nhận tên và phạm vi] | 2 |
-| M6 | Quỹ & thu chi (phiếu thu/chi, đối soát ca, khoá kỳ, báo cáo lãi lỗ) | 1 |
-| M7 | [Cần xác nhận tên và phạm vi] | 2 |
-| M8 | [Cần xác nhận tên và phạm vi] (quy tắc và yêu cầu chung) | 2 |
-| M9 | [Cần xác nhận tên và phạm vi] (liên quan đến giờ máy chủ, xem M9-12 trong tài liệu yêu cầu) | 2 |
+| M4 | Khách hàng B2B (báo giá → đơn sỉ → giao → hoá đơn → thu tiền, hạn mức nợ) | 2 |
+| M5 | Công nợ phải thu / phải trả, tuổi nợ, nhắc nợ | 2 |
+| M6 | Tài chính: quỹ, thu chi, đối soát ca, khoá kỳ, báo cáo lãi lỗ | 1 |
+| M7 | Theo dõi giá đối thủ (chỉ gợi ý cho M3) | 4 |
+| M8 | Website và ứng dụng bán hàng cho khách | 3 |
+| M9 | Nhân sự, chấm công, lương | 4 |
 
 Chi tiết hợp đồng API: [docs/API.md](docs/API.md). Kiến trúc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Bảo mật: [docs/SECOPS.md](docs/SECOPS.md).
 
