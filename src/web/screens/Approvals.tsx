@@ -1,0 +1,34 @@
+import { useState } from "react";
+import { get, items, post } from "../api";
+import { Badge, Button, Card, EmptyState, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
+import { Obj } from "./Inventory";
+import { toast } from "../components/toast";
+import { fmtDateTime } from "../format";
+
+const TYPES: Record<string, string> = { price_below_cost: "Giá thấp hơn giá vốn", discount: "Giảm giá vượt ngưỡng", waste: "Hao hụt lớn", count_diff: "Chênh lệch kiểm kê", cash_out: "Chi tiền lớn", price_change: "Đổi giá", sale_below_cost: "Bán dưới giá vốn" };
+export default function Approvals() {
+  const a = useAsync(() => get("/approvals", { status: "pending" }).then((r) => items<any>(r)), []);
+  const [sel, setSel] = useState<any>(null);
+  const [note, setNote] = useState(""), [busy, setBusy] = useState(false);
+  const decide = async (decision: "approved" | "rejected") => {
+    setBusy(true);
+    try { await post(`/approvals/${sel.id}/decide`, { decision, note }); toast(decision === "approved" ? "Đã duyệt" : "Đã từ chối", "ok"); setSel(null); setNote(""); a.reload(); } catch {} finally { setBusy(false); }
+  };
+  if (a.loading) return <Spinner />;
+  if (!a.data?.length) return <EmptyState title="Không có yêu cầu chờ duyệt" hint="Mọi thứ đã được xử lý." />;
+  const payload = (x: any) => { if (!x.payloadJson && !x.payload) return null; try { return typeof x.payload === "object" ? x.payload : JSON.parse(x.payloadJson); } catch { return x.payloadJson; } };
+  return (
+    <div className="stack">
+      {a.data.map((x) => (
+        <button key={x.id} className="dt-card" onClick={() => setSel(x)}>
+          <div className="row between"><b>#{x.id} · {TYPES[x.type] ?? x.type}</b><Badge tone="warn">Chờ duyệt</Badge></div>
+          <div className="small muted">{fmtDateTime(x.requestedAt)} · {x.requestedByName ?? `NV #${x.requestedBy}`}</div>
+          {x.reason && <div style={{ marginTop: 4 }}>{x.reason}</div>}
+        </button>
+      ))}
+      <Sheet open={!!sel} onClose={() => setSel(null)} title={sel ? `Yêu cầu #${sel.id}` : ""} footer={<><Button variant="danger" disabled={busy} onClick={() => decide("rejected")}>Từ chối</Button><Button className="grow" loading={busy} onClick={() => decide("approved")}>Duyệt</Button></>}>
+        {sel && <div className="stack"><Card className="flat"><Obj v={{ loai: TYPES[sel.type] ?? sel.type, lyDo: sel.reason, thamChieu: sel.refType ? `${sel.refType} #${sel.refId}` : undefined, chiTiet: payload(sel) }} /></Card><TextArea label="Ghi chú quyết định" value={note} onChange={(e) => setNote(e.target.value)} /></div>}
+      </Sheet>
+    </div>
+  );
+}
