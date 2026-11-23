@@ -136,6 +136,50 @@ Sau khi tạo xong owner, xoá token bootstrap để endpoint không dùng lại
 npx wrangler secret delete BOOTSTRAP_TOKEN
 ```
 
+## Bổ sung khi lên Đợt 2 (B2B, công nợ, MISA, Fresco)
+
+Tạo queue cho job tích hợp (hoá đơn điện tử, nhắc nợ):
+
+```bash
+npx wrangler queues create huu-manh-erp-jobs
+```
+
+```bash
+npx wrangler queues create huu-manh-erp-jobs-dlq
+```
+
+Tải font tiếng Việt cho PDF báo giá / hoá đơn (font Be Vietnam Pro, giấy phép OFL):
+
+```bash
+npx wrangler r2 object put huu-manh-erp-files/fonts/BeVietnamPro-Regular.ttf --file=./BeVietnamPro-Regular.ttf --remote
+```
+
+```bash
+npx wrangler r2 object put huu-manh-erp-files/fonts/BeVietnamPro-Bold.ttf --file=./BeVietnamPro-Bold.ttf --remote
+```
+
+Khi có tài khoản API MISA meInvoice (mặc định hệ thống dùng nhà cung cấp `fake`, số hoá đơn có tiền tố `TEST-`):
+
+```bash
+npx wrangler secret put MISA_APP_ID
+```
+
+```bash
+npx wrangler secret put MISA_USERNAME
+```
+
+```bash
+npx wrangler secret put MISA_PASSWORD
+```
+
+Sau đó đặt `MISA_TAX_CODE`, `MISA_BASE_URL` (vars) và đổi cài đặt `einvoice.provider` sang `misa` trong màn hình Tích hợp. **Ánh xạ trường dữ liệu MISA đang là giả định — phải đối chiếu tài liệu API MISA cấp cho cửa hàng trước khi bật.**
+
+Sàn Fresco: khi sàn cung cấp webhook, đặt secret rồi bật `fresco.enabled`. Địa chỉ webhook: `https://<tên-miền>/api/integrations/fresco/webhook`. Nếu sàn chỉ cho xuất file, dùng màn hình nhập CSV.
+
+```bash
+npx wrangler secret put FRESCO_WEBHOOK_SECRET
+```
+
 ## Ghi chú
 
 - `seed/seed.sql` chỉ chứa master data demo: cửa hàng, quỹ, danh mục, sản phẩm, bảng giá. Không có lô hàng, đơn hàng hay tài khoản người dùng thật. Tài khoản `system` (id 1) không đăng nhập được.

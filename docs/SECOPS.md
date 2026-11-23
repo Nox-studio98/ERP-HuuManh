@@ -20,13 +20,20 @@ Mục tiêu: bảo vệ **tiền** (đơn, thu chi, công nợ), **tồn kho**, 
 | T12 | Chuỗi cung ứng npm | Mã độc | lockfile, `npm audit` + Dependabot, gói tối thiểu, pin version | CI |
 | T13 | Nhân viên nghỉ việc vẫn đăng nhập (EC-39) | Truy cập trái phép | Khoá tài khoản thu hồi ngay mọi phiên; giữ lịch sử | ✅ |
 
-## 2. Kiểm soát đã có trong mã (Đợt 1)
+## 2. Kiểm soát đã có trong mã (Đợt 1 + Đợt 2)
 
 - `src/worker/lib/auth.ts`, `routes/auth.ts`: phiên, khoá tài khoản, bootstrap chủ cửa hàng một lần bằng secret.
 - `src/worker/lib/rbac.ts`: ma trận quyền theo mục 12 tài liệu nghiệp vụ.
 - `src/worker/index.ts`: CSP, HSTS, X-Frame-Options (frame-ancestors none), Permissions-Policy (chỉ camera + vị trí cho chính app), giới hạn body 1 MB, `Cache-Control: no-store` cho API, lỗi không lộ stack/SQL kèm `requestId`.
 - `migrations/0001_init.sql`: trigger bất biến cho `audit_log`, `stock_moves`; trigger khoá sổ; ràng buộc CHECK tồn kho.
 - `scheduled.ts`: sao lưu hằng ngày ra R2.
+- **Đợt 2:**
+  - Webhook Fresco (`routes/webhooks.ts`): HMAC-SHA256 so sánh hằng thời gian, cửa sổ thời gian ±300s, chống phát lại qua `webhook_events(source,event_id)`, tắt mặc định (`fresco.enabled=0` → 404), giới hạn kích thước body.
+  - Outbox (`integration_jobs`): không gọi API ngoài trong request; retry có backoff, sau 5 lần → `dead` + audit; lỗi lưu tối đa 500 ký tự và không chứa secret. Endpoint cài đặt tích hợp chỉ trả `misaConfigured: true/false`.
+  - Hoá đơn đã phát hành không sửa/xoá (trigger DB, EC-09); điều chỉnh bằng hoá đơn `adjustment`.
+  - Hạn mức nợ kiểm **trước** khi giữ hàng (EC-23); chỉ chủ (`b2b.credit_override`) duyệt vượt hạn mức; xoá nợ cần `debt.approve` (chỉ chủ).
+  - Số dư đầu kỳ công nợ khoá vĩnh viễn sau khi nhập.
+  - Xuất Excel ghi audit `export.<tên>` (phát hiện rò rỉ dữ liệu khách/công nợ).
 
 ## 3. Cấu hình Cloudflare khi deploy (checklist)
 
