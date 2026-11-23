@@ -6,9 +6,9 @@ import { toast } from "../../components/toast";
 import { money, todayVN } from "../../format";
 import { CORR_TYPE, KIND, LEAVE_TYPE, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, addDaysS, days10, dm, dmy, errCode, hm, periodLabel, reqTone, vnIso, vnTime, WD_SHORT, wdOf } from "./kit";
 
-type Tab = "today" | "schedule" | "leave" | "ot" | "corr" | "payslip";
+type Tab = "today" | "schedule" | "swap" | "leave" | "ot" | "corr" | "payslip";
 const TABS: { v: Tab; label: string }[] = [
-  { v: "today", label: "Chấm công" }, { v: "schedule", label: "Lịch ca của tôi" }, { v: "leave", label: "Xin nghỉ phép" },
+  { v: "today", label: "Chấm công" }, { v: "schedule", label: "Lịch ca của tôi" }, { v: "swap", label: "Đổi ca" }, { v: "leave", label: "Xin nghỉ phép" },
   { v: "ot", label: "Đăng ký tăng ca" }, { v: "corr", label: "Quên chấm công" }, { v: "payslip", label: "Phiếu lương" },
 ];
 
@@ -20,6 +20,7 @@ export default function Me() {
       <Segmented wrap value={tab} onChange={setTab} options={TABS} />
       {tab === "today" && <Today onCorrection={(p) => { setPrefill(p); setTab("corr"); }} />}
       {tab === "schedule" && <MySchedule />}
+      {tab === "swap" && <Swaps />}
       {tab === "leave" && <Leave />}
       {tab === "ot" && <Overtime />}
       {tab === "corr" && <Correction prefill={prefill} />}
@@ -282,12 +283,12 @@ function Leave() {
 function Overtime() {
   const [f, setF] = useState({ workDate: todayVN(), hours: 1, reason: "" });
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState<any[]>([]);
+  const hist = useAsync(() => get("/me/overtime-requests").then((r) => items<any>(r)), []);
   const submit = async () => {
     setBusy(true);
     try {
       const r = await post("/me/overtime-requests", { workDate: f.workDate, minutes: Math.round(f.hours * 60), reason: f.reason.trim() || undefined });
-      setSent((s) => [r, ...s]); toast("Đã gửi đăng ký tăng ca, chờ quản lý duyệt", "ok");
+      hist.reload(); toast("Đã gửi đăng ký tăng ca, chờ quản lý duyệt", "ok");
     } catch { /* toast */ } finally { setBusy(false); }
   };
   return (
@@ -301,9 +302,9 @@ function Overtime() {
           <div className="hint">Chỉ phần tăng ca được quản lý duyệt mới được tính lương.</div>
         </div>
       </Card>
-      {sent.length > 0 && (
-        <Card title="Vừa gửi">
-          {sent.map((r) => <div key={r.id} className="row between"><span>{dmy(r.workDate)} · {hm(r.minutes)}</span><Badge tone={reqTone(r.status)}>{REQ_STATUS[r.status]}</Badge></div>)}
+      {(hist.data ?? []).length > 0 && (
+        <Card title="Đã đăng ký">
+          {hist.data!.map((r) => <div key={r.id} className="row between"><span>{dmy(r.workDate)} · {hm(r.minutes)}</span><Badge tone={reqTone(r.status)}>{REQ_STATUS[r.status]}</Badge></div>)}
         </Card>
       )}
     </div>
@@ -314,7 +315,7 @@ function Overtime() {
 function Correction({ prefill }: { prefill: any }) {
   const [f, setF] = useState({ workDate: prefill?.workDate ?? todayVN(), type: prefill?.type ?? "missing_out", kind: (prefill?.kind ?? "") as "" | "in" | "out", time: "", reason: "" });
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState<any[]>([]);
+  const hist = useAsync(() => get("/me/attendance/corrections").then((r) => items<any>(r)), []);
   const kind = f.kind || (f.type === "missing_in" ? "in" : f.type === "missing_out" ? "out" : "");
   const submit = async () => {
     setBusy(true);
@@ -323,7 +324,7 @@ function Correction({ prefill }: { prefill: any }) {
       if (kind) body.kind = kind;
       if (f.time) body.requestedAt = vnIso(f.workDate, f.time);
       const r = await post("/me/attendance/corrections", body);
-      setSent((s) => [{ ...r, workDate: f.workDate, type: f.type }, ...s]); toast("Đã gửi yêu cầu bổ sung công", "ok"); setF({ ...f, reason: "" });
+      hist.reload(); toast("Đã gửi yêu cầu bổ sung công", "ok"); setF({ ...f, reason: "" });
     } catch { /* toast */ } finally { setBusy(false); }
   };
   return (
@@ -344,9 +345,9 @@ function Correction({ prefill }: { prefill: any }) {
           <Button block loading={busy} disabled={!f.reason.trim() || !f.workDate || !kind || !f.time} onClick={submit}>Gửi yêu cầu</Button>
         </div>
       </Card>
-      {sent.length > 0 && (
-        <Card title="Vừa gửi">
-          {sent.map((r) => <div key={r.id} className="row between"><span>{dmy(r.workDate)} · {CORR_TYPE[r.type]}</span><Badge tone="warn">Chờ duyệt</Badge></div>)}
+      {(hist.data ?? []).length > 0 && (
+        <Card title="Yêu cầu đã gửi">
+          {hist.data!.map((r) => <div key={r.id} className="row between"><span>{dmy(r.workDate)} · {CORR_TYPE[r.type]}</span><Badge tone={reqTone(r.status)}>{REQ_STATUS[r.status] ?? r.status}</Badge></div>)}
         </Card>
       )}
     </div>
@@ -402,5 +403,44 @@ function PayslipSheet({ period, onClose }: { period: string; onClose: () => void
         </div>
       )}
     </Sheet>
+  );
+}
+
+/* ================= Đổi ca ================= */
+function Swaps() {
+  const from = todayVN();
+  const shifts = useAsync(() => get("/me/schedule", { from, to: addDaysS(from, 20) }).then((r) => items<any>(r).filter((x) => x.startAt > new Date().toISOString())), []);
+  const col = useAsync(() => get("/me/colleagues").then((r) => items<any>(r)), []);
+  const sw = useAsync(() => get("/me/schedule/swaps").then((r) => items<any>(r)), []);
+  const me = useAsync(() => get("/me/attendance/today", undefined, { silent: true }).then((r) => r.employee?.id as number), []);
+  const [f, setF] = useState({ from: "", to: "", reason: "" });
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try { await post("/schedule/swaps", { fromAssignmentId: Number(f.from || shifts.data?.[0]?.id), toEmployeeId: Number(f.to || col.data?.[0]?.id), reason: f.reason.trim() }); toast("Đã gửi yêu cầu đổi ca", "ok"); setF({ ...f, reason: "" }); sw.reload(); } catch { /* toast */ } finally { setBusy(false); }
+  };
+  const accept = async (id: number) => { try { await post(`/schedule/swaps/${id}/accept`, {}); toast("Đã đồng ý nhận ca, chờ quản lý duyệt", "ok"); sw.reload(); } catch { /* toast */ } };
+  return (
+    <div className="stack">
+      <Card title="Xin đổi ca">
+        {!(shifts.data ?? []).length ? <div className="muted">Bạn chưa có ca sắp tới để đổi.</div> : (
+          <div className="stack">
+            <Select label="Ca của tôi" value={f.from || String(shifts.data![0].id)} onChange={(e) => setF({ ...f, from: e.target.value })}>{shifts.data!.map((x) => <option key={x.id} value={x.id}>{WD_SHORT[wdOf(x.workDate)]} {dm(x.workDate)} · {x.shiftName}</option>)}</Select>
+            <Select label="Đồng nghiệp nhận ca" value={f.to || String(col.data?.[0]?.id ?? "")} onChange={(e) => setF({ ...f, to: e.target.value })}>{(col.data ?? []).map((x) => <option key={x.id} value={x.id}>{x.fullName}</option>)}</Select>
+            <TextArea label="Lý do" rows={2} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} />
+            <Button block loading={busy} disabled={!f.reason.trim() || !(col.data ?? []).length} onClick={submit}>Gửi yêu cầu đổi ca</Button>
+          </div>
+        )}
+      </Card>
+      <Card title="Yêu cầu đổi ca của tôi">
+        {!(sw.data ?? []).length ? <div className="muted">Chưa có yêu cầu.</div> : sw.data!.map((x) => (
+          <div key={x.id} className="stack" style={{ gap: 4, borderBottom: "1px solid var(--border)", padding: "6px 0" }}>
+            <div className="row between"><b>{x.fromEmployeeName} → {x.toEmployeeName}</b><Badge tone={reqTone(x.status)}>{x.status === "pending" ? "Chờ nhận ca" : x.status === "accepted" ? "Chờ quản lý duyệt" : REQ_STATUS[x.status] ?? x.status}</Badge></div>
+            <div className="small">{x.fromShiftName} {x.fromWorkDate ? dm(x.fromWorkDate) : ""}{x.toAssignmentId ? ` ⇄ ${x.toShiftName} ${dm(x.toWorkDate)}` : ""} · {x.reason}</div>
+            {x.status === "pending" && x.toEmployeeId === me.data && <Button size="sm" onClick={() => accept(x.id)}>Đồng ý nhận ca</Button>}
+          </div>
+        ))}
+      </Card>
+    </div>
   );
 }

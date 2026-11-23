@@ -411,6 +411,13 @@ try {
   assert((await s.page.getByTestId("payslip-detail").innerText()).includes("Thưởng: Thưởng chuyên cần"), "phiếu lương có dòng thưởng chuyên cần");
   await shot(s.page, "hr-me-payslip.png");
 
+  await s.page.keyboard.press("Escape");
+  await s.page.getByRole("tab", { name: "Đổi ca" }).click();
+  await s.page.getByText("Yêu cầu đổi ca của tôi").waitFor();
+  await s.page.getByRole("tab", { name: "Đăng ký tăng ca" }).click();
+  await s.page.getByText("Đã đăng ký", { exact: true }).waitFor();
+  ok("tab Đổi ca và lịch sử tăng ca tải từ API mới");
+
   step("Quản lý (không có hr.sensitive): không thấy lương, không có mục Bảng lương");
   const m = await newPage(desktop, "manager");
   await login(m.page, MGR.u, MGR.tmp, MGR.np);

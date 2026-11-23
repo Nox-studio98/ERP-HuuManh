@@ -118,14 +118,10 @@ function Week({ write }: { write: boolean }) {
 function Swaps() {
   const today = todayVN();
   const l = useAsync(() => get("/schedule/swaps").then((r) => items<any>(r)), []);
-  const emps = useAsync(() => get("/employees", { limit: 200 }).then((r) => items<any>(r)), []);
-  const sch = useAsync(() => get("/schedule", { from: addDaysS(today, -30), to: addDaysS(today, 60) }).then((r) => items<any>(r)), []);
-  const name = (id: number) => emps.data?.find((e) => e.id === id)?.fullName ?? `NV #${id}`;
-  const asg = (id?: number | null) => { const a = sch.data?.find((x) => x.id === id); return a ? `${a.shiftName} ${dm(a.workDate)}` : id ? `ca #${id}` : "—"; };
   const [busy, setBusy] = useState<number | null>(null);
   const decide = async (id: number, decision: string) => {
     setBusy(id);
-    try { await post(`/schedule/swaps/${id}/decide`, { decision }); toast(decision === "approved" ? "Đã duyệt đổi ca" : "Đã từ chối", "ok"); l.reload(); sch.reload(); } catch { /* toast */ } finally { setBusy(null); }
+    try { await post(`/schedule/swaps/${id}/decide`, { decision }); toast(decision === "approved" ? "Đã duyệt đổi ca" : "Đã từ chối", "ok"); l.reload(); } catch { /* toast */ } finally { setBusy(null); }
   };
   if (l.loading) return <Spinner />;
   const rows = l.data ?? [];
@@ -134,12 +130,11 @@ function Swaps() {
       {!rows.length && <Card><div className="muted">Chưa có yêu cầu đổi ca.</div></Card>}
       {rows.map((s) => {
         const wait = ["pending", "accepted"].includes(s.status);
-        const from = sch.data?.find((x) => x.id === s.fromAssignmentId);
         return (
           <Card key={s.id}>
             <div className="stack" style={{ gap: 6 }}>
-              <div className="row between"><b>{from ? name(from.employeeId) : "NV"} → {name(s.toEmployeeId)}</b><Badge tone={reqTone(s.status)}>{s.status === "pending" ? "Chờ NV nhận ca" : REQ_STATUS[s.status] ?? s.status}</Badge></div>
-              <div className="small">Ca đổi: {asg(s.fromAssignmentId)}{s.toAssignmentId ? ` ⇄ ${asg(s.toAssignmentId)}` : ""}</div>
+              <div className="row between"><b>{s.fromEmployeeName} → {s.toEmployeeName}</b><Badge tone={reqTone(s.status)}>{s.status === "pending" ? "Chờ NV nhận ca" : REQ_STATUS[s.status] ?? s.status}</Badge></div>
+              <div className="small">Ca đổi: {s.fromShiftName} {s.fromWorkDate ? dm(s.fromWorkDate) : ""}{s.toAssignmentId ? ` ⇄ ${s.toShiftName} ${dm(s.toWorkDate)}` : ""}</div>
               <div className="small muted">Lý do: {s.reason}</div>
               {wait && <div className="row"><Button size="sm" loading={busy === s.id} disabled={s.status !== "accepted"} onClick={() => decide(s.id, "approved")}>Duyệt</Button><Button size="sm" variant="ghost" onClick={() => decide(s.id, "rejected")}>Từ chối</Button></div>}
             </div>
