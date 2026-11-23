@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, errMsg, type Address, type Card, type Me, type OrderView } from "../lib/api";
-import { DISTRICTS, PROVINCE } from "../lib/geo";
+import { DistrictOptions, PROVINCE } from "../lib/geo";
 import { fmtDateTime, money } from "../lib/format";
 import { Link, match, navigate, usePageMeta } from "../lib/router";
 import { announce, cartActions, itemFromCard, LOGGED_FLAG, ls, ss, stepInUnit, useAuth } from "../lib/store";
@@ -104,7 +104,7 @@ function AddressForm({ init, onClose, onSaved }: { init: Address | null; onClose
       <Field id="ad-line" label="Số nhà, tên đường" error={errs.addressLine}>{(p) => <input {...p} value={f.addressLine} onChange={set("addressLine")} />}</Field>
       <Field id="ad-ward" label="Phường/xã">{(p) => <input {...p} value={f.ward} onChange={set("ward")} />}</Field>
       <Field id="ad-district" label="Quận/huyện" error={errs.district}>
-        {(p) => <select {...p} value={f.district} onChange={set("district")}><option value="">Chọn quận/huyện…</option>{DISTRICTS.map((d) => <option key={d} value={d}>{d}</option>)}</select>}
+        {(p) => <select {...p} value={f.district} onChange={set("district")}><option value="">Chọn quận/huyện…</option><DistrictOptions /></select>}
       </Field>
       <Field id="ad-prov" label="Tỉnh/thành phố">{(p) => <input {...p} value={f.province} onChange={set("province")} />}</Field>
       <label className="check full"><input type="checkbox" checked={f.isDefault} onChange={(e) => setF((x) => ({ ...x, isDefault: e.target.checked }))} /> Đặt làm địa chỉ mặc định</label>

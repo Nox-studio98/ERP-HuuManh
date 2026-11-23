@@ -1,7 +1,7 @@
+import { createElement, useEffect, useState } from "react";
 /**
- * Danh sách quận/huyện hiển thị trong ô chọn khu vực giao. API chưa có endpoint liệt kê vùng giao hàng
- * (GET /api/delivery/zones) nên danh sách này nằm ở client; server vẫn là nơi quyết định vùng có hỗ trợ hay không
- * (quote/checkout trả zone_unsupported).
+ * Quận/huyện cho ô chọn khu vực giao: lấy từ GET /api/delivery/zones (khu vực cửa hàng cấu hình trong ERP).
+ * DISTRICTS chỉ là dự phòng khi API lỗi; server vẫn quyết định vùng có hỗ trợ hay không (zone_unsupported).
  */
 export const PROVINCE = "TP. Hồ Chí Minh";
 export const DISTRICTS = [
@@ -9,3 +9,34 @@ export const DISTRICTS = [
   "Bình Thạnh", "Gò Vấp", "Phú Nhuận", "Tân Bình", "Tân Phú", "Bình Tân", "Thủ Đức", "Quận 2", "Quận 9",
   "Bình Chánh", "Hóc Môn", "Nhà Bè", "Củ Chi", "Cần Giờ",
 ];
+
+
+let cache: string[] | null = null;
+let inflight: Promise<string[]> | null = null;
+
+function loadDistricts(): Promise<string[]> {
+  if (cache) return Promise.resolve(cache);
+  inflight ??= fetch("/api/delivery/zones", { credentials: "same-origin" })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+    .then((raw: unknown) => {
+      const d = raw as { zones?: { districts?: string[] }[] };
+      const list = [...new Set((d.zones ?? []).flatMap((z) => z.districts ?? []))];
+      cache = list.length ? list : DISTRICTS;
+      return cache;
+    })
+    .catch(() => DISTRICTS)
+    .finally(() => { inflight = null; });
+  return inflight;
+}
+
+export function useDistricts(): string[] {
+  const [list, setList] = useState<string[]>(cache ?? DISTRICTS);
+  useEffect(() => { let live = true; loadDistricts().then((l) => live && setList(l)); return () => { live = false; }; }, []);
+  return list;
+}
+
+/** Các <option> quận/huyện — dùng trong <select>. */
+export function DistrictOptions() {
+  const list = useDistricts();
+  return createElement("optgroup", { label: "Khu vực giao hàng" }, ...list.map((d) => createElement("option", { key: d, value: d }, d)));
+}

@@ -73,6 +73,20 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
   });
 });
 
+/** Khu vực giao đang hoạt động + danh sách quận/huyện (cho ô chọn địa chỉ). Server vẫn là nơi quyết định khi quote/checkout. */
+cartRoutes.get("/delivery/zones", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, name, districts_json, fee, free_over, min_order FROM delivery_zones WHERE active = 1 ORDER BY fee, id`,
+  ).all<{ id: number; name: string; districts_json: string; fee: number; free_over: number | null; min_order: number }>();
+  const zones = results.map((z) => {
+    let districts: string[] = [];
+    try { districts = (JSON.parse(z.districts_json) as unknown[]).filter((d): d is string => typeof d === "string"); } catch { /* bỏ qua dữ liệu hỏng */ }
+    return { id: z.id, name: z.name, fee: z.fee, freeOver: z.free_over, minOrder: z.min_order, districts };
+  });
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json({ zones });
+});
+
 cartRoutes.get("/delivery/slots", async (c) => {
   const db = c.env.DB;
   const date = c.req.query("date");

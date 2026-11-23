@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { DISTRICTS } from "../lib/geo";
+import { DistrictOptions } from "../lib/geo";
 import { money, num, unitName } from "../lib/format";
 import { Link, navigate, usePageMeta } from "../lib/router";
 import { announce, cartActions, estLine, prefs, ss, unitPriceOf, useCart } from "../lib/store";
@@ -13,7 +13,7 @@ export function DistrictSelect({ value, onChange, id = "district", label = "Giao
       <label htmlFor={id}>{label}</label>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">Chọn quận/huyện…</option>
-        {DISTRICTS.map((d) => <option key={d} value={d}>{d}</option>)}
+        <DistrictOptions />
       </select>
     </div>
   );
@@ -89,7 +89,7 @@ export function CartPage() {
             <label htmlFor="district">Giao đến quận/huyện</label>
             <select id="district" value={district} onChange={(e) => { setDistrict(e.target.value); prefs.setDistrict(e.target.value); }}>
               <option value="">Chọn quận/huyện…</option>
-              {DISTRICTS.map((d) => <option key={d} value={d}>{d}</option>)}
+              <DistrictOptions />
             </select>
           </div>
           <dl className="totals" aria-live="polite">

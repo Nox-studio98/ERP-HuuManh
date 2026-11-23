@@ -161,3 +161,15 @@ describe("VietQR", () => {
     expect(qr).toBe("00020101021238540010A00000072701240006970436011001234567890208QRIBFTTA53037045405500005802VN62210817HM DH20261123000163043D7E");
   });
 });
+
+describe("GET /api/delivery/zones", () => {
+  it("lists active zones with districts", async () => {
+    const { testEnv } = await import("./helpers");
+    const { app } = await import("../src/shop/worker/index");
+    await testEnv.DB.prepare(`INSERT INTO delivery_zones(name, districts_json, fee) VALUES ('Z test','["Quận 1","Quận 3"]',20000)`).run();
+    const r = await app.request("/api/delivery/zones", {}, { ...testEnv, APP_ENV: "dev" } as any);
+    expect(r.status).toBe(200);
+    const b = (await r.json()) as any;
+    expect(b.zones.some((z: any) => z.name === "Z test" && z.districts.includes("Quận 3"))).toBe(true);
+  });
+});

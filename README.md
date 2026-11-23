@@ -180,6 +180,43 @@ Sàn Fresco: khi sàn cung cấp webhook, đặt secret rồi bật `fresco.enab
 npx wrangler secret put FRESCO_WEBHOOK_SECRET
 ```
 
+## Bổ sung khi lên Đợt 3 (website & app khách)
+
+Website là Worker riêng `huu-manh-shop` (`wrangler.shop.jsonc`), dùng chung D1/R2/Queue với ERP. Thay `database_id` trong `wrangler.shop.jsonc` giống `wrangler.jsonc`.
+
+```bash
+npm run build:shop
+```
+
+```bash
+npx wrangler dev -c wrangler.shop.jsonc --port 8788
+```
+
+```bash
+npm run deploy:shop
+```
+
+Secrets cho website (Turnstile chống bot, webhook thanh toán) và cho cả hai Worker (Web Push):
+
+```bash
+npx wrangler secret put TURNSTILE_SECRET -c wrangler.shop.jsonc
+```
+
+```bash
+npx wrangler secret put PAYMENT_WEBHOOK_SECRET -c wrangler.shop.jsonc
+```
+
+```bash
+npx wrangler secret put VAPID_PRIVATE_KEY
+```
+
+- Site key Turnstile: đặt `VITE_TURNSTILE_SITE_KEY` khi build website (hoặc thẻ `<meta name="turnstile-site-key">`).
+- Vars: `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`, `SHOP_BASE_URL` (link tra cứu đơn trong email/push).
+- Trong ERP → Cài đặt: `payment.bank_account`, `payment.bank_account_name`, `payment.bank_bin` (VietQR), khu vực giao + khung giờ (màn hình "Khu vực giao"), bật sản phẩm bán online (Hàng hoá → tab "Bán online").
+- Email: `notify.email_provider = cloudflare` cần thêm binding `send_email` tên `EMAIL` vào `wrangler.jsonc` (yêu cầu bật Email Service/Email Routing cho tên miền).
+- Khuyến nghị: đặt ERP sau **Cloudflare Access** (chỉ nhân viên), website để công khai.
+- Dữ liệu mẫu: `seed/seed-dot3.sql` (khu vực giao lấy TP.HCM làm ví dụ — [Cần xác nhận]).
+
 ## Ghi chú
 
 - `seed/seed.sql` chỉ chứa master data demo: cửa hàng, quỹ, danh mục, sản phẩm, bảng giá. Không có lô hàng, đơn hàng hay tài khoản người dùng thật. Tài khoản `system` (id 1) không đăng nhập được.
