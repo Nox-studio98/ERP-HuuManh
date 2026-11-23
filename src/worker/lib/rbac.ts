@@ -15,6 +15,12 @@ export const PERMISSIONS = [
   "prices.view_sell", "prices.view_cost", "prices.write", "prices.approve",
   // M6
   "finance.view", "finance.write", "finance.approve", "finance.shift_reconcile", "finance.lock_period",
+  // M4 B2B (Đợt 2)
+  "b2b.view", "b2b.write", "b2b.approve", "b2b.credit_override", "b2b.deliver",
+  // M5 Công nợ (Đợt 2)
+  "debt.view", "debt.write", "debt.approve",
+  // Tích hợp (MISA, Fresco), hoá đơn điện tử
+  "invoices.issue", "integrations.manage",
   // Chung
   "reports.view", "customers.view_pii", "users.manage", "audit.view", "approvals.decide",
 ] as const;
@@ -30,15 +36,20 @@ export const ROLE_PERMS: Record<Role, ReadonlySet<Permission>> = {
     "prices.view_sell", "prices.view_cost", "prices.write", "prices.approve",
     "finance.view", "finance.shift_reconcile",
     "reports.view", "customers.view_pii", "approvals.decide", "audit.view",
+    "b2b.view", "b2b.write", "b2b.approve", "b2b.deliver", "debt.view", "debt.write", "invoices.issue",
   ]),
   cashier: new Set<Permission>(["pos.sell", "pos.return", "pos.shift", "orders.view", "prices.view_sell", "inventory.view", "finance.shift_reconcile"]),
-  warehouse: new Set<Permission>(["inventory.view", "inventory.write", "prices.view_cost", "orders.view"]),
+  // Thủ kho: xem đơn sỉ cần xuất, soạn/giao hàng; xem công nợ (mục 12)
+  warehouse: new Set<Permission>(["inventory.view", "inventory.write", "prices.view_cost", "orders.view", "b2b.view", "b2b.deliver", "debt.view"]),
   accountant: new Set<Permission>([
     "orders.view", "inventory.view", "prices.view_sell", "prices.view_cost",
     "finance.view", "finance.write", "reports.view", "customers.view_pii",
+    "b2b.view", "debt.view", "debt.write", "invoices.issue",
   ]),
-  online_staff: new Set<Permission>(["orders.view", "orders.online.manage", "inventory.view", "prices.view_sell", "customers.view_pii"]),
+  online_staff: new Set<Permission>(["orders.view", "orders.online.manage", "inventory.view", "prices.view_sell", "customers.view_pii", "b2b.view"]),
 };
+
+// Chỉ chủ cửa hàng: vượt hạn mức nợ (EC-23), xoá nợ (M5-08), cấu hình tích hợp — owner có ALL.
 
 export const can = (role: Role, p: Permission) => ROLE_PERMS[role]?.has(p) ?? false;
 

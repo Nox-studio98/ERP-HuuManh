@@ -109,7 +109,7 @@ authRoutes.post("/bootstrap", async (c) => {
   if (!expected || !timingSafeEqual(enc.encode(await sha256(given)), enc.encode(await sha256(expected)))) {
     throw new AppError(404, "not_found");
   }
-  const count = await c.env.DB.prepare(`SELECT COUNT(*) n FROM users`).first<{ n: number }>();
+  const count = await c.env.DB.prepare(`SELECT COUNT(*) n FROM users WHERE username <> 'system'`).first<{ n: number }>();
   if ((count?.n ?? 0) > 0) throw new AppError(409, "already_bootstrapped");
   const body = z
     .object({ username: z.string().min(3).max(64), fullName: z.string().min(1).max(100), password: PasswordSchema })

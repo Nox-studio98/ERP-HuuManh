@@ -1,10 +1,16 @@
 import type { Env } from "./env";
 import { vnDay } from "./lib/time";
+import { enqueueDebtReminders, sweepJobs } from "./services/jobs";
+import { cancelExpiredAwaitingPayment } from "./services/online-payments";
+import { swapBadReservations } from "./services/reservations";
+import { sysAudit } from "./services/sysaudit";
 
 /**
  * Cron Triggers (wrangler.jsonc → triggers.crons):
  *  - "0 17 * * *"  (00:00 giờ VN): đánh dấu lô hết hạn, sao lưu logic ra R2.
  *  - "*\/30 * * * *": dọn phiên hết hạn.
+ *  - "*\/5 * * * *": quét job tích hợp đến hạn (sweepJobs).
+ *  - "0 1 * * *" (08:00 VN): đổi lô giữ tồn xấu (EC-15), sinh đơn lặp, nhắc nợ.
  * D1 Time Travel đã cho khôi phục điểm thời gian 30 ngày; bản xuất R2 là lớp sao lưu thứ hai (yêu cầu chung mục 12).
  */
 export async function runScheduled(event: ScheduledController, env: Env) {
@@ -13,7 +19,20 @@ export async function runScheduled(event: ScheduledController, env: Env) {
     await env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL`).bind(now).run();
     return;
   }
-  // Hằng ngày
+  if (event.cron === "*/5 * * * *") {
+    await sweepJobs(env);
+    try {
+      await cancelExpiredAwaitingPayment(env); // EC-05: huỷ đơn online chờ chuyển khoản quá hạn
+    } catch (e) {
+      console.error(JSON.stringify({ level: "error", msg: "cancel_expired_online", err: String((e as Error)?.message).slice(0, 200) }));
+    }
+    return;
+  }
+  if (event.cron === "0 1 * * *") {
+    await dailyMorning(env);
+    return;
+  }
+  // Hằng ngày (00:00 giờ VN)
   await env.DB.prepare(
     `UPDATE lots SET status = 'expired' WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?`,
   )
@@ -38,5 +57,21 @@ async function backupToR2(env: Env) {
     await env.FILES.put(`backups/${day}/${t}.ndjson`, rows.map((r) => JSON.stringify(r)).join("\n"), {
       httpMetadata: { contentType: "application/x-ndjson" },
     });
+  }
+}
+
+/** 08:00 giờ VN. Mỗi bước độc lập: lỗi một bước không chặn bước sau. */
+async function dailyMorning(env: Env) {
+  try {
+    const r = await swapBadReservations(env.DB, 1); // EC-15, cửa hàng 1
+    if (r.short.length) await sysAudit(env.DB, { action: "reservation.short_after_swap", entity: "reservations", after: r.short });
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", msg: "swap_bad_reservations", err: String((e as Error)?.message).slice(0, 200) }));
+  }
+  // TODO(M4-08): sinh đơn sỉ lặp cho ngày mai khi Agent A cung cấp helper (vd. generateRecurringOrders(env, deliveryDate)) trong routes/b2b.ts hoặc services/.
+  try {
+    await enqueueDebtReminders(env); // M5-06
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", msg: "enqueue_debt_reminders", err: String((e as Error)?.message).slice(0, 200) }));
   }
 }
