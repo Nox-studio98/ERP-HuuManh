@@ -3,7 +3,8 @@ import { get, items, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
 import { Receipt, lineName } from "../components/Receipt";
 import { toast } from "../components/toast";
-import { CHANNELS, METHODS, ORDER_STATUS, fmtTime, money, qtyText, todayVN, unitLabel } from "../format";
+import { CHANNELS, METHODS, ORDER_STATUS, fmtTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
+import { useUnitMap } from "../units";
 import { useCan } from "../store";
 
 const tone = (s: string) => (s === "completed" ? "ok" : s === "cancelled" || s === "returned" ? "danger" : "info") as any;
@@ -37,11 +38,12 @@ export default function Orders() {
 function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
   const can = useCan();
   const o = useAsync(() => get(`/orders/${id}`), [id]);
+  const pmap = useUnitMap();
   const [mode, setMode] = useState<"view" | "return" | "void" | "receipt">("view");
-  const d = o.data;
+  const d = o.data && pmap ? withShown(o.data, pmap) : o.data;
   return (
     <Sheet open onClose={onClose} wide title={d ? `Đơn ${d.code}` : "Đơn hàng"}>
-      {o.loading || !d ? <Spinner /> : mode === "receipt" ? (
+      {o.loading || !d || !pmap ? <Spinner /> : mode === "receipt" ? (
         <div className="stack"><Receipt order={d} /><Button variant="ghost" onClick={() => setMode("view")}>← Quay lại</Button></div>
       ) : mode === "return" ? (
         <ReturnForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); o.reload(); setMode("view"); }} />
@@ -53,8 +55,8 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
           {d.voidReason && <Banner tone="danger">Đã huỷ: {d.voidReason}</Banner>}
           <DataTable rows={d.lines ?? []} rowKey={(l: any) => l.id} cols={[
             { key: "n", label: "Hàng", title: true, render: (l: any) => lineName(l) },
-            { key: "q", label: "SL", right: true, render: (l: any) => qtyText(l.qtyMilli, l.unit) },
-            { key: "p", label: "Đơn giá", right: true, render: (l: any) => money(l.unitPrice) },
+            { key: "q", label: "SL", right: true, render: (l: any) => qtyText(l.qtyShown, l.unit) },
+            { key: "p", label: "Đơn giá", right: true, render: (l: any) => money(l.priceShown) },
             { key: "t", label: "Thành tiền", right: true, render: (l: any) => money(l.lineTotal) },
           ]} />
           <div className="totals">
@@ -90,13 +92,13 @@ function ReturnForm({ order, onCancel, onDone }: { order: any; onCancel: () => v
       <div className="muted">Nhập số lượng khách trả cho từng dòng.</div>
       {(order.lines ?? []).map((l: any) => (
         <div key={l.id} className="row between wrap">
-          <div style={{ minWidth: 0 }}><b>{lineName(l)}</b><div className="small muted">Đã mua {qtyText(l.qtyMilli, l.unit)}</div></div>
-          <div style={{ width: 140 }}><DecInput label={`Trả (${unitLabel(l.unit)})`} value={q[l.id] ?? ""} onChange={(n) => setQ({ ...q, [l.id]: Math.min(n, l.qtyMilli / 1000) })} /></div>
+          <div style={{ minWidth: 0 }}><b>{lineName(l)}</b><div className="small muted">Đã mua {qtyText(l.qtyShown, l.unit)}</div></div>
+          <div style={{ width: 140 }}><DecInput label={`Trả (${unitLabel(l.unit)})`} value={q[l.id] ?? ""} onChange={(n) => setQ({ ...q, [l.id]: Math.min(n, l.qtyShown / 1000) })} /></div>
         </div>
       ))}
       <label className="row" style={{ minHeight: 44 }}><input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} style={{ width: 22, height: 22 }} /> <span>Nhập lại kho (hàng còn bán được)</span></label>
       {!restock && <div className="hint">Không nhập lại kho: ghi nhận hao hụt.</div>}
-      <Select label="Hoàn tiền bằng" value={method} onChange={(e) => setMethod(e.target.value)}>{["cash", "transfer", "card"].map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}</Select>
+      <Select label="Hoàn tiền bằng" value={method} onChange={(e) => setMethod(e.target.value)}>{["cash", "transfer", "qr", "card"].map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}</Select>
       <TextArea label="Lý do trả hàng" value={reason} onChange={(e) => setReason(e.target.value)} />
       <div className="row"><Button variant="ghost" onClick={onCancel}>Quay lại</Button><Button className="grow" loading={busy} disabled={!chosen.length || !reason.trim()} onClick={submit}>Xác nhận trả hàng</Button></div>
     </div>
