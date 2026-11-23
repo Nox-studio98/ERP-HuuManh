@@ -331,6 +331,14 @@ try {
   await d.getByRole("button", { name: "Lưu khung giờ" }).click();
   await o.page.getByTestId("slot-list").getByText(`Ca ${RUN}`).waitFor();
   ok("khung giờ mới đã tạo");
+  // Dọn dữ liệu thử: tắt khu vực / khung giờ vừa tạo để không ảnh hưởng website và các kịch bản khác
+  for (const [path, match] of [["/delivery-zones", (z) => z.name === `Khu ${RUN}`], ["/delivery-slots", (s) => s.label === `Ca ${RUN}`]]) {
+    const it = (await apiGet(o.ctx, path)).items.find(match);
+    if (it) {
+      const r = await o.ctx.request.put(BASE + "/api/v1" + path + "/" + it.id, { headers: hdr, data: { ...it, active: false } });
+      assert(r.ok(), `tắt ${path}/${it.id} sau khi thử (${r.status()})`);
+    }
+  }
   await go(o.page, "/shop-accounts");
   await o.page.getByRole("tab", { name: "Tất cả tài khoản" }).click();
   await o.page.locator("main").getByText(/Chưa có tài khoản|Khách lẻ|Khách sỉ|Chờ liên kết/).first().waitFor();

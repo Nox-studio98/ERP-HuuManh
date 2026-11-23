@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Address, type OrderView } from "../lib/api";
-import { DISTRICTS, PROVINCE } from "../lib/geo";
+import { DistrictOptions, PROVINCE } from "../lib/geo";
 import { dayMonth, money, num, todayVN, unitName, uuid, weekdayOf } from "../lib/format";
 import { cartSubtotalEst, useDelivery, useQuote } from "../lib/quote";
 import { Link, navigate, usePageMeta } from "../lib/router";
@@ -204,7 +204,7 @@ export function CheckoutPage() {
                   {(p) => (
                     <select {...p} value={f.district} onChange={set("district")}>
                       <option value="">Chọn quận/huyện…</option>
-                      {DISTRICTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                      <DistrictOptions />
                     </select>
                   )}
                 </Field>
