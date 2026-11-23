@@ -228,10 +228,7 @@ function PackingSlip({ o }: { o: any }) {
 function PackSheet({ o, busy, onClose, onSubmit }: { o: any; busy: boolean; onClose: () => void; onSubmit: (lines: any[], note: string) => void }) {
   const [act, setAct] = useState<Record<number, number | "">>(() => Object.fromEntries(o.lines.map((l: any) => [l.id, l.qtyMilli / 1000])));
   const [note, setNote] = useState("");
-  const tol = useAsync(async () => {
-    try { const r = await get("/settings", undefined, { silent: true }); const s = (r.items ?? r.settings ?? r) as any; const row = Array.isArray(s) ? s.find((x: any) => x.key === "online.weight_tolerance_bp") : null; return row ? Number(row.value) : 1000; } catch { return 1000; }
-  }, []);
-  const tolBp = tol.data ?? 1000;
+  const tolBp: number = o.weightToleranceBp ?? 1000; // ngưỡng lệch cân trả kèm chi tiết đơn
   const calc = useMemo(() => {
     let base = 0, sub = 0;
     for (const l of o.lines) { base += Math.round((l.unitPrice * l.orderedQtyMilli) / 1000); sub += Math.round((l.unitPrice * Math.round(Number(act[l.id] || 0) * 1000)) / 1000); }
