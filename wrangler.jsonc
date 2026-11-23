@@ -40,7 +40,11 @@
           "migrations_dir": "migrations"
         }
       ],
-      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }]
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }],
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs-staging" }],
+        "consumers": [{ "queue": "huu-manh-erp-jobs-staging", "max_batch_size": 10, "max_retries": 5, "dead_letter_queue": "huu-manh-erp-jobs-staging-dlq" }]
+      }
     }
   }
 }
