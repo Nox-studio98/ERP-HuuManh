@@ -642,7 +642,9 @@ b2bRoutes.get("/invoices", requirePerm("debt.view"), async (c) => {
       .prepare(
         `SELECT * FROM (
            SELECT i.id, i.code, i.kind, i.customer_id, cu.name AS customer_name, i.issue_date, i.due_date, i.total, i.status, i.einvoice_status, i.einvoice_no,
-                  COALESCE((SELECT SUM(a.amount) FROM debt_allocations a WHERE a.invoice_id = i.id), 0) AS paid,
+                  COALESCE((SELECT SUM(a.amount) FROM debt_allocations a
+                             LEFT JOIN debt_payments ap ON ap.id = a.payment_id LEFT JOIN debt_adjustments ad ON ad.id = a.adjustment_id
+                            WHERE a.invoice_id = i.id AND (ap.status = 'posted' OR ad.status = 'posted')), 0) AS paid,
                   CASE WHEN i.kind = 'adjustment' THEN 0 ELSE ${OS} END AS outstanding
              FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
          ) x ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY x.id DESC LIMIT ?`,
