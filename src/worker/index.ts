@@ -36,7 +36,11 @@ app.use(
   }),
 );
 
-app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } }));
+// Giới hạn body: 1 MB mặc định; riêng upload ảnh (sản phẩm, CMS) 2,5 MB — route tự kiểm ≤ 2 MB + magic bytes.
+const UPLOAD_PATH = /^\/api\/v1\/(products\/\d+\/images|cms\/images)$/;
+const limitDefault = bodyLimit({ maxSize: 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } });
+const limitUpload = bodyLimit({ maxSize: 2.5 * 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } });
+app.use("/api/*", (c, next) => (UPLOAD_PATH.test(c.req.path) ? limitUpload(c, next) : limitDefault(c, next)));
 app.use("/api/*", async (c, next) => {
   await next();
   c.header("Cache-Control", "no-store");
