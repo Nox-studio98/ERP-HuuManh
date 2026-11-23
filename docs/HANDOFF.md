@@ -119,3 +119,12 @@ Không có tài nguyên nào khác trong account bị thay đổi.
 - Vite plugin chọn môi trường **lúc build** (`CLOUDFLARE_ENV=staging npm run build`), `wrangler deploy --env` bị bỏ qua với bản build ERP.
 - Dữ liệu dev local (`.wrangler/state`) dùng chung cho cả hai Worker; các kịch bản E2E tạo dữ liệu thật trong DB local.
 - Chạy kiểm thử: `npx vitest run` · `npx tsc --noEmit` · E2E cần `wrangler dev` ERP (:8787) và shop (:8788): `node e2e/smoke.mjs`, `e2e/b2b.mjs`, `e2e/online.mjs`, `e2e/shop.mjs`.
+
+## 7. Bản demo trên `*.workers.dev` (gửi khách xem)
+
+- Môi trường `demo` trong `wrangler.jsonc` / `wrangler.shop.jsonc`: Worker `huu-manh-erp-demo` (ERP) và `huu-manh-shop-demo` (website), dùng D1 `huu-manh-erp` + R2 `huu-manh-erp-files`, **không dùng Queues** (chạy được trên gói Workers miễn phí; cron `*/5` tự xử lý job).
+- Deploy: thêm `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` vào GitHub Secrets rồi đẩy tag `demo-*` (vd `demo-2026-11-24`) → job `deploy-demo` (migrations → font PDF lên R2 → deploy ERP → deploy website).
+- Dữ liệu demo đã nạp vào D1: 29 sản phẩm (20 bán online), 5 NCC minh hoạ, giá chung/sỉ/online, tồn kho qua phiếu `PN-DEMO-0001` (hạn dùng 21 ngày kể từ 24/11/2026 — sau đó lô sẽ hết hạn, cần nhập thêm), 3 khu vực giao (TP.HCM, ví dụ), 4 khung giờ, 2 bài viết, tài khoản ngân hàng VietQR **giả** (`0000000000`).
+- Tài khoản: `chu` (chủ cửa hàng) — mật khẩu được giao riêng cho chủ dự án, **đổi ngay sau khi nhận**.
+- Turnstile dùng **khoá thử nghiệm công khai** của Cloudflare (luôn cho qua) — chỉ cho demo.
+- Trước khi go-live thật: xoá dữ liệu demo hoặc tạo D1 mới; đặt Turnstile thật, tài khoản ngân hàng thật; chuyển sang môi trường production (có Queues).

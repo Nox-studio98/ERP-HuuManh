@@ -25,6 +25,21 @@
   "observability": { "enabled": true },
   "workers_dev": true,
   "env": {
+    // Bản demo gửi khách (*.workers.dev). TURNSTILE_SECRET là KHOÁ THỬ NGHIỆM CÔNG KHAI của Cloudflare
+    // (luôn cho qua) — CHỈ dùng cho demo, phải thay bằng secret thật trước khi go-live.
+    "demo": {
+      "name": "huu-manh-shop-demo",
+      "vars": { "APP_ENV": "demo", "TURNSTILE_SECRET": "1x0000000000000000000000000000000AA" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "huu-manh-erp",
+          "database_id": "01557b74-7189-49a6-adf5-9591ec6bb3ba",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }]
+    },
     // Staging: D1/R2/Queue RIÊNG của staging — tuyệt đối không trỏ vào dữ liệu production
     "staging": {
       "name": "huu-manh-shop-staging",
