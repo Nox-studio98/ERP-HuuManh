@@ -62,7 +62,7 @@ function QuoteForm({ presetCustomerId, onClose, onSaved }: { presetCustomerId?: 
         {cust && (
           <>
             <div className="grid2"><Input label="Hiệu lực (ngày)" inputMode="numeric" value={String(days)} onChange={(e) => setDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 1)))} /></div>
-            <LinesEditor lines={lines} setLines={setLines} groupId={cust.customerGroupId} allowPrice showCost={can("prices.view_cost")} />
+            <LinesEditor lines={lines} setLines={setLines} groupId={cust.customerGroupId} customerId={cust.id} allowPrice showCost={can("prices.view_cost")} />
             <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
             <div className="hint">Giảm giá sâu so với bảng giá hoặc bán dưới giá vốn sẽ cần chủ duyệt trước khi gửi khách.</div>
           </>

@@ -81,9 +81,10 @@ priceRoutes.get("/prices/quote", requirePerm("prices.view_sell"), async (c) => {
       productId: z.coerce.number().int().positive(),
       channel: z.enum(["pos", "online", "b2b"]).default("pos"),
       customerGroupId: z.coerce.number().int().positive().optional(),
+      customerId: z.coerce.number().int().positive().optional(), // bảng giá riêng theo khách (EC-13)
     })
     .parse(c.req.query());
-  const r = await resolvePrice(c.env.DB, q.productId, { channel: q.channel, customerGroupId: q.customerGroupId });
+  const r = await resolvePrice(c.env.DB, q.productId, { channel: q.channel, customerGroupId: q.customerGroupId, customerId: q.customerId });
   return c.json(r);
 });
 

@@ -228,7 +228,7 @@ export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApproval
         approvalId = res[0].meta.last_row_id as number;
       }
       throw conflict("credit_blocked", "Khách vượt hạn mức hoặc có nợ quá hạn, cần chủ cửa hàng duyệt", {
-        approvalId, reasons: chk.reasons, status: chk.status, orderId,
+        approvalId, reasons: chk.reasons, status: chk.status, orderId, orderAmount: o.total,
       });
     }
   }

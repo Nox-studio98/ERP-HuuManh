@@ -111,7 +111,7 @@ function OrderForm({ presetCustomerId, onClose, onCreated }: { presetCustomerId?
               <Input label="Ngày giao" type="date" min={todayVN()} value={date} onChange={(e) => setDate(e.target.value)} />
               <Segmented value={mode} onChange={setMode} options={[{ v: "lines", label: "Nhập hàng" }, { v: "quote", label: "Từ báo giá" }]} />
               {mode === "lines" ? (
-                <LinesEditor lines={lines} setLines={setLines} groupId={cust.customerGroupId} allowPrice={can("b2b.approve")} showCost={false} />
+                <LinesEditor lines={lines} setLines={setLines} groupId={cust.customerGroupId} customerId={cust.id} allowPrice={can("b2b.approve")} showCost={false} />
               ) : (
                 <div className="stack">
                   {quotes.loading ? <Spinner /> : !(quotes.data ?? []).length ? <EmptyState title="Khách chưa có báo giá còn hiệu lực" /> : (
