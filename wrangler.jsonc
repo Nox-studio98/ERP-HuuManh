@@ -28,6 +28,21 @@
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "workers_dev": true,
   "env": {
+    // Bản demo gửi khách trên *.workers.dev. Không khai báo Queues (cần gói trả phí) —
+    // job tích hợp được cron "*/5" xử lý trực tiếp (services/jobs.ts sweepJobs).
+    "demo": {
+      "name": "huu-manh-erp-demo",
+      "vars": { "APP_ENV": "demo" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "huu-manh-erp",
+          "database_id": "01557b74-7189-49a6-adf5-9591ec6bb3ba",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }]
+    },
     "staging": {
       "name": "huu-manh-erp-staging",
       "vars": { "APP_ENV": "staging" },
