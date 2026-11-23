@@ -12,6 +12,8 @@ import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from
 import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
 import { salesSummary } from "../services/salesreport";
+import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-checkout";
+import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 
 export const posRoutes = new Hono<AppBindings>();
 
@@ -104,7 +106,7 @@ posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
   return c.json({ shift }, 201);
 });
 
-async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number }) {
+async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number; fund_id?: number; user_id?: number; opened_at?: string; closed_at?: string | null }) {
   const r = await db
     .prepare(
       `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
@@ -112,7 +114,16 @@ async function expectedCash(db: D1Database, shift: { id: number; opening_cash: n
     )
     .bind(shift.id)
     .first<{ s: number }>();
-  return shift.opening_cash + (r?.s ?? 0);
+  // Đặt cọc đơn đặt trước (M1-12): phiếu thu/chi tiền mặt trên quỹ của ca, do người mở ca lập từ lúc mở ca
+  const dep = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s FROM cash_vouchers
+        WHERE status='posted' AND ref_type='order_deposit' AND fund_id = ? AND created_by = ? AND created_at >= ?
+          AND (? IS NULL OR created_at <= ?)`,
+    )
+    .bind((shift as any).fund_id, (shift as any).user_id, (shift as any).opened_at, (shift as any).closed_at ?? null, (shift as any).closed_at ?? null)
+    .first<{ s: number }>();
+  return shift.opening_cash + (r?.s ?? 0) + (dep?.s ?? 0);
 }
 
 posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
@@ -171,6 +182,8 @@ const checkoutSchema = z.object({
   payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive(), ref: z.string().max(100).optional() })).max(10),
   note: z.string().max(500).optional(),
   approvalId: z.number().int().positive().optional(),
+  voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
+  redeemPoints: z.number().int().positive().optional(), // Đợt 4: đổi điểm tích luỹ
 });
 
 async function getOrderFull(c: Ctx, orderId: number) {
@@ -203,6 +216,9 @@ async function getOrderFull(c: Ctx, orderId: number) {
       .all<any>()
   ).results;
   const payments = (await db.prepare(`SELECT * FROM payments WHERE order_id = ? ORDER BY id`).bind(orderId).all()).results;
+  const discounts = (
+    await db.prepare(`SELECT id, promotion_id, voucher_id, points_redeemed, amount, description FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(orderId).all()
+  ).results;
   const canCost = can(role, "prices.view_cost");
   const { customer_phone, ...rest } = o;
   return {
@@ -213,6 +229,7 @@ async function getOrderFull(c: Ctx, orderId: number) {
       return { ...(canCost ? { cost_amount } : {}), ...r, lots: lots.filter((x) => x.order_line_id === l.id).map((x) => (canCost ? x : { ...x, unit_cost: undefined })) };
     }),
     payments,
+    discounts,
   };
 }
 
@@ -220,7 +237,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const body = await parseBody(c, checkoutSchema);
   const db = c.env.DB;
   const user = c.get("user");
-  const orderDone = async (id: number, status: 200 | 201, change = 0) => c.json({ ...(await getOrderFull(c, id)), change }, status);
+  const orderDone = async (id: number, status: 200 | 201, change = 0, extra: object = {}) =>
+    c.json({ ...(await getOrderFull(c, id)), change, ...extra }, status);
 
   // EC-04: idempotent theo clientUuid
   const existing = await db.prepare(`SELECT id, status FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string }>();
@@ -241,7 +259,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   // Bước A: quy đổi đơn vị, giá, số tiền (không phụ thuộc phân bổ lô)
   const items = [] as {
     productId: number; unit: string; qtyMilli: number; unitPrice: number; listPrice: number; priceListId: number;
-    gross: number; lineDiscount: number; discount: number; lineTotal: number; listGross: number;
+    gross: number; lineDiscount: number; discount: number; lineTotal: number; listGross: number; promoDiscount: number;
   }[];
   for (const l of body.lines) {
     const { factor } = await unitFactor(db, l.productId, l.unit);
@@ -253,7 +271,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const lineDiscount = Math.min(l.discount ?? 0, gross);
     items.push({
       productId: l.productId, unit: l.unit, qtyMilli, unitPrice, listPrice: resolved.unitPrice, priceListId: resolved.priceListId,
-      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli),
+      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli), promoDiscount: 0,
     });
   }
   const baseSum = items.reduce((s, i) => s + i.gross - i.lineDiscount, 0);
@@ -265,6 +283,22 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     given += share;
     it.discount = it.lineDiscount + share;
     it.lineTotal = it.gross - it.discount;
+  });
+  // Đợt 4: khuyến mãi / voucher / đổi điểm (engine dùng chung) — ghi trong cùng batch với đơn
+  const groups = await groupIdsOf(db, items.map((i) => i.productId));
+  const promoPlan = await planPromotions(db, {
+    channel: "pos",
+    customerId: customer?.id ?? null,
+    lines: items.map((i) => ({ productId: i.productId, groupId: groups.get(i.productId) ?? null, qtyMilli: i.qtyMilli, unitPrice: i.unitPrice, lineTotal: i.lineTotal })),
+    subtotal: items.reduce((s, i) => s + i.lineTotal, 0),
+    voucherCode: body.voucherCode,
+    redeemPoints: body.redeemPoints,
+    strict: true,
+  });
+  items.forEach((it, i) => {
+    it.promoDiscount = promoPlan.lineDiscounts[i];
+    it.discount += it.promoDiscount;
+    it.lineTotal -= it.promoDiscount;
   });
   const subtotal = items.reduce((s, i) => s + i.gross, 0);
   const totalDiscount = items.reduce((s, i) => s + i.discount, 0);
@@ -303,9 +337,9 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const costs = lineAllocs.map((a) => allocationCost(a));
     const reasons: string[] = [];
     const listSum = items.reduce((s, i) => s + i.listGross, 0);
-    const discValue = items.reduce((s, i) => s + Math.max(0, i.listGross - i.lineTotal), 0);
+    const discValue = items.reduce((s, i) => s + Math.max(0, i.listGross - i.lineTotal - i.promoDiscount), 0);
     if (listSum > 0 && (discValue * 10000) / listSum > discountBp) reasons.push("discount");
-    if (items.some((it, i) => it.lineTotal < costs[i])) reasons.push("below_cost");
+    if (items.some((it, i) => it.lineTotal + it.promoDiscount < costs[i])) reasons.push("below_cost");
     approvalUsed = null;
     if (reasons.length && !can(user.role, "approvals.decide")) {
       approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue });
@@ -335,6 +369,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
 
   const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
 
+  const promoStmts = await promoStatements(db, { sql: "?", bind: orderId }, { plan: promoPlan, customerId: customer?.id ?? null, payableTotal: total, userId: user.id });
+
   const commit = async () => {
     await db.prepare(`DELETE FROM order_lines WHERE order_id = ?`).bind(orderId).run();
     const lineIds: number[] = [];
@@ -357,6 +393,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
       }
     });
     for (const [pid, alloc] of p.productAllocs) stmts.push(...moveStatements(db, pid, alloc, -1, "sale", "order", orderId, user.id));
+    stmts.push(...promoStmts);
     for (const pay of recorded) {
       if (pay.amount <= 0) continue;
       stmts.push(
@@ -379,7 +416,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
         action: "order.checkout",
         entity: "order",
         entityId: orderId,
-        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed },
+        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed, voucher: promoPlan.voucher?.code ?? null, pointsRedeemed: promoPlan.points },
       }),
     );
     await db.batch(stmts);
@@ -389,16 +426,18 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     try {
       await commit();
     } catch (e) {
-      if (!isCheckFail(e)) throw e;
+      if (!isCheckFail(e) || isVoucherExhausted(e)) throw e;
       p = await plan(); // tồn vừa đổi: phân bổ lại 1 lần
       await commit();
     }
   } catch (e) {
     await cancelDraft();
+    if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
+    if (isPointsInsufficient(e)) throw conflict("points_insufficient", "Khách không đủ điểm để đổi");
     if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
     throw e;
   }
-  return orderDone(orderId, 201, change);
+  return orderDone(orderId, 201, change, { promotions: { rejected: promoPlan.rejected } });
 });
 
 /** Yêu cầu duyệt (giá dưới vốn / giảm giá vượt ngưỡng): trả approvalId đã duyệt, hoặc 409 approval_required. */
@@ -589,6 +628,11 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
       lineIds.push(row!.id);
     }
     const stmts: D1PreparedStatement[] = [];
+    // Đợt 4: thu hồi điểm tích / hoàn điểm đã đổi / hoàn lượt voucher
+    const priorRet = (
+      await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(origId).first<{ t: number }>()
+    )?.t ?? 0;
+    stmts.push(...(await reversalStatements(db, orig, priorRet + total, user.id, `trả hàng ${code}`)));
     prepared.forEach((x, i) => {
       if (!x.restock) return;
       for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
@@ -648,6 +692,7 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   for (const r of rows) byProduct.set(r.product_id, [...(byProduct.get(r.product_id) ?? []), { lotId: r.lot_id, qtyMilli: r.qty_milli, unitCost: r.unit_cost }]);
   const stmts: D1PreparedStatement[] = [];
   for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
+  stmts.push(...(await reversalStatements(db, o, o.total, user.id, "huỷ đơn")));
   stmts.push(
     db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, id),
     db.prepare(`UPDATE payments SET status='refunded' WHERE order_id=?`).bind(id),

@@ -5,7 +5,9 @@ import { nextCode } from "../../../worker/lib/codes";
 import { newTrackingToken } from "../../../worker/services/online-orders";
 import { planReservations, type ReservationPlan } from "../../../worker/services/reservations";
 import { kickJobs } from "../../../worker/services/outbox";
-import { applyStock, computeTotals, priceCart, publicRemaining } from "../lib/cart";
+import { applyStock, computeTotals, priceCart, promoForCart, publicRemaining } from "../lib/cart";
+import { promoStatements } from "../../../worker/services/promo-checkout";
+import { isVoucherExhausted } from "../../../worker/services/loyalty-points";
 import { DATE_RE, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { orderView } from "../lib/orderview";
 import { optionalAuth } from "../lib/session";
@@ -36,6 +38,7 @@ const CheckoutSchema = z.object({
   note: z.string().trim().max(500).optional(),
   acceptPreorder: z.boolean().optional(),
   email: z.string().trim().email().max(200).optional(),
+  voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4
 });
 
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
@@ -113,6 +116,10 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const totals = await computeTotals(db, lines, addr.district);
   if (totals.subtotal < zone.minOrder) throw new AppError(422, "min_order", `Đơn tối thiểu ${zone.minOrder.toLocaleString("vi-VN")}đ`, { minOrder: zone.minOrder, subtotal: totals.subtotal });
 
+  // --- khuyến mãi / voucher (Đợt 4): giảm tính trên tiền hàng, phí giao giữ nguyên ---
+  const promo = await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true);
+  const finalTotal = totals.total - promo.promoTotal;
+
   // --- thanh toán ---
   const methods = (await setting(db, "payment.methods", "cod,transfer")).split(",").map((x) => x.trim());
   if (!methods.includes(b.paymentMethod)) throw new AppError(422, "payment_method_unavailable", "Hình thức thanh toán này hiện chưa được hỗ trợ");
@@ -163,13 +170,13 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
           `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, discount, shipping_fee, total, note,
                               shop_account_id, tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id,
                               payment_method, payment_status, estimated_total, weight_adjust_status)
-           VALUES (?,?,'online','sale',?, COALESCE(?, (SELECT id FROM customers WHERE code = ?)), ?,?,?,0,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,'none')`,
+           VALUES (?,?,'online','sale',?, COALESCE(?, (SELECT id FROM customers WHERE code = ?)), ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,'none')`,
         )
         .bind(
           code, b.clientUuid, storeId, account?.customerId ?? null, guestCustomerCode, status, isPreorder ? 1 : 0,
-          totals.subtotal, totals.shippingFee, totals.total, b.note ?? null,
+          totals.subtotal, promo.promoTotal, totals.shippingFee, finalTotal, b.note ?? null,
           account?.id ?? null, token, addr.receiverName, phone, shipAddress, zone.id, b.slotDate, b.slotId,
-          b.paymentMethod, payStatus, totals.total,
+          b.paymentMethod, payStatus, finalTotal,
         ),
     );
     for (const l of lines)
@@ -182,6 +189,13 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
           .bind(code, l.productId, l.unit, l.qtyMilli, l.unitPrice, l.lineTotal, l.preorderMilli),
       );
     stmts.push(...reserveByPosition(db, code, plans));
+    stmts.push(
+      ...(await promoStatements(
+        db,
+        { sql: "(SELECT id FROM orders WHERE code = ?)", bind: code },
+        { plan: promo, customerId: account?.customerId ?? null, payableTotal: finalTotal, userId: null, skipEarn: true, customerSql: { sql: "(SELECT id FROM customers WHERE code = ?)", bind: guestCustomerCode } },
+      )),
+    );
     const ev = (st: string, note: string) =>
       db
         .prepare(`INSERT INTO order_events(order_id, status, note, actor_type, actor_id) VALUES (${ORD}, ?2, ?3, 'customer', ?4)`)
@@ -193,14 +207,14 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
       stmts.push(
         db
           .prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, provider_ref, expires_at) VALUES (${ORD}, ?2, ?3, ?4, ?5, ?6)`)
-          .bind(code, b.paymentMethod === "transfer" ? "vietqr" : "fake_gateway", totals.total, `HM ${code.replaceAll("-", "")}`, b.paymentMethod === "gateway" ? code : null, expires),
+          .bind(code, b.paymentMethod === "transfer" ? "vietqr" : "fake_gateway", finalTotal, `HM ${code.replaceAll("-", "")}`, b.paymentMethod === "gateway" ? code : null, expires),
       );
     }
     stmts.push(
       enqueueByRef(db, "notify.order_status", "order", code, {
         orderCode: code, status, accountId: account?.id ?? null, email: account ? null : b.email ?? null, link,
       }),
-      enqueueByRef(db, "notify.staff_new_order", "order", code, { orderCode: code, total: totals.total, isPreorder }),
+      enqueueByRef(db, "notify.staff_new_order", "order", code, { orderCode: code, total: finalTotal, isPreorder }),
     );
 
     try {
@@ -210,6 +224,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
         const r = await replay();
         if (r) return r;
       }
+      if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
       if (isCheckFail(e)) {
         if (attempt === 0) continue; // tồn vừa đổi: tính lại một lần
         throw conflict("insufficient_stock", "Không đủ hàng (tồn vừa thay đổi), vui lòng thử lại");
