@@ -196,3 +196,13 @@ describe("payroll API", () => {
     }
   });
 });
+
+describe("route order", () => {
+  it("/exports/bang-luong.xlsx is reachable (not swallowed by /exports/:file)", async () => {
+    const { api } = await import("./helpers");
+    const r = await api("owner", "GET", "/api/v1/exports/bang-luong.xlsx?period=2020-01");
+    // 404 hợp lệ chỉ khi do payroll trả về (kỳ không tồn tại), không phải "Không tìm thấy" của exports
+    expect(r.body?.error?.code).not.toBe("export_not_found");
+    expect(r.body?.error?.code ?? "ok").not.toBe("not_found");
+  });
+});
