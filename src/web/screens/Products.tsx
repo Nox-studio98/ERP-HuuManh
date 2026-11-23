@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { get, items, post, put } from "../api";
-import { Badge, Button, Card, DataTable, DecInput, Input, Select, Sheet, Spinner, useAsync, useDebounced } from "../components/ui";
+import { Badge, Button, Card, DataTable, DecInput, Input, Segmented, Select, Sheet, Spinner, useAsync, useDebounced } from "../components/ui";
 import { Barcode } from "../components/Barcode";
 import { toast } from "../components/toast";
 import { UNIT_OPTIONS, money, qtyText, unitLabel } from "../format";
 import { useCan } from "../store";
+import { ProductOnline } from "./online/ProductOnline";
 import { priceOf, type Product } from "./Pos";
 
 type UnitRow = { unit: string; factor: number | ""; barcode: string };
@@ -41,6 +42,7 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
   const [f, setF] = useState({ sku: p?.sku ?? "", name: p?.name ?? "", baseUnit: p?.baseUnit ?? "kg", sellByWeight: !!p?.sellByWeight, origin: p?.origin ?? "", barcode: p?.barcode ?? "", shelfLifeDays: p?.shelfLifeDays ?? ("" as number | ""), minStock: p?.minStockMilli != null ? p.minStockMilli / 1000 : ("" as number | "") });
   const [units, setUnits] = useState<UnitRow[]>((p?.units ?? []).filter((u) => u.unit !== p?.baseUnit).map((u) => ({ unit: u.unit, factor: u.factorMilli / 1000, barcode: u.barcode ?? "" })));
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"info" | "online">("info");
   const set = (k: string, v: any) => setF((x) => ({ ...x, [k]: v }));
   const save = async () => {
     setBusy(true);
@@ -56,8 +58,10 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
     } catch {} finally { setBusy(false); }
   };
   return (
-    <Sheet open onClose={onClose} wide title={p ? "Sửa hàng hoá" : "Thêm hàng hoá"} footer={<Button block loading={busy} disabled={!f.sku || !f.name} onClick={save}>Lưu</Button>}>
+    <Sheet open onClose={onClose} wide title={p ? "Sửa hàng hoá" : "Thêm hàng hoá"} footer={tab === "info" ? <Button block loading={busy} disabled={!f.sku || !f.name} onClick={save}>Lưu</Button> : undefined}>
       <div className="stack">
+        {p && <Segmented value={tab} onChange={setTab} options={[{ v: "info", label: "Thông tin" }, { v: "online", label: "Bán online" }]} />}
+        {tab === "online" && p ? <ProductOnline productId={p.id} /> : <>
         <div className="grid2"><Input label="SKU" value={f.sku} onChange={(e) => set("sku", e.target.value)} /><Input label="Tên hàng" value={f.name} onChange={(e) => set("name", e.target.value)} /></div>
         <div className="grid2">
           <Select label="Đơn vị chính" value={f.baseUnit} onChange={(e) => set("baseUnit", e.target.value)}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{unitLabel(u)}</option>)}</Select>
@@ -84,6 +88,7 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
         ))}
         <datalist id="unit-list">{["thung", "khay", "hop", "tui"].map((u) => <option key={u} value={u} />)}</datalist>
         <Button variant="soft" onClick={() => setUnits([...units, { unit: "thung", factor: "", barcode: "" }])}>+ Thêm đơn vị quy đổi</Button>
+        </>}
       </div>
     </Sheet>
   );

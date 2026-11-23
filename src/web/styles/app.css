@@ -197,3 +197,26 @@ tr.bad td { background: var(--warn-soft); }
 .stmt { min-width: 0; table-layout: auto; }
 .stmt td.nw { white-space: nowrap; }
 .stmt td.code { word-break: break-all; font-size: .8rem; }
+
+/* Bán online */
+.timeline { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: var(--s-4); }
+.timeline li { position: relative; }
+.timeline li::before { content: ""; position: absolute; left: -21px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); }
+.internal-note { margin-top: 4px; padding: 6px 10px; border: 1px dashed var(--warn); background: var(--warn-soft); color: var(--warn); border-radius: var(--r-sm); font-size: .88rem; }
+.action-bar .btn { flex: 1 1 140px; }
+.md p, .md ul, .md h3, .md h4, .md h5 { margin: 0 0 8px; }
+.md ul { padding-left: 20px; }
+.md a { color: var(--info); text-decoration: underline; }
+.md-edit { align-items: start; }
+@media (max-width: 767px) { .md-edit { grid-template-columns: 1fr; } }
+.btn.disabled { opacity: .6; pointer-events: none; }
+.slip-only { display: none; }
+@media print {
+  .slip-only { display: block; }
+  .print-area.slip { width: 100%; font-size: 13px; color: #000; }
+  .print-area.slip table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  .print-area.slip th, .print-area.slip td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+}
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--s-4)); padding: 0 var(--s-4) 4px; width: calc(100% + 2 * var(--s-4)); }
+.chips.scroll .chip { flex: 0 0 auto; white-space: nowrap; }
+@media (min-width: 768px) { .chips.scroll { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; width: auto; } }

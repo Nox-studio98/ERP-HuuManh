@@ -54,10 +54,11 @@ export async function api<T = any>(path: string, opt: Opt = {}): Promise<T> {
   }
   const method = opt.method ?? (opt.body !== undefined ? "POST" : "GET");
   const headers: Record<string, string> = { "X-Requested-With": "hm-erp", "X-Device-Id": deviceId(), Accept: "application/json" };
-  if (opt.body !== undefined) headers["Content-Type"] = "application/json";
+  const isForm = typeof FormData !== "undefined" && opt.body instanceof FormData;
+  if (opt.body !== undefined && !isForm) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
-    res = await fetch(url, { method, headers, credentials: "same-origin", body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined });
+    res = await fetch(url, { method, headers, credentials: "same-origin", body: opt.body === undefined ? undefined : isForm ? (opt.body as FormData) : JSON.stringify(opt.body) });
   } catch {
     const e = new ApiError(0, "network", VI.network);
     if (!opt.silent) toast(e.message, "error");
@@ -80,4 +81,7 @@ export async function api<T = any>(path: string, opt: Opt = {}): Promise<T> {
 export const get = <T = any>(p: string, query?: Opt["query"], o: Opt = {}) => api<T>(p, { ...o, query });
 export const post = <T = any>(p: string, body: unknown = {}, o: Opt = {}) => api<T>(p, { ...o, method: "POST", body });
 export const put = <T = any>(p: string, body: unknown = {}, o: Opt = {}) => api<T>(p, { ...o, method: "PUT", body });
+export const del = <T = any>(p: string, body?: unknown, o: Opt = {}) => api<T>(p, { ...o, method: "DELETE", body });
+/** Tải ảnh lên (multipart, trường "file") */
+export const upload = <T = any>(p: string, file: File) => { const f = new FormData(); f.append("file", file); return api<T>(p, { method: "POST", body: f }); };
 export const items = <T = any>(r: any): T[] => (Array.isArray(r) ? r : r?.items ?? r?.rows ?? []);
