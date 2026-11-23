@@ -11,7 +11,7 @@ import { AppError, notFound } from "../lib/errors";
 export const FONT_KEYS = { regular: "fonts/BeVietnamPro-Regular.ttf", bold: "fonts/BeVietnamPro-Bold.ttf" } as const;
 
 const missingFont = (key: string) =>
-  new AppError(501 as never, "pdf_font_missing", `Chưa tải font tiếng Việt lên R2 (${key}). Tải BeVietnamPro-Regular.ttf và BeVietnamPro-Bold.ttf vào thư mục fonts/ của bucket FILES.`);
+  new AppError(501, "pdf_font_missing", `Chưa tải font tiếng Việt lên R2 (${key}). Tải BeVietnamPro-Regular.ttf và BeVietnamPro-Bold.ttf vào thư mục fonts/ của bucket FILES.`);
 
 async function loadFonts(env: Env, doc: PDFDocument) {
   const [r, b] = await Promise.all([env.FILES.get(FONT_KEYS.regular), env.FILES.get(FONT_KEYS.bold)]);
