@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "huu-manh-erp",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "huu-manh-erp",
+      // Thay bằng id thật sau khi chạy: npx wrangler d1 create huu-manh-erp
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }],
+  "triggers": { "crons": ["0 17 * * *", "*/30 * * * *"] },
+  "vars": { "APP_ENV": "production" },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "workers_dev": true,
+  "env": {
+    "staging": {
+      "name": "huu-manh-erp-staging",
+      "vars": { "APP_ENV": "staging" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "huu-manh-erp-staging",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }]
+    }
+  }
+}
