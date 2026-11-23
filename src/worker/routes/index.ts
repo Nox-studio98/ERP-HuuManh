@@ -42,11 +42,12 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", b2bRoutes);
   v1.route("/", debtRoutes);
   v1.route("/", integrationRoutes);
-  v1.route("/", exportRoutes);
   v1.route("/", onlineOrderRoutes);
   v1.route("/", cmsRoutes);
   v1.route("/", hrRoutes);
   v1.route("/", payrollRoutes);
+  // exportRoutes sau payrollRoutes: /exports/:file bắt mọi tên, nên /exports/bang-luong.xlsx (payroll) phải đăng ký trước
+  v1.route("/", exportRoutes);
   v1.route("/", competitorRoutes);
   v1.route("/", purchasingRoutes);
   v1.route("/", promotionRoutes);
