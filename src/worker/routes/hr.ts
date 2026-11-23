@@ -627,7 +627,7 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
   } else {
     if (!settings.methods.includes("qr")) throw new AppError(422, "method_disabled", "Cửa hàng không bật chấm công bằng QR");
     const secret = c.env.ATTENDANCE_QR_SECRET;
-    if (!secret) throw new AppError(503 as never, "qr_not_configured", "Chưa cấu hình mã QR chấm công, hãy dùng GPS");
+    if (!secret) throw new AppError(503, "qr_not_configured", "Chưa cấu hình mã QR chấm công, hãy dùng GPS");
     if (!b.qrCode) throw new AppError(422, "invalid_qr", "Thiếu mã QR");
     const v = await verifyQrCode(secret, b.qrCode, me.store_id, now.getTime(), settings.qrWindowSeconds);
     if (!v.ok) throw new AppError(422, "invalid_qr", "Mã QR không hợp lệ hoặc đã hết hạn. Có thể gửi yêu cầu bổ sung công.");
@@ -655,7 +655,7 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
 
 hrRoutes.get("/attendance/qr", requirePerm("hr.schedule"), async (c) => {
   const secret = c.env.ATTENDANCE_QR_SECRET;
-  if (!secret) throw new AppError(503 as never, "qr_not_configured", "Chưa cấu hình ATTENDANCE_QR_SECRET");
+  if (!secret) throw new AppError(503, "qr_not_configured", "Chưa cấu hình ATTENDANCE_QR_SECRET");
   const user = c.get("user");
   const storeId = Number(c.req.query("storeId") ?? user.storeId ?? 0);
   if (!storeId || !(await storeOf(c.env.DB, storeId))) throw new AppError(422, "invalid_store", "Cửa hàng không tồn tại");

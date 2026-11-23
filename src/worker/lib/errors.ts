@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { ZodError } from "zod";
 
-type Status = 400 | 401 | 403 | 404 | 409 | 422 | 423 | 429 | 500 | 501;
+type Status = 400 | 401 | 403 | 404 | 409 | 422 | 423 | 429 | 500 | 501 | 503;
 
 export class AppError extends Error {
   constructor(public status: Status, public code: string, message?: string, public details?: unknown) {
