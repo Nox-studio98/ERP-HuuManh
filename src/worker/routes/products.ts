@@ -1,5 +1,352 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { AppBindings } from "../env";
+import { requirePerm, can } from "../lib/rbac";
+import { auditStmt } from "../lib/audit";
+import { AppError, conflict, notFound } from "../lib/errors";
+import { nextCode } from "../lib/codes";
+import { currentAvgCost, resolvePrice } from "../services/pricing";
+import { deviceIdOf, guarded, pageParams, parseBody } from "../services/http";
 
-// TODO: hiện thực theo docs/API.md
 export const productRoutes = new Hono<AppBindings>();
+
+const unitSchema = z.object({
+  unit: z.string().trim().min(1).max(20),
+  factorMilli: z.number().int().positive(),
+  barcode: z.string().trim().min(1).max(64).nullish(),
+});
+
+const productBody = z.object({
+  sku: z.string().trim().min(1).max(40),
+  name: z.string().trim().min(1).max(200),
+  groupId: z.number().int().positive().nullish(),
+  baseUnit: z.string().trim().min(1).max(20),
+  sellByWeight: z.boolean().default(false),
+  origin: z.string().trim().max(100).nullish(),
+  shelfLifeDays: z.number().int().positive().nullish(),
+  minStockMilli: z.number().int().min(0).default(0),
+  barcode: z.string().trim().min(1).max(64).nullish(),
+  active: z.boolean().optional(),
+  units: z.array(unitSchema).default([]),
+});
+
+function normalizeUnits(baseUnit: string, units: z.infer<typeof unitSchema>[]) {
+  const map = new Map<string, z.infer<typeof unitSchema>>();
+  for (const u of units) {
+    if (map.has(u.unit)) throw new AppError(422, "validation_error", `Đơn vị "${u.unit}" bị lặp`);
+    if (u.unit === baseUnit && u.factorMilli !== 1000) {
+      throw new AppError(422, "validation_error", "Đơn vị chính phải có hệ số quy đổi = 1000");
+    }
+    map.set(u.unit, u);
+  }
+  if (!map.has(baseUnit)) map.set(baseUnit, { unit: baseUnit, factorMilli: 1000, barcode: null });
+  return [...map.values()];
+}
+
+async function loadUnits(db: D1Database, ids: number[]) {
+  if (!ids.length) return new Map<number, any[]>();
+  const { results } = await db
+    .prepare(
+      `SELECT product_id, unit, factor_milli AS factorMilli, barcode FROM product_units
+        WHERE product_id IN (${ids.map(() => "?").join(",")}) ORDER BY factor_milli, unit`,
+    )
+    .bind(...ids)
+    .all<any>();
+  const m = new Map<number, any[]>();
+  for (const r of results) {
+    const { product_id, ...rest } = r;
+    (m.get(product_id) ?? m.set(product_id, []).get(product_id)!).push(rest);
+  }
+  return m;
+}
+
+function shape(p: any, units: any[]) {
+  return {
+    id: p.id,
+    sku: p.sku,
+    barcode: p.barcode,
+    name: p.name,
+    groupId: p.group_id,
+    baseUnit: p.base_unit,
+    sellByWeight: !!p.sell_by_weight,
+    origin: p.origin,
+    shelfLifeDays: p.shelf_life_days,
+    minStockMilli: p.min_stock_milli,
+    active: !!p.active,
+    version: p.version,
+    updatedAt: p.updated_at,
+    units,
+  };
+}
+
+productRoutes.get("/products", requirePerm("inventory.view"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  const { limit, cursor } = pageParams(c);
+  const q = c.req.query("q")?.trim();
+  const groupId = Number(c.req.query("groupId")) || null;
+  const active = c.req.query("active");
+  const where: string[] = ["p.merged_into IS NULL", "p.id > ?"];
+  const binds: unknown[] = [cursor];
+  if (q) {
+    where.push("(p.name LIKE ? OR p.sku LIKE ? OR p.barcode = ?)");
+    binds.push(`%${q}%`, `%${q}%`, q);
+  }
+  if (groupId) (where.push("p.group_id = ?"), binds.push(groupId));
+  if (active === "0" || active === "1") (where.push("p.active = ?"), binds.push(Number(active)));
+  const { results } = await db
+    .prepare(`SELECT p.* FROM products p WHERE ${where.join(" AND ")} ORDER BY p.id LIMIT ?`)
+    .bind(...binds, limit + 1)
+    .all<any>();
+  const rows = results.slice(0, limit);
+  const unitMap = await loadUnits(db, rows.map((r) => r.id));
+  const now = new Date().toISOString();
+  const seePrice = can(u.role, "prices.view_sell");
+  const seeCost = can(u.role, "prices.view_cost");
+  const items = await Promise.all(
+    rows.map(async (p) => {
+      const av = await db
+        .prepare(
+          `SELECT COALESCE(SUM(qty_on_hand_milli - qty_reserved_milli),0) q FROM lots
+            WHERE product_id = ? AND status = 'active' AND (expires_at IS NULL OR expires_at > ?)`,
+        )
+        .bind(p.id, now)
+        .first<{ q: number }>();
+      const item: any = { ...shape(p, unitMap.get(p.id) ?? []), availableMilli: av?.q ?? 0 };
+      if (seePrice) item.price = await resolvePrice(db, p.id, { channel: "pos" }).then((r) => r.unitPrice, () => null);
+      if (seeCost) item.avgCost = await currentAvgCost(db, p.id);
+      return item;
+    }),
+  );
+  return c.json({ items, nextCursor: results.length > limit ? rows[rows.length - 1].id : null });
+});
+
+/** Tra cứu theo mã quét. Luôn ghi scan_events (M2-16). Phải đăng ký trước /products/:id. */
+productRoutes.get("/products/lookup", requirePerm("inventory.view"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  const code = c.req.query("code")?.trim();
+  if (!code) throw new AppError(422, "validation_error", "Thiếu mã cần tra");
+  const context = c.req.query("context") ?? null;
+  const now = new Date().toISOString();
+
+  let productId: number | null = null;
+  let unit: any = null;
+  let lot: any = null;
+  const lotRow = await db.prepare(`SELECT * FROM lots WHERE lot_code = ?`).bind(code).first<any>();
+  if (lotRow) {
+    lot = lotRow;
+    productId = lotRow.product_id;
+  } else {
+    const pr = await db.prepare(`SELECT id FROM products WHERE barcode = ? OR sku = ?`).bind(code, code).first<{ id: number }>();
+    if (pr) productId = pr.id;
+    else {
+      const un = await db.prepare(`SELECT product_id, unit, factor_milli FROM product_units WHERE barcode = ?`).bind(code).first<any>();
+      if (un) {
+        productId = un.product_id;
+        unit = { unit: un.unit, factorMilli: un.factor_milli };
+      }
+    }
+  }
+  const log = (result: string, message: string | null) =>
+    db
+      .prepare(`INSERT INTO scan_events(user_id, device_id, code, context, result, message) VALUES (?,?,?,?,?,?)`)
+      .bind(u.id, deviceIdOf(c), code, context, result, message)
+      .run();
+
+  if (productId == null) {
+    await log("unknown", "Mã không tồn tại trong hệ thống");
+    throw new AppError(404, "unknown_code", "Mã không tồn tại trong hệ thống", { code });
+  }
+  const p = await db.prepare(`SELECT * FROM products WHERE id = ?`).bind(productId).first<any>();
+  const units = (await loadUnits(db, [productId])).get(productId) ?? [];
+  if (!unit) unit = units.find((x) => x.unit === p.base_unit) ?? { unit: p.base_unit, factorMilli: 1000 };
+  let expired = false;
+  if (lot) {
+    expired = lot.status === "expired" || (lot.expires_at != null && lot.expires_at <= now);
+    await log(expired ? "expired" : "ok", expired ? "Lô đã hết hạn" : null);
+  } else await log("ok", null);
+  const lotOut = lot
+    ? {
+        id: lot.id, lotCode: lot.lot_code, locationId: lot.location_id, expiresAt: lot.expires_at, status: lot.status,
+        qtyOnHandMilli: lot.qty_on_hand_milli, qtyReservedMilli: lot.qty_reserved_milli, expired,
+        ...(can(u.role, "prices.view_cost") ? { unitCost: lot.unit_cost } : {}),
+      }
+    : undefined;
+  return c.json({ product: shape(p, units), unit, lot: lotOut });
+});
+
+productRoutes.get("/products/:id", requirePerm("inventory.view"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  const id = Number(c.req.param("id"));
+  const p = await db.prepare(`SELECT * FROM products WHERE id = ?`).bind(id).first<any>();
+  if (!p) throw notFound();
+  const units = (await loadUnits(db, [id])).get(id) ?? [];
+  const { results: lots } = await db
+    .prepare(
+      `SELECT id, lot_code AS lotCode, location_id AS locationId, supplier_id AS supplierId, received_at AS receivedAt,
+              expires_at AS expiresAt, unit_cost AS unitCost, qty_in_milli AS qtyInMilli, qty_on_hand_milli AS qtyOnHandMilli,
+              qty_reserved_milli AS qtyReservedMilli, status
+         FROM lots WHERE product_id = ? AND qty_on_hand_milli > 0 ORDER BY (expires_at IS NULL), expires_at, id`,
+    )
+    .bind(id)
+    .all<any>();
+  const seeCost = can(u.role, "prices.view_cost");
+  const out: any = { ...shape(p, units), lots: seeCost ? lots : lots.map(({ unitCost, ...r }) => r) };
+  if (can(u.role, "prices.view_sell")) out.price = await resolvePrice(db, id, { channel: "pos" }).then((r) => r.unitPrice, () => null);
+  if (seeCost) out.avgCost = await currentAvgCost(db, id);
+  return c.json(out);
+});
+
+productRoutes.post("/products", requirePerm("products.write"), async (c) => {
+  const db = c.env.DB;
+  const b = await parseBody(c, productBody);
+  const units = normalizeUnits(b.baseUnit, b.units);
+  const stmts: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `INSERT INTO products(sku, barcode, name, group_id, base_unit, sell_by_weight, origin, shelf_life_days, min_stock_milli, active)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .bind(b.sku, b.barcode ?? null, b.name, b.groupId ?? null, b.baseUnit, b.sellByWeight ? 1 : 0, b.origin ?? null, b.shelfLifeDays ?? null, b.minStockMilli, b.active === false ? 0 : 1),
+    // M2-15: không có barcode → sinh mã nội bộ HMP + id (khớp internalBarcode('P', id))
+    db.prepare(`UPDATE products SET barcode = 'HMP' || substr('00000000' || id, -8) WHERE sku = ? AND barcode IS NULL`).bind(b.sku),
+    ...units.map((u) =>
+      db
+        .prepare(`INSERT INTO product_units(product_id, unit, factor_milli, barcode) SELECT id, ?, ?, ? FROM products WHERE sku = ?`)
+        .bind(u.unit, u.factorMilli, u.barcode ?? null, b.sku),
+    ),
+    auditStmt(c, { action: "product.create", entity: "product", entityId: b.sku, after: { ...b, units } }),
+  ];
+  await guarded(() => db.batch(stmts), "SKU hoặc mã vạch đã tồn tại");
+  const row = await db.prepare(`SELECT * FROM products WHERE sku = ?`).bind(b.sku).first<any>();
+  const us = (await loadUnits(db, [row.id])).get(row.id) ?? [];
+  return c.json(shape(row, us), 201);
+});
+
+productRoutes.put("/products/:id", requirePerm("products.write"), async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  const b = await parseBody(c, productBody.extend({ version: z.number().int().positive() }));
+  const cur = await db.prepare(`SELECT * FROM products WHERE id = ?`).bind(id).first<any>();
+  if (!cur) throw notFound();
+  if (cur.version !== b.version) throw conflict("version_conflict", "Mặt hàng đã được người khác sửa, hãy tải lại", { currentVersion: cur.version });
+  const units = normalizeUnits(b.baseUnit, b.units);
+  if (b.baseUnit !== cur.base_unit) {
+    const used = await db.prepare(`SELECT 1 FROM lots WHERE product_id = ? LIMIT 1`).bind(id).first();
+    if (used) throw conflict("base_unit_locked", "Không đổi đơn vị chính khi mặt hàng đã có lô tồn kho");
+  }
+  const newVer = b.version + 1;
+  const guard = `EXISTS (SELECT 1 FROM products WHERE id = ? AND version = ?)`;
+  const before = shape(cur, (await loadUnits(db, [id])).get(id) ?? []);
+  const stmts: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE products SET sku=?, barcode=COALESCE(?, barcode), name=?, group_id=?, base_unit=?, sell_by_weight=?, origin=?,
+                shelf_life_days=?, min_stock_milli=?, active=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id=? AND version=?`,
+      )
+      .bind(b.sku, b.barcode ?? null, b.name, b.groupId ?? null, b.baseUnit, b.sellByWeight ? 1 : 0, b.origin ?? null, b.shelfLifeDays ?? null, b.minStockMilli, b.active === false ? 0 : 1, id, b.version),
+    db
+      .prepare(`DELETE FROM product_units WHERE product_id = ? AND unit NOT IN (${units.map(() => "?").join(",")}) AND ${guard}`)
+      .bind(id, ...units.map((u) => u.unit), id, newVer),
+    ...units.map((u) =>
+      db
+        .prepare(
+          `INSERT INTO product_units(product_id, unit, factor_milli, barcode)
+           SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM products WHERE id = ?1 AND version = ?5)
+           ON CONFLICT(product_id, unit) DO UPDATE SET factor_milli = excluded.factor_milli, barcode = excluded.barcode`,
+        )
+        .bind(id, u.unit, u.factorMilli, u.barcode ?? null, newVer),
+    ),
+    auditStmt(c, { action: "product.update", entity: "product", entityId: id, before, after: { ...b, units, version: newVer } }),
+  ];
+  await guarded(() => db.batch(stmts), "SKU hoặc mã vạch đã tồn tại");
+  const row = await db.prepare(`SELECT * FROM products WHERE id = ?`).bind(id).first<any>();
+  if (row.version !== newVer) throw conflict("version_conflict", "Mặt hàng đã được người khác sửa, hãy tải lại");
+  return c.json(shape(row, (await loadUnits(db, [id])).get(id) ?? []));
+});
+
+// ---- Nhóm hàng ----
+productRoutes.get("/product-groups", requirePerm("inventory.view"), async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT id, name, target_margin_bp AS targetMarginBp FROM product_groups ORDER BY name`).all();
+  return c.json({ items: results, nextCursor: null });
+});
+productRoutes.post("/product-groups", requirePerm("products.write"), async (c) => {
+  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), targetMarginBp: z.number().int().min(0).max(100000).default(3000) }));
+  const db = c.env.DB;
+  await guarded(
+    () =>
+      db.batch([
+        db.prepare(`INSERT INTO product_groups(name, target_margin_bp) VALUES (?,?)`).bind(b.name, b.targetMarginBp),
+        auditStmt(c, { action: "product_group.create", entity: "product_group", entityId: b.name, after: b }),
+      ]),
+    "Tên nhóm hàng đã tồn tại",
+  );
+  const row = await db.prepare(`SELECT id, name, target_margin_bp AS targetMarginBp FROM product_groups WHERE name = ?`).bind(b.name).first();
+  return c.json(row, 201);
+});
+
+// ---- Nhà cung cấp ----
+const supplierBody = z.object({
+  code: z.string().trim().min(1).max(30).optional(),
+  name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(30).nullish(),
+  address: z.string().trim().max(300).nullish(),
+  taxCode: z.string().trim().max(30).nullish(),
+  paymentTermsDays: z.number().int().min(0).default(0),
+  active: z.boolean().default(true),
+});
+const supplierSel = `SELECT id, code, name, phone, address, tax_code AS taxCode, payment_terms_days AS paymentTermsDays, active FROM suppliers`;
+
+productRoutes.get("/suppliers", requirePerm("inventory.view"), async (c) => {
+  const q = c.req.query("q")?.trim();
+  const { limit, cursor } = pageParams(c);
+  const binds: unknown[] = [cursor];
+  if (q) binds.push(`%${q}%`, `%${q}%`);
+  const { results } = await c.env.DB
+    .prepare(`${supplierSel} WHERE id > ? ${q ? "AND (name LIKE ? OR code LIKE ?)" : ""} ORDER BY id LIMIT ?`)
+    .bind(...binds, limit + 1)
+    .all<any>();
+  return c.json({ items: results.slice(0, limit).map((r) => ({ ...r, active: !!r.active })), nextCursor: results.length > limit ? results[limit - 1].id : null });
+});
+productRoutes.post("/suppliers", requirePerm("inventory.write"), async (c) => {
+  const db = c.env.DB;
+  const b = await parseBody(c, supplierBody);
+  const code = b.code ?? (await nextCode(db, "NCC"));
+  await guarded(
+    () =>
+      db.batch([
+        db
+          .prepare(`INSERT INTO suppliers(code, name, phone, address, tax_code, payment_terms_days, active) VALUES (?,?,?,?,?,?,?)`)
+          .bind(code, b.name, b.phone ?? null, b.address ?? null, b.taxCode ?? null, b.paymentTermsDays, b.active ? 1 : 0),
+        auditStmt(c, { action: "supplier.create", entity: "supplier", entityId: code, after: { ...b, code } }),
+      ]),
+    "Mã nhà cung cấp đã tồn tại",
+  );
+  const row = await db.prepare(`${supplierSel} WHERE code = ?`).bind(code).first<any>();
+  return c.json({ ...row, active: !!row.active }, 201);
+});
+productRoutes.put("/suppliers/:id", requirePerm("inventory.write"), async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  const b = await parseBody(c, supplierBody.omit({ code: true }));
+  const cur = await db.prepare(`${supplierSel} WHERE id = ?`).bind(id).first<any>();
+  if (!cur) throw notFound();
+  await db.batch([
+    db
+      .prepare(`UPDATE suppliers SET name=?, phone=?, address=?, tax_code=?, payment_terms_days=?, active=? WHERE id=?`)
+      .bind(b.name, b.phone ?? null, b.address ?? null, b.taxCode ?? null, b.paymentTermsDays, b.active ? 1 : 0, id),
+    auditStmt(c, { action: "supplier.update", entity: "supplier", entityId: id, before: cur, after: b }),
+  ]);
+  const row = await db.prepare(`${supplierSel} WHERE id = ?`).bind(id).first<any>();
+  return c.json({ ...row, active: !!row.active });
+});
+
+productRoutes.get("/locations", requirePerm("inventory.view"), async (c) => {
+  const { results } = await c.env.DB
+    .prepare(`SELECT id, store_id AS storeId, code, name, sellable FROM locations ORDER BY id`)
+    .all<any>();
+  return c.json({ items: results.map((r) => ({ ...r, sellable: !!r.sellable })), nextCursor: null });
+});
