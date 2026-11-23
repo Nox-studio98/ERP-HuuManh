@@ -462,10 +462,52 @@ hrRoutes.post("/schedule/swaps/:id/accept", requirePerm("hr.self"), async (c) =>
   return c.json({ id, status: "accepted" });
 });
 
+// Danh sách đổi ca kèm tên & ngày ca (dùng cho quản lý và cho NV xem yêu cầu liên quan đến mình)
+const SWAP_SELECT = `SELECT s.*, fa.employee_id AS from_employee_id, fe.full_name AS from_employee_name, fa.work_date AS from_work_date, ft.name AS from_shift_name,
+         te.full_name AS to_employee_name, ta.work_date AS to_work_date, tt.name AS to_shift_name
+    FROM shift_swap_requests s
+    JOIN shift_assignments fa ON fa.id = s.from_assignment_id JOIN employees fe ON fe.id = fa.employee_id JOIN shift_templates ft ON ft.id = fa.shift_template_id
+    JOIN employees te ON te.id = s.to_employee_id
+    LEFT JOIN shift_assignments ta ON ta.id = s.to_assignment_id LEFT JOIN shift_templates tt ON tt.id = ta.shift_template_id`;
+const mapSwap = (s: any) => ({
+  id: s.id, status: s.status, reason: s.reason, createdAt: s.created_at,
+  fromAssignmentId: s.from_assignment_id, fromEmployeeId: s.from_employee_id, fromEmployeeName: s.from_employee_name, fromWorkDate: s.from_work_date, fromShiftName: s.from_shift_name,
+  toEmployeeId: s.to_employee_id, toEmployeeName: s.to_employee_name, toAssignmentId: s.to_assignment_id, toWorkDate: s.to_work_date, toShiftName: s.to_shift_name,
+});
+
 hrRoutes.get("/schedule/swaps", requirePerm("hr.schedule"), async (c) => {
   const st = c.req.query("status");
-  const { results } = await c.env.DB.prepare(`SELECT * FROM shift_swap_requests ${st ? "WHERE status=?" : ""} ORDER BY id DESC LIMIT 200`).bind(...(st ? [st] : [])).all<any>();
-  return c.json({ items: results.map((s) => ({ id: s.id, fromAssignmentId: s.from_assignment_id, toEmployeeId: s.to_employee_id, toAssignmentId: s.to_assignment_id, reason: s.reason, status: s.status, createdAt: s.created_at })) });
+  const { results } = await c.env.DB.prepare(`${SWAP_SELECT} ${st ? "WHERE s.status=?" : ""} ORDER BY s.id DESC LIMIT 200`).bind(...(st ? [st] : [])).all<any>();
+  return c.json({ items: results.map(mapSwap) });
+});
+
+/** NV: yêu cầu đổi ca mình gửi hoặc được nhờ nhận. */
+hrRoutes.get("/me/schedule/swaps", requirePerm("hr.self"), async (c) => {
+  const me = await employeeOfUser(c.env.DB, c.get("user").id);
+  const { results } = await c.env.DB.prepare(`${SWAP_SELECT} WHERE fa.employee_id = ?1 OR s.to_employee_id = ?1 ORDER BY s.id DESC LIMIT 100`).bind(me.id).all<any>();
+  return c.json({ items: results.map(mapSwap) });
+});
+
+/** NV: đồng nghiệp đang làm cùng cửa hàng (chỉ tên & vị trí — không có dữ liệu nhạy cảm) để chọn người đổi ca. */
+hrRoutes.get("/me/colleagues", requirePerm("hr.self"), async (c) => {
+  const me = await employeeOfUser(c.env.DB, c.get("user").id);
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, full_name, position FROM employees WHERE store_id = (SELECT store_id FROM employees WHERE id = ?1) AND status = 'active' AND id <> ?1 ORDER BY full_name`,
+  ).bind(me.id).all<any>();
+  return c.json({ items: results.map((e) => ({ id: e.id, fullName: e.full_name, position: e.position })) });
+});
+
+/** NV: đơn tăng ca và yêu cầu bổ sung công của chính mình. */
+hrRoutes.get("/me/overtime-requests", requirePerm("hr.self"), async (c) => {
+  const me = await employeeOfUser(c.env.DB, c.get("user").id);
+  const { results } = await c.env.DB.prepare(`SELECT * FROM overtime_requests WHERE employee_id = ? ORDER BY id DESC LIMIT 100`).bind(me.id).all<any>();
+  return c.json({ items: results.map((o) => ({ id: o.id, workDate: o.work_date, minutes: o.minutes, reason: o.reason, status: o.status, createdAt: o.created_at, decidedAt: o.decided_at })) });
+});
+
+hrRoutes.get("/me/attendance/corrections", requirePerm("hr.self"), async (c) => {
+  const me = await employeeOfUser(c.env.DB, c.get("user").id);
+  const { results } = await c.env.DB.prepare(`SELECT * FROM attendance_corrections WHERE employee_id = ? ORDER BY id DESC LIMIT 100`).bind(me.id).all<any>();
+  return c.json({ items: results.map((r) => ({ id: r.id, workDate: r.work_date, type: r.type, kind: r.kind, requestedAt: r.requested_at, reason: r.reason, status: r.status, decisionNote: r.decision_note, createdAt: r.created_at })) });
 });
 
 hrRoutes.post("/schedule/swaps/:id/decide", requirePerm("hr.schedule"), async (c) => {
