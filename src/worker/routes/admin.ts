@@ -1,3 +1,4 @@
+import { getApprovalHandler } from "../services/approval-registry";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
@@ -59,7 +60,8 @@ adminRoutes.post("/approvals/:id/decide", requirePerm("approvals.decide"), async
   const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(id).first<any>();
   if (!a) throw notFound("approval_not_found", "Không tìm thấy yêu cầu duyệt");
   if (a.status !== "pending") throw conflict("already_decided", "Yêu cầu đã được xử lý");
-  const need = NEEDS[a.type as string];
+  const handler = getApprovalHandler(a.type as string);
+  const need = handler?.perm ?? NEEDS[a.type as string];
   if (need && !can(user.role, need)) throw new AppError(403, "forbidden", "Bạn không có quyền duyệt loại yêu cầu này");
   const refId = Number(a.ref_id);
   const finish = [
@@ -69,7 +71,12 @@ adminRoutes.post("/approvals/:id/decide", requirePerm("approvals.decide"), async
     auditStmt(c, { action: `approval.${body.decision}`, entity: "approval", entityId: id, before: { status: "pending", type: a.type }, after: { status: body.decision }, reason: body.note }),
   ];
 
-  if (body.decision === "rejected") {
+  if (handler) {
+    // Loại duyệt do module Đợt 2+ đăng ký (services/approval-registry.ts)
+    const fn = body.decision === "approved" ? handler.onApprove : handler.onReject;
+    const extra = (await fn?.(c, a, body.note)) ?? [];
+    await db.batch([...extra, ...finish]);
+  } else if (body.decision === "rejected") {
     const extra: D1PreparedStatement[] = [];
     if (a.type === "cash_voucher.post") extra.push(db.prepare(`UPDATE cash_vouchers SET status='cancelled' WHERE id=? AND status='pending_approval'`).bind(refId));
     if (a.type === "stock_doc.post") extra.push(db.prepare(`UPDATE stock_docs SET status='cancelled' WHERE id=? AND status='pending_approval'`).bind(refId));
