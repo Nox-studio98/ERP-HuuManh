@@ -14,6 +14,9 @@ import { b2bRoutes } from "./b2b";
 import { debtRoutes } from "./debts";
 import { integrationRoutes } from "./integrations";
 import { exportRoutes } from "./exports";
+// Đợt 3
+import { onlineOrderRoutes } from "./online-orders";
+import { cmsRoutes } from "./cms";
 
 /**
  * Đăng ký route các module. Mỗi file export một Hono<AppBindings> mount tại gốc /api/v1
@@ -33,4 +36,6 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", debtRoutes);
   v1.route("/", integrationRoutes);
   v1.route("/", exportRoutes);
+  v1.route("/", onlineOrderRoutes);
+  v1.route("/", cmsRoutes);
 }
