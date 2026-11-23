@@ -33,10 +33,23 @@ const OnlineOrders = lazy(() => import("./screens/online/OnlineOrders"));
 const Website = lazy(() => import("./screens/online/Website"));
 const Zones = lazy(() => import("./screens/online/Zones"));
 const ShopAccounts = lazy(() => import("./screens/online/ShopAccounts"));
+// Đợt 4 — nhân sự (agent HR), giá đối thủ / đặt hàng / khuyến mãi / giỏ quà / báo cáo tài chính (agent D4)
+const HrMe = lazy(() => import("./screens/hr/Me"));
+const HrEmployees = lazy(() => import("./screens/hr/Employees"));
+const HrSchedule = lazy(() => import("./screens/hr/Schedule"));
+const HrAttendance = lazy(() => import("./screens/hr/Attendance"));
+const HrTimesheets = lazy(() => import("./screens/hr/Timesheets"));
+const HrPayroll = lazy(() => import("./screens/hr/Payroll"));
+const HrQrDisplay = lazy(() => import("./screens/hr/QrDisplay"));
+const Competitors = lazy(() => import("./screens/d4/Competitors"));
+const Purchasing = lazy(() => import("./screens/d4/Purchasing"));
+const Promotions = lazy(() => import("./screens/d4/Promotions"));
+const Bundles = lazy(() => import("./screens/d4/Bundles"));
+const FinReports = lazy(() => import("./screens/d4/FinReports"));
 
 const I = (d: string) => <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 type Nav = { path: string; label: string; icon: ReactNode; perms: string[]; el: ReactNode; hidden?: boolean; group?: string; pri?: number };
-const G = { retail: "Bán lẻ", stock: "Kho & hàng", b2b: "Bán sỉ", fin: "Tài chính", admin: "Quản trị", online: "Bán online" };
+const G = { retail: "Bán lẻ", stock: "Kho & hàng", b2b: "Bán sỉ", fin: "Tài chính", admin: "Quản trị", online: "Bán online", hr: "Nhân sự" };
 const NAV: Nav[] = [
   { path: "/pos", label: "Bán hàng", group: G.retail, pri: 1, perms: ["pos.sell"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z"), el: <Pos /> },
   { path: "/orders", label: "Đơn hàng", group: G.retail, pri: 3, perms: ["orders.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"), el: <Orders /> },
@@ -61,6 +74,19 @@ const NAV: Nav[] = [
   { path: "/approvals", label: "Duyệt", group: G.admin, perms: ["approvals.decide"], icon: I("M5 12l4 4 10-10"), el: <Approvals /> },
   { path: "/integrations", label: "Tích hợp", group: G.admin, perms: ["integrations.manage"], icon: I("M9 7V3M15 7V3M7 7h10v5a5 5 0 01-10 0zM12 17v4"), el: <Integrations /> },
   { path: "/users", label: "Người dùng", group: G.admin, perms: ["users.manage"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM20 20v-1a3 3 0 00-2-2.8"), el: <Users /> },
+  // ===== Đợt 4 =====
+  { path: "/promotions", label: "Khuyến mãi", group: G.retail, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM8 8h.01M15 9l-6 6"), el: <Promotions /> },
+  { path: "/bundles", label: "Giỏ quà & đặt trước", group: G.retail, perms: ["pos.sell"], icon: I("M4 10h16v10H4zM2 7h20v3H2zM12 7v13M12 7c-2-4-6-3-6-1s3 1 6 1c3 0 6 1 6-1s-4-3-6 1"), el: <Bundles /> },
+  { path: "/purchasing", label: "Gợi ý đặt hàng", group: G.stock, perms: ["purchasing.view"], icon: I("M3 5h18M6 5v14h12V5M9 9h6M9 13h6"), el: <Purchasing /> },
+  { path: "/competitors", label: "Giá đối thủ", group: G.stock, perms: ["competitors.view"], icon: I("M4 19h16M7 16V9M12 16V5M17 16v-4"), el: <Competitors /> },
+  { path: "/fin-reports", label: "Báo cáo tài chính", group: G.fin, perms: ["reports.view"], icon: I("M4 4h16v16H4zM8 15v-3M12 15V9M16 15v-5"), el: <FinReports /> },
+  { path: "/me", label: "Chấm công", group: G.hr, pri: 2, perms: ["hr.self"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrMe /> },
+  { path: "/hr/employees", label: "Nhân viên", group: G.hr, perms: ["hr.view"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7z"), el: <HrEmployees /> },
+  { path: "/hr/schedule", label: "Lịch ca", group: G.hr, perms: ["hr.view"], icon: I("M4 5h16v15H4zM4 9h16M8 3v4M16 3v4"), el: <HrSchedule /> },
+  { path: "/hr/attendance", label: "Duyệt chấm công", group: G.hr, perms: ["hr.schedule"], icon: I("M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrAttendance /> },
+  { path: "/hr/timesheets", label: "Bảng công", group: G.hr, perms: ["hr.view"], icon: I("M4 4h16v16H4zM4 10h16M10 4v16"), el: <HrTimesheets /> },
+  { path: "/payroll", label: "Bảng lương", group: G.hr, perms: ["hr.sensitive"], icon: I("M3 7h18v10H3zM12 12a2 2 0 100-4 2 2 0 000 4zM6 12h.01M18 12h.01"), el: <HrPayroll /> },
+  { path: "/hr/qr", label: "Mã QR chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2z"), el: <HrQrDisplay /> },
   { path: "/shift-close", label: "Chốt ca", perms: ["pos.shift"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <ShiftClose />, hidden: true },
 ];
 
