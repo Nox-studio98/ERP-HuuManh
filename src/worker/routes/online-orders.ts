@@ -170,6 +170,7 @@ async function orderDetail(c: Ctx, oid: number) {
     shippingFeePolicy: o.shipping_fee_policy,
     note: o.note,
     trackingToken: o.tracking_token,
+    weightToleranceBp: Number((await db.prepare(`SELECT value FROM settings WHERE key = 'online.weight_tolerance_bp'`).first<{ value: string }>())?.value ?? 1000),
     createdAt: o.created_at,
     completedAt: o.completed_at,
     ...(costVisible ? { costTotal: o.cost_total } : {}),
