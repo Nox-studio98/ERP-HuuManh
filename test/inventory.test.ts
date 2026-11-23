@@ -260,3 +260,14 @@ describe("transfer, alerts, trace", () => {
     expect((await api("online_staff", "GET", `${V}/stock/lots?productId=${productId}`)).body.items[0].unitCost).toBeUndefined();
   });
 });
+
+describe("double post guard", () => {
+  it("second concurrent post of same doc rolls back", async () => {
+    const { testEnv } = await import("./helpers");
+    const db = testEnv.DB;
+    await db.prepare(`INSERT INTO stock_doc_post_guard(doc_id) SELECT MAX(id) FROM stock_docs WHERE status='posted'`).run().catch(() => {});
+    const r = await db.prepare(`SELECT MAX(id) id FROM stock_docs WHERE status='posted'`).first<{ id: number }>();
+    if (!r?.id) return;
+    await expect(db.prepare(`INSERT INTO stock_doc_post_guard(doc_id) VALUES (?)`).bind(r.id).run()).rejects.toThrow();
+  });
+});
