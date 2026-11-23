@@ -181,3 +181,19 @@ tr.bad td { background: var(--warn-soft); }
 .sidebar .dot { position: static; margin-left: auto; }
 .chart { max-height: 300px; }
 .cartline .input[placeholder^="Giảm"] { padding: 0 8px; }
+
+/* ===== Đợt 2: nhóm điều hướng, sao kê ===== */
+.navgroup-h { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: var(--s-3) var(--s-3) 2px; }
+.navgroup { display: flex; flex-direction: column; gap: 2px; }
+.sheet .navgroup-h { padding: var(--s-2) 2px 0; }
+.stmt { width: 100%; border-collapse: collapse; font-size: .85rem; min-width: 330px; }
+.stmt th { text-align: left; font-size: .75rem; color: var(--muted); font-weight: 600; padding: 6px 6px; border-bottom: 1px solid var(--border); }
+.stmt td { padding: 7px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.stmt th.right, .stmt td.right { text-align: right; }
+.stmt tr.open td { background: var(--surface-2); font-weight: 600; }
+.dt-card:disabled { opacity: .6; }
+.seg.wrap { flex-wrap: wrap; }
+.seg.wrap button { flex: 1 0 auto; }
+.stmt { min-width: 0; table-layout: auto; }
+.stmt td.nw { white-space: nowrap; }
+.stmt td.code { word-break: break-all; font-size: .8rem; }
