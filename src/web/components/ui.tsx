@@ -121,27 +121,27 @@ export const EmptyState = ({ title, hint, action }: { title: string; hint?: stri
 export const Spinner = () => <div className="spinner" role="status" aria-label="Đang tải" />;
 export const Banner = ({ tone, children }: { tone?: "danger" | "info"; children: ReactNode }) => <div className={"banner " + (tone ?? "")} role="alert">{children}</div>;
 
-export function Segmented<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[] }) {
+export function Segmented<T extends string>({ value, onChange, options, wrap }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[]; wrap?: boolean }) {
   return (
-    <div className="seg" role="tablist">
+    <div className={"seg" + (wrap ? " wrap" : "")} role="tablist">
       {options.map((o) => <button key={o.v} role="tab" aria-selected={value === o.v} onClick={() => onChange(o.v)}>{o.label}</button>)}
     </div>
   );
 }
 
-export type Col<T> = { key: string; label: string; render: (r: T) => ReactNode; right?: boolean; hideMobile?: boolean; title?: boolean };
+export type Col<T> = { key: string; label: string; render: (r: T) => ReactNode; right?: boolean; hideMobile?: boolean; hideDesktop?: boolean; title?: boolean };
 export function DataTable<T>({ cols, rows, rowKey, onRowClick, empty, rowClass }: { cols: Col<T>[]; rows: T[]; rowKey: (r: T) => string | number; onRowClick?: (r: T) => void; empty?: string; rowClass?: (r: T) => string }) {
   if (!rows.length) return <EmptyState title={empty ?? "Chưa có dữ liệu"} />;
   const title = cols.find((c) => c.title) ?? cols[0];
   return (
     <>
       <table className="dt-table">
-        <thead><tr>{cols.map((c) => <th key={c.key} className={c.right ? "right" : ""}>{c.label}</th>)}</tr></thead>
+        <thead><tr>{cols.filter((c) => !c.hideDesktop).map((c) => <th key={c.key} className={c.right ? "right" : ""}>{c.label}</th>)}</tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr key={rowKey(r)} className={(onRowClick ? "click " : "") + (rowClass?.(r) ?? "")} onClick={() => onRowClick?.(r)} tabIndex={onRowClick ? 0 : undefined}
               onKeyDown={(e) => { if (onRowClick && e.key === "Enter") onRowClick(r); }}>
-              {cols.map((c) => <td key={c.key} className={c.right ? "right" : ""}>{c.render(r)}</td>)}
+              {cols.filter((c) => !c.hideDesktop).map((c) => <td key={c.key} className={c.right ? "right" : ""}>{c.render(r)}</td>)}
             </tr>
           ))}
         </tbody>
