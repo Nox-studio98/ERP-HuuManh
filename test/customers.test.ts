@@ -127,3 +127,23 @@ describe("customers", () => {
     expect(h.body.debt.outstanding).toBe(1500000);
   });
 });
+
+describe("customer groups + customer price quote", () => {
+  it("lists customer groups and quotes the customer-specific price", async () => {
+    const { api, testEnv } = await import("./helpers");
+    const g = await api("manager", "GET", "/api/v1/customer-groups");
+    expect(g.status).toBe(200);
+    expect(g.body.items.length).toBeGreaterThan(0);
+    const db = testEnv.DB;
+    await db.batch([
+      db.prepare(`INSERT OR IGNORE INTO products(id, sku, name, base_unit) VALUES (9100,'QT-1','Quote test','kg')`),
+      db.prepare(`INSERT OR IGNORE INTO customers(id, code, type, name) VALUES (9100,'KH-Q','b2b','Quote KH')`),
+      db.prepare(`INSERT INTO price_lists(id, name, channel, kind, priority, customer_id) VALUES (9100,'Riêng KH-Q','b2b','customer',100,9100)`),
+      db.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, created_by) VALUES (1,9100,50000,'2020-01-01T00:00:00Z',1),(9100,9100,42000,'2020-01-01T00:00:00Z',1)`),
+    ]);
+    const a = await api("manager", "GET", "/api/v1/prices/quote?productId=9100&channel=b2b");
+    const b = await api("manager", "GET", "/api/v1/prices/quote?productId=9100&channel=b2b&customerId=9100");
+    expect(a.body.unitPrice).toBe(50000);
+    expect(b.body.unitPrice).toBe(42000);
+  });
+});

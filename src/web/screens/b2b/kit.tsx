@@ -132,11 +132,11 @@ export const factorOf = (l: EditLine) => (l.unit === l.product.baseUnit ? 1000 :
 export const effPrice = (l: EditLine) => (l.unitPrice > 0 ? l.unitPrice : l.listPrice ?? 0);
 export const lineAmt = (l: EditLine) => Math.round((effPrice(l) * Math.round(l.qty * factorOf(l))) / 1000);
 
-export function LinesEditor({ lines, setLines, groupId, allowPrice, showCost }: { lines: EditLine[]; setLines: (l: EditLine[]) => void; groupId?: number | null; allowPrice: boolean; showCost: boolean }) {
+export function LinesEditor({ lines, setLines, groupId, customerId, allowPrice, showCost }: { lines: EditLine[]; setLines: (l: EditLine[]) => void; groupId?: number | null; customerId?: number | null; allowPrice: boolean; showCost: boolean }) {
   const [pick, setPick] = useState(false);
   const add = async (p: ProductLite) => {
     let listPrice: number | null = null;
-    try { const r = await get("/prices/quote", { productId: p.id, channel: "b2b", customerGroupId: groupId ?? undefined }, { silent: true }); listPrice = r?.unitPrice ?? null; } catch { /* không có quyền xem giá */ }
+    try { const r = await get("/prices/quote", { productId: p.id, channel: "b2b", customerGroupId: groupId ?? undefined, customerId: customerId ?? undefined }, { silent: true }); listPrice = r?.unitPrice ?? null; } catch { /* không có quyền xem giá */ }
     setLines([...lines, { key: `${p.id}-${Date.now()}`, product: p, unit: p.baseUnit, qty: 1, unitPrice: 0, listPrice }]);
   };
   const upd = (k: string, patch: Partial<EditLine>) => setLines(lines.map((l) => (l.key === k ? { ...l, ...patch } : l)));
@@ -191,6 +191,7 @@ export function CreditBlocked({ details, orderLink }: { details: any; orderLink?
         <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>{(details?.reasons ?? []).map((r: string) => <li key={r}>{CREDIT_REASON[r] ?? r}</li>)}</ul>
       </div>
       <div className="kpis">
+        {details?.orderAmount != null && <div className="kpi"><div className="l">Giá trị đơn này</div><div className="v">{money(details.orderAmount)}</div></div>}
         <div className="kpi"><div className="l">Công nợ hiện tại</div><div className="v">{money(st.balance)}</div></div>
         <div className="kpi"><div className="l">Quá hạn</div><div className="v" style={{ color: st.overdueAmount ? "var(--warn)" : undefined }}>{money(st.overdueAmount)}</div></div>
         <div className="kpi"><div className="l">Hạn mức</div><div className="v">{money(st.creditLimit)}</div></div>

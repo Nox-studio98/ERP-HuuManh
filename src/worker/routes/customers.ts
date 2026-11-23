@@ -97,6 +97,11 @@ async function customerDetail(c: Ctx, id: number) {
 }
 
 // ---------------------------------------------------------------- danh sách / chi tiết
+customerRoutes.get("/customer-groups", requirePerm("b2b.view"), async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT id, code, name FROM customer_groups ORDER BY id`).all();
+  return c.json({ items: results });
+});
+
 customerRoutes.get("/customers", requirePerm("b2b.view"), async (c) => {
   const db = c.env.DB;
   const role = c.get("user").role;

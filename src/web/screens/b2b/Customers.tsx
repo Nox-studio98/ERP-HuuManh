@@ -14,10 +14,10 @@ const FALLBACK_GROUPS = [{ id: 3, name: "Sỉ cấp 1" }, { id: 4, name: "Sỉ c
 function useGroups() {
   return useAsync(async () => {
     try {
-      const r = await get("/price-lists", undefined, { silent: true });
-      const m = new Map<number, string>();
-      for (const p of items<any>(r)) if (p.customerGroupId && (p.channel === "b2b" || p.channel === "all")) m.set(p.customerGroupId, String(p.name).replace(/^Giá\s*/i, ""));
-      const g = [...m].map(([id, name]) => ({ id, name }));
+      // Khách sỉ: đưa nhóm sỉ (si_*) lên đầu để làm mặc định
+      const all = items<any>(await get("/customer-groups", undefined, { silent: true }));
+      const g = [...all.filter((x) => String(x.code).startsWith("si")), ...all.filter((x) => !String(x.code).startsWith("si"))]
+        .map((x) => ({ id: x.id as number, name: String(x.name) }));
       return g.length ? g : FALLBACK_GROUPS;
     } catch { return FALLBACK_GROUPS; }
   }, []).data ?? FALLBACK_GROUPS;
