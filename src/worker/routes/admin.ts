@@ -100,7 +100,7 @@ adminRoutes.post("/approvals/:id/decide", requirePerm("approvals.decide"), async
 // ===================== Người dùng =====================
 
 const USER_COLS = `id, username, full_name, role, store_id, active, must_change_password, created_at`;
-const ROLES = ["owner", "manager", "cashier", "warehouse", "accountant", "online_staff"] as const;
+const ROLES = ["owner", "manager", "cashier", "warehouse", "accountant", "online_staff", "staff"] as const;
 const tempPassword = () => randomToken(9);
 
 adminRoutes.get("/users", requirePerm("users.manage"), async (c) => {
