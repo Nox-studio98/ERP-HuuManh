@@ -6,7 +6,8 @@ import { auditStmt } from "../lib/audit";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { nextCode, PREFIX } from "../lib/codes";
 import { toMilli } from "../lib/money";
-import { vnDayRangeUtc } from "../lib/time";
+import { addDays } from "../services/debt";
+import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { moveStatements } from "../services/stock";
 import { deviceIdOf, getSetting, guarded, isExpired, pageParams, parseBody, unitFactor } from "../services/http";
 
@@ -347,6 +348,20 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
           .bind(doc.id, doc.created_by, tmp),
         db.prepare(`UPDATE stock_doc_lines SET lot_id = (SELECT id FROM lots WHERE lot_code = ?), expires_at = ? WHERE id = ?`).bind(tmp, expires, l.id),
         db.prepare(`UPDATE lots SET lot_code = 'HML' || substr('00000000' || id, -8) WHERE lot_code = ?`).bind(tmp),
+      );
+    }
+    // M5: phiếu nhập có NCC → sinh hoá đơn mua (phải trả) trong cùng batch; không có supplier_ref → tạm tính (EC-30)
+    if (doc.supplier_id && total > 0) {
+      const sup = await db.prepare(`SELECT payment_terms_days d FROM suppliers WHERE id = ?`).bind(doc.supplier_id).first<{ d: number | null }>();
+      const issue = vnDate();
+      const ref = typeof doc.supplier_ref === "string" ? doc.supplier_ref.trim() : "";
+      stmts.push(
+        db
+          .prepare(
+            `INSERT INTO supplier_bills(code, supplier_id, stock_doc_id, supplier_ref, is_provisional, issue_date, due_date, total, created_by)
+             VALUES (?,?,?,?,?,?,?,?,?)`,
+          )
+          .bind(await nextCode(db, "CNP"), doc.supplier_id, doc.id, ref || null, ref ? 0 : 1, issue, addDays(issue, sup?.d ?? 0), total, doc.created_by),
       );
     }
   } else if (type === "count") {
