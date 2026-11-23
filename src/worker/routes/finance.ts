@@ -71,6 +71,7 @@ const voucherSchema = z.object({
   note: z.string().max(500).optional(),
   refType: z.string().max(50).optional(),
   refId: z.number().int().optional(),
+  channel: z.enum(["pos", "online", "b2b"]).optional(), // chi phí trực tiếp theo kênh (M6-06)
 });
 
 financeRoutes.post("/vouchers", requirePerm("finance.write"), async (c) => {
@@ -87,11 +88,11 @@ financeRoutes.post("/vouchers", requirePerm("finance.write"), async (c) => {
   const code = await nextCode(db, body.direction === "in" ? PREFIX.cashIn : PREFIX.cashOut);
   const r = await db
     .prepare(
-      `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, channel)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(code, body.direction, body.fundId, body.categoryId, body.amount, body.counterparty ?? null, body.refType ?? null, body.refId ?? null,
-      needApproval ? "pending_approval" : "posted", vnPeriod(), body.note ?? null, user.id, needApproval ? null : (can(user.role, "finance.approve") ? user.id : null))
+      needApproval ? "pending_approval" : "posted", vnPeriod(), body.note ?? null, user.id, needApproval ? null : (can(user.role, "finance.approve") ? user.id : null), body.channel ?? null)
     .run();
   const id = r.meta.last_row_id as number;
   const stmts = [

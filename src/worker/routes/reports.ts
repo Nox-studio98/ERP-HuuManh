@@ -12,7 +12,10 @@ type Ctx = Context<AppBindings>;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 function dayParam(v: string | undefined, def: string, name: string) {
   const d = v ?? def;
-  if (!DAY_RE.test(d)) throw new AppError(422, "validation_error", `${name} phải có dạng YYYY-MM-DD`);
+  const t = Date.parse(`${d}T00:00:00Z`);
+  if (!DAY_RE.test(d) || Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== d) {
+    throw new AppError(422, "validation_error", `${name} phải là ngày hợp lệ dạng YYYY-MM-DD`);
+  }
   return d;
 }
 function range(c: Ctx) {
