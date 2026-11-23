@@ -1,0 +1,15 @@
+{
+  "name": "Hữu Mạnh ERP",
+  "short_name": "Hữu Mạnh",
+  "description": "Quản lý cửa hàng trái cây Hữu Mạnh",
+  "lang": "vi",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f4",
+  "theme_color": "#1f8a4c",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
