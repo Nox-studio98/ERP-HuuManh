@@ -1,5 +1,665 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
+import { z } from "zod";
 import type { AppBindings } from "../env";
+import { requirePerm, can, maskPhone } from "../lib/rbac";
+import { AppError, conflict, forbidden, notFound } from "../lib/errors";
+import { auditStmt } from "../lib/audit";
+import { nextCode, PREFIX } from "../lib/codes";
+import { lineAmount } from "../lib/money";
+import { vnDayRangeUtc } from "../lib/time";
+import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
+import { resolvePrice } from "../services/pricing";
+import { getSettingInt } from "../services/settings";
+import { salesSummary } from "../services/salesreport";
 
-// TODO: hiện thực theo docs/API.md
 export const posRoutes = new Hono<AppBindings>();
+
+type Ctx = Context<AppBindings>;
+
+async function parseBody<T extends z.ZodTypeAny>(c: Ctx, schema: T): Promise<z.infer<T>> {
+  const raw = await c.req.json().catch(() => ({}));
+  return schema.parse(raw);
+}
+
+const METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
+const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
+
+async function storeIdOf(c: Ctx) {
+  const u = c.get("user");
+  if (u.storeId) return u.storeId;
+  const s = await c.env.DB.prepare(`SELECT id FROM stores WHERE active=1 ORDER BY id LIMIT 1`).first<{ id: number }>();
+  return s?.id ?? 1;
+}
+
+async function openShiftOf(db: D1Database, userId: number) {
+  return db.prepare(`SELECT * FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1`).bind(userId).first<any>();
+}
+
+/** Quỹ theo hình thức thanh toán: tiền mặt → quỹ của ca; còn lại → quỹ ngân hàng/ví đầu tiên đang hoạt động. */
+async function fundFor(db: D1Database, storeId: number, method: string, shift: { fund_id: number } | null) {
+  if (method === "cash") {
+    if (shift) return shift.fund_id;
+    const f = await db.prepare(`SELECT id FROM funds WHERE type='cash' AND active=1 ORDER BY (store_id IS ?) DESC, id LIMIT 1`).bind(storeId).first<{ id: number }>();
+    if (!f) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ tiền mặt");
+    return f.id;
+  }
+  const types = method === "ewallet" ? ["ewallet", "bank"] : ["bank"];
+  for (const t of types) {
+    const f = await db.prepare(`SELECT id FROM funds WHERE type = ? AND active=1 ORDER BY (store_id IS ?) DESC, id LIMIT 1`).bind(t, storeId).first<{ id: number }>();
+    if (f) return f.id;
+  }
+  throw new AppError(422, "no_fund", "Chưa cấu hình quỹ ngân hàng cho hình thức thanh toán này");
+}
+
+async function unitFactor(db: D1Database, productId: number, unit: string) {
+  const p = await db.prepare(`SELECT id, base_unit, active, name FROM products WHERE id = ?`).bind(productId).first<any>();
+  if (!p || !p.active) throw new AppError(422, "product_not_found", "Mặt hàng không tồn tại hoặc đã ngừng bán", { productId });
+  if (unit === p.base_unit) return { factor: 1000, product: p };
+  const u = await db.prepare(`SELECT factor_milli FROM product_units WHERE product_id = ? AND unit = ?`).bind(productId, unit).first<{ factor_milli: number }>();
+  if (!u) throw new AppError(422, "unit_not_found", `Đơn vị "${unit}" không hợp lệ cho mặt hàng`, { productId, unit });
+  return { factor: u.factor_milli, product: p };
+}
+
+/** Chia một phân bổ lô cho nhiều dòng cùng mặt hàng theo thứ tự. */
+function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
+  const pool = alloc.map((a) => ({ ...a }));
+  let i = 0;
+  return qtys.map((q) => {
+    const out: LotAllocation[] = [];
+    let need = q;
+    while (need > 0 && i < pool.length) {
+      const take = Math.min(pool[i].qtyMilli, need);
+      out.push({ lotId: pool[i].lotId, unitCost: pool[i].unitCost, qtyMilli: take });
+      pool[i].qtyMilli -= take;
+      need -= take;
+      if (pool[i].qtyMilli === 0) i++;
+    }
+    return out;
+  });
+}
+
+// ===================== Ca làm việc =====================
+
+posRoutes.get("/shifts/current", requirePerm("pos.shift"), async (c) => {
+  const shift = await openShiftOf(c.env.DB, c.get("user").id);
+  return c.json({ shift: shift ?? null });
+});
+
+posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
+  const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0) }));
+  const db = c.env.DB;
+  const user = c.get("user");
+  if (await openShiftOf(db, user.id)) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
+  const storeId = await storeIdOf(c);
+  const fund = await db
+    .prepare(`SELECT id FROM funds WHERE type='cash' AND active=1 ORDER BY (store_id IS ?) DESC, id LIMIT 1`)
+    .bind(storeId)
+    .first<{ id: number }>();
+  if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ tiền mặt");
+  const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
+  const id = r.meta.last_row_id as number;
+  await auditStmt(c, { action: "shift.open", entity: "shift", entityId: id, after: { openingCash: body.openingCash } }).run();
+  const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
+  return c.json({ shift }, 201);
+});
+
+async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number }) {
+  const r = await db
+    .prepare(
+      `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
+        WHERE o.shift_id = ? AND o.status = 'completed' AND p.method = 'cash' AND p.status = 'confirmed'`,
+    )
+    .bind(shift.id)
+    .first<{ s: number }>();
+  return shift.opening_cash + (r?.s ?? 0);
+}
+
+posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const body = await parseBody(c, z.object({ countedCash: z.number().int().min(0), diffReason: z.string().trim().min(3).max(500).optional() }));
+  const db = c.env.DB;
+  const user = c.get("user");
+  const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first<any>();
+  if (!shift) throw notFound("shift_not_found", "Không tìm thấy ca");
+  if (shift.status !== "open") throw conflict("shift_closed", "Ca đã được chốt");
+  if (shift.user_id !== user.id && !can(user.role, "approvals.decide")) throw forbidden("forbidden", "Chỉ người mở ca hoặc quản lý mới được chốt ca");
+  const expected = await expectedCash(db, shift);
+  const diff = body.countedCash - expected;
+  if (diff !== 0 && !body.diffReason) {
+    throw new AppError(422, "diff_reason_required", "Tiền kiểm đếm chênh lệch so với dự kiến, vui lòng nhập lý do", { expectedCash: expected, diff });
+  }
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE shifts SET status='closed', closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), expected_cash=?, counted_cash=?, diff_cash=?, diff_reason=?
+          WHERE id=? AND status='open'`,
+      )
+      .bind(expected, body.countedCash, diff, body.diffReason ?? null, id),
+    auditStmt(c, {
+      action: "shift.close",
+      entity: "shift",
+      entityId: id,
+      before: { status: "open", openingCash: shift.opening_cash },
+      after: { expectedCash: expected, countedCash: body.countedCash, diff },
+      reason: body.diffReason,
+    }),
+  ]);
+  const closed = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
+  const report = await salesSummary(db, `o.shift_id = ?`, [id]);
+  return c.json({ shift: closed, report });
+});
+
+// ===================== Checkout =====================
+
+const checkoutSchema = z.object({
+  clientUuid: z.string().min(8).max(64),
+  customerId: z.number().int().positive().optional(),
+  lines: z
+    .array(
+      z.object({
+        productId: z.number().int().positive(),
+        unit: z.string().min(1).max(20),
+        qty: z.number().positive().max(1_000_000),
+        unitPriceOverride: z.number().int().min(0).optional(), // VND / đơn vị chính
+        discount: z.number().int().min(0).optional(), // VND, giảm trực tiếp trên dòng
+      }),
+    )
+    .min(1)
+    .max(200),
+  discount: z.number().int().min(0).optional(), // VND, giảm cả đơn
+  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive(), ref: z.string().max(100).optional() })).max(10),
+  note: z.string().max(500).optional(),
+  approvalId: z.number().int().positive().optional(),
+});
+
+async function getOrderFull(c: Ctx, orderId: number) {
+  const db = c.env.DB;
+  const role = c.get("user").role;
+  const o = await db
+    .prepare(
+      `SELECT o.*, cu.name AS customer_name, cu.phone AS customer_phone, u.full_name AS cashier_name
+         FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id LEFT JOIN users u ON u.id = o.created_by WHERE o.id = ?`,
+    )
+    .bind(orderId)
+    .first<any>();
+  if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  const lines = (
+    await db
+      .prepare(
+        `SELECT ol.*, p.name AS product_name, p.sku FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = ? ORDER BY ol.id`,
+      )
+      .bind(orderId)
+      .all<any>()
+  ).results;
+  const lots = (
+    await db
+      .prepare(
+        `SELECT oll.order_line_id, oll.lot_id, l.lot_code, oll.qty_milli, oll.unit_cost
+           FROM order_line_lots oll JOIN lots l ON l.id = oll.lot_id
+          WHERE oll.order_line_id IN (SELECT id FROM order_lines WHERE order_id = ?) ORDER BY oll.id`,
+      )
+      .bind(orderId)
+      .all<any>()
+  ).results;
+  const payments = (await db.prepare(`SELECT * FROM payments WHERE order_id = ? ORDER BY id`).bind(orderId).all()).results;
+  const canCost = can(role, "prices.view_cost");
+  const { customer_phone, ...rest } = o;
+  return {
+    ...rest,
+    customer: o.customer_id ? { id: o.customer_id, name: o.customer_name, phone: maskPhone(customer_phone, role) } : null,
+    lines: lines.map((l) => {
+      const { cost_amount, ...r } = l;
+      return { ...(canCost ? { cost_amount } : {}), ...r, lots: lots.filter((x) => x.order_line_id === l.id).map((x) => (canCost ? x : { ...x, unit_cost: undefined })) };
+    }),
+    payments,
+  };
+}
+
+posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
+  const body = await parseBody(c, checkoutSchema);
+  const db = c.env.DB;
+  const user = c.get("user");
+  const orderDone = async (id: number, status: 200 | 201, change = 0) => c.json({ ...(await getOrderFull(c, id)), change }, status);
+
+  // EC-04: idempotent theo clientUuid
+  const existing = await db.prepare(`SELECT id, status FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string }>();
+  if (existing && existing.status !== "cancelled" && existing.status !== "draft") return orderDone(existing.id, 200);
+  if (existing) throw conflict("order_in_progress", "Đơn đang xử lý hoặc đã huỷ, vui lòng tạo đơn mới với clientUuid khác");
+
+  const shift = await openShiftOf(db, user.id);
+  if (!shift) throw conflict("no_open_shift", "Chưa mở ca bán hàng");
+  const storeId = shift.store_id as number;
+
+  // khách hàng → nhóm giá
+  let customer: { id: number; customer_group_id: number | null } | null = null;
+  if (body.customerId) {
+    customer = await db.prepare(`SELECT id, customer_group_id FROM customers WHERE id = ? AND active = 1`).bind(body.customerId).first<any>();
+    if (!customer) throw new AppError(422, "customer_not_found", "Không tìm thấy khách hàng");
+  }
+
+  // Bước A: quy đổi đơn vị, giá, số tiền (không phụ thuộc phân bổ lô)
+  const items = [] as {
+    productId: number; unit: string; qtyMilli: number; unitPrice: number; listPrice: number; priceListId: number;
+    gross: number; lineDiscount: number; discount: number; lineTotal: number; listGross: number;
+  }[];
+  for (const l of body.lines) {
+    const { factor } = await unitFactor(db, l.productId, l.unit);
+    const qtyMilli = Math.round(l.qty * factor);
+    if (qtyMilli <= 0) throw new AppError(422, "invalid_qty", "Số lượng không hợp lệ");
+    const resolved = await resolvePrice(db, l.productId, { channel: "pos", customerGroupId: customer?.customer_group_id });
+    const unitPrice = l.unitPriceOverride ?? resolved.unitPrice;
+    const gross = lineAmount(unitPrice, qtyMilli);
+    const lineDiscount = Math.min(l.discount ?? 0, gross);
+    items.push({
+      productId: l.productId, unit: l.unit, qtyMilli, unitPrice, listPrice: resolved.unitPrice, priceListId: resolved.priceListId,
+      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli),
+    });
+  }
+  const baseSum = items.reduce((s, i) => s + i.gross - i.lineDiscount, 0);
+  const orderDiscount = body.discount ?? 0;
+  if (orderDiscount > baseSum) throw new AppError(422, "discount_too_large", "Giảm giá lớn hơn giá trị đơn");
+  let given = 0;
+  items.forEach((it, idx) => {
+    const share = idx === items.length - 1 ? orderDiscount - given : baseSum > 0 ? Math.floor((orderDiscount * (it.gross - it.lineDiscount)) / baseSum) : 0;
+    given += share;
+    it.discount = it.lineDiscount + share;
+    it.lineTotal = it.gross - it.discount;
+  });
+  const subtotal = items.reduce((s, i) => s + i.gross, 0);
+  const totalDiscount = items.reduce((s, i) => s + i.discount, 0);
+  const total = subtotal - totalDiscount;
+
+  // Thanh toán
+  const paid = body.payments.reduce((s, p) => s + p.amount, 0);
+  if (paid < total) throw new AppError(422, "payment_mismatch", "Tổng thanh toán chưa đủ tổng tiền đơn", { total, paid });
+  const cashTotal = body.payments.filter((p) => p.method === "cash").reduce((s, p) => s + p.amount, 0);
+  const change = paid - total;
+  if (change > cashTotal) throw new AppError(422, "payment_mismatch", "Tổng thanh toán vượt tổng tiền đơn (chỉ tiền mặt được thối lại)", { total, paid });
+  const recorded = body.payments.map((p) => ({ ...p }));
+  let toCut = change;
+  for (let i = recorded.length - 1; i >= 0 && toCut > 0; i--) {
+    if (recorded[i].method !== "cash") continue;
+    const cut = Math.min(recorded[i].amount, toCut);
+    recorded[i].amount -= cut;
+    toCut -= cut;
+  }
+  const payFunds = new Map<string, number>();
+  for (const p of recorded) if (!payFunds.has(p.method)) payFunds.set(p.method, await fundFor(db, storeId, p.method, shift));
+
+  // Bước B: phân bổ FEFO + kiểm tra duyệt (có thể chạy lại 1 lần khi tồn đổi — EC-02)
+  const discountBp = await getSettingInt(db, "approval.discount_pct_bp", 1000);
+  let approvalUsed: number | null = null;
+  const plan = async () => {
+    const byProduct = new Map<number, number[]>();
+    items.forEach((it, i) => byProduct.set(it.productId, [...(byProduct.get(it.productId) ?? []), i]));
+    const lineAllocs: LotAllocation[][] = new Array(items.length);
+    const productAllocs = new Map<number, LotAllocation[]>();
+    for (const [pid, idxs] of byProduct) {
+      const alloc = await allocateFefo(db, pid, idxs.reduce((s, i) => s + items[i].qtyMilli, 0), storeId);
+      productAllocs.set(pid, alloc);
+      splitAlloc(alloc, idxs.map((i) => items[i].qtyMilli)).forEach((a, k) => (lineAllocs[idxs[k]] = a));
+    }
+    const costs = lineAllocs.map((a) => allocationCost(a));
+    const reasons: string[] = [];
+    const listSum = items.reduce((s, i) => s + i.listGross, 0);
+    const discValue = items.reduce((s, i) => s + Math.max(0, i.listGross - i.lineTotal), 0);
+    if (listSum > 0 && (discValue * 10000) / listSum > discountBp) reasons.push("discount");
+    if (items.some((it, i) => it.lineTotal < costs[i])) reasons.push("below_cost");
+    approvalUsed = null;
+    if (reasons.length && !can(user.role, "approvals.decide")) {
+      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue });
+    }
+    return { lineAllocs, productAllocs, costs, belowCost: reasons.includes("below_cost") };
+  };
+
+  let p = await plan();
+
+  // Tạo đơn nháp trước, sau đó batch hoàn tất
+  const code = await nextCode(db, PREFIX.order);
+  let orderId: number;
+  try {
+    const r = await db
+      .prepare(
+        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, shift_id, customer_id, status, note, created_by)
+         VALUES (?,?,?,?,?,?,?,'draft',?,?)`,
+      )
+      .bind(code, body.clientUuid, "pos", "sale", storeId, shift.id, body.customerId ?? null, body.note ?? null, user.id)
+      .run();
+    orderId = r.meta.last_row_id as number;
+  } catch (e) {
+    const again = await db.prepare(`SELECT id FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number }>();
+    if (again) return orderDone(again.id, 200);
+    throw e;
+  }
+
+  const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
+
+  const commit = async () => {
+    await db.prepare(`DELETE FROM order_lines WHERE order_id = ?`).bind(orderId).run();
+    const lineIds: number[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const r = await db
+        .prepare(
+          `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, cost_amount, below_cost_approval_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        )
+        .bind(orderId, it.productId, it.unit, it.qtyMilli, it.unitPrice, it.priceListId, it.discount, it.lineTotal, p.costs[i], p.belowCost ? approvalUsed : null)
+        .first<{ id: number }>();
+      lineIds.push(r!.id);
+    }
+    const costTotal = p.costs.reduce((s, x) => s + x, 0);
+    const stmts: D1PreparedStatement[] = [];
+    items.forEach((_, i) => {
+      for (const a of p.lineAllocs[i]) {
+        stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
+      }
+    });
+    for (const [pid, alloc] of p.productAllocs) stmts.push(...moveStatements(db, pid, alloc, -1, "sale", "order", orderId, user.id));
+    for (const pay of recorded) {
+      if (pay.amount <= 0) continue;
+      stmts.push(
+        db
+          .prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`)
+          .bind(orderId, pay.method, pay.amount, payFunds.get(pay.method)!, pay.ref ?? null),
+      );
+    }
+    stmts.push(
+      db
+        .prepare(
+          `UPDATE orders SET status='completed', subtotal=?, discount=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE id=? AND status='draft'`,
+        )
+        .bind(subtotal, totalDiscount, total, costTotal, total, orderId),
+    );
+    if (approvalUsed) stmts.push(db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=?`).bind(String(orderId), approvalUsed));
+    stmts.push(
+      auditStmt(c, {
+        action: "order.checkout",
+        entity: "order",
+        entityId: orderId,
+        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed },
+      }),
+    );
+    await db.batch(stmts);
+  };
+
+  try {
+    try {
+      await commit();
+    } catch (e) {
+      if (!isCheckFail(e)) throw e;
+      p = await plan(); // tồn vừa đổi: phân bổ lại 1 lần
+      await commit();
+    }
+  } catch (e) {
+    await cancelDraft();
+    if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
+    throw e;
+  }
+  return orderDone(orderId, 201, change);
+});
+
+/** Yêu cầu duyệt (giá dưới vốn / giảm giá vượt ngưỡng): trả approvalId đã duyệt, hoặc 409 approval_required. */
+async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object): Promise<number> {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const type = reasons.includes("below_cost") ? "order.below_cost" : "order.discount";
+  if (approvalId) {
+    const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
+    const okUuid = a && (() => { try { return JSON.parse(a.payload_json ?? "{}").clientUuid === clientUuid; } catch { return false; } })();
+    if (a && okUuid && a.requested_by === user.id && String(a.type).startsWith("order.")) {
+      if (a.status === "approved" && !a.ref_id) return a.id;
+      if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt đã bị từ chối", { approvalId: a.id });
+      if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt", { approvalId: a.id, reasons });
+    }
+    throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId });
+  }
+  const pending = await db
+    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=?`)
+    .bind(user.id, clientUuid)
+    .first<{ id: number }>();
+  let id = pending?.id;
+  if (!id) {
+    const r = await db
+      .prepare(`INSERT INTO approvals(type, ref_type, payload_json, reason, requested_by) VALUES (?,?,?,?,?)`)
+      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, ...payload }), reasons.join(","), user.id)
+      .run();
+    id = r.meta.last_row_id as number;
+    await auditStmt(c, { action: "approval.request", entity: "approval", entityId: id, after: { type, reasons } }).run();
+  }
+  throw conflict(
+    "approval_required",
+    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : "Giảm giá vượt ngưỡng, cần quản lý duyệt",
+    { approvalId: id, reasons },
+  );
+}
+
+// ===================== Danh sách / chi tiết / hoá đơn =====================
+
+posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
+  const q = c.req.query();
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (q.day) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(q.day)) throw new AppError(422, "validation_error", "day phải có dạng YYYY-MM-DD");
+    const r = vnDayRangeUtc(q.day);
+    conds.push(`o.created_at >= ? AND o.created_at < ?`);
+    params.push(r.from, r.to);
+  }
+  if (q.channel) { conds.push(`o.channel = ?`); params.push(q.channel); }
+  if (q.status) { conds.push(`o.status = ?`); params.push(q.status); } else conds.push(`o.status <> 'draft'`);
+  if (q.shiftId) { conds.push(`o.shift_id = ?`); params.push(Number(q.shiftId)); }
+  if (q.kind) { conds.push(`o.kind = ?`); params.push(q.kind); }
+  if (q.q) { conds.push(`o.code LIKE ?`); params.push(`%${q.q}%`); }
+  if (q.cursor) { conds.push(`o.id < ?`); params.push(Number(q.cursor)); }
+  const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+  const rows = (
+    await c.env.DB
+      .prepare(
+        `SELECT o.id, o.code, o.channel, o.kind, o.status, o.total, o.discount, o.paid_total, o.shift_id, o.customer_id, o.original_order_id,
+                o.created_at, o.completed_at, u.full_name AS cashier_name
+           FROM orders o LEFT JOIN users u ON u.id = o.created_by
+          ${conds.length ? "WHERE " + conds.join(" AND ") : ""} ORDER BY o.id DESC LIMIT ?`,
+      )
+      .bind(...params, limit + 1)
+      .all<any>()
+  ).results;
+  const items = rows.slice(0, limit);
+  return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
+});
+
+posRoutes.get("/orders/:id", requirePerm("orders.view"), async (c) => c.json(await getOrderFull(c, Number(c.req.param("id")))));
+
+posRoutes.get("/pos/receipt/:id", requirePerm("orders.view"), async (c) => {
+  const o = await getOrderFull(c, Number(c.req.param("id")));
+  const store = await c.env.DB.prepare(`SELECT name, address FROM stores WHERE id = ?`).bind(o.store_id).first<any>();
+  return c.json({
+    store: store ?? null,
+    code: o.code,
+    kind: o.kind,
+    status: o.status,
+    createdAt: o.created_at,
+    cashier: o.cashier_name,
+    customer: o.customer,
+    lines: o.lines.map((l: any) => ({
+      name: l.product_name, unit: l.unit, qtyMilli: l.qty_milli, unitPrice: l.unit_price, discount: l.discount, lineTotal: l.line_total,
+    })),
+    subtotal: o.subtotal,
+    discount: o.discount,
+    total: o.total,
+    payments: o.payments.map((p: any) => ({ method: p.method, amount: p.amount, ref: p.ref })),
+    note: o.note,
+  });
+});
+
+// ===================== Trả hàng (EC-01) =====================
+
+const returnSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        orderLineId: z.number().int().positive(),
+        qty: z.number().positive(),
+        unit: z.string().min(1),
+        restock: z.boolean(),
+        reason: z.string().trim().min(2).max(300),
+      }),
+    )
+    .min(1)
+    .max(200),
+  refundMethod: z.enum(METHODS),
+});
+
+posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
+  const origId = Number(c.req.param("id"));
+  const body = await parseBody(c, returnSchema);
+  const db = c.env.DB;
+  const user = c.get("user");
+  const orig = await db.prepare(`SELECT * FROM orders WHERE id = ?`).bind(origId).first<any>();
+  if (!orig) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  if (orig.kind !== "sale" || orig.status !== "completed") throw conflict("not_returnable", "Chỉ trả hàng cho đơn bán đã hoàn tất");
+  const shift = await openShiftOf(db, user.id);
+  if (body.refundMethod === "cash" && !shift) throw conflict("no_open_shift", "Cần mở ca để hoàn tiền mặt");
+
+  const prepared: { orig: any; qtyMilli: number; lineTotal: number; cost: number; alloc: LotAllocation[]; restock: boolean; reason: string }[] = [];
+  const claimed = new Map<number, number>();
+  for (const l of body.lines) {
+    const ol = await db.prepare(`SELECT * FROM order_lines WHERE id = ? AND order_id = ?`).bind(l.orderLineId, origId).first<any>();
+    if (!ol) throw new AppError(422, "line_not_found", "Dòng hàng không thuộc đơn này", { orderLineId: l.orderLineId });
+    const { factor } = await unitFactor(db, ol.product_id, l.unit);
+    const qtyMilli = Math.round(l.qty * factor);
+    if (qtyMilli <= 0) throw new AppError(422, "invalid_qty", "Số lượng không hợp lệ");
+    const prev = await db
+      .prepare(
+        `SELECT COALESCE(SUM(r.qty_milli),0) AS q, COALESCE(SUM(r.line_total),0) AS amt
+           FROM order_lines r JOIN orders ro ON ro.id = r.order_id
+          WHERE r.original_line_id = ? AND ro.kind='return' AND ro.status='completed'`,
+      )
+      .bind(ol.id)
+      .first<{ q: number; amt: number }>();
+    const inReq = claimed.get(ol.id) ?? 0;
+    const already = prev!.q + inReq;
+    if (already + qtyMilli > ol.qty_milli) {
+      throw conflict("return_exceeds_sold", "Số lượng trả vượt số đã mua trừ số đã trả", { orderLineId: ol.id, soldMilli: ol.qty_milli, returnedMilli: already });
+    }
+    claimed.set(ol.id, inReq + qtyMilli);
+    // Đi qua các lô gốc theo thứ tự, bỏ qua phần đã trả trước đó
+    const lots = (await db.prepare(`SELECT lot_id, qty_milli, unit_cost FROM order_line_lots WHERE order_line_id = ? ORDER BY id`).bind(ol.id).all<any>()).results;
+    let skip = already;
+    let need = qtyMilli;
+    const alloc: LotAllocation[] = [];
+    for (const lot of lots) {
+      let avail = lot.qty_milli;
+      if (skip > 0) { const s = Math.min(skip, avail); skip -= s; avail -= s; }
+      if (avail <= 0 || need <= 0) continue;
+      const take = Math.min(avail, need);
+      alloc.push({ lotId: lot.lot_id, qtyMilli: take, unitCost: lot.unit_cost });
+      need -= take;
+    }
+    const isLast = already + qtyMilli === ol.qty_milli;
+    const lineTotal = isLast ? ol.line_total - prev!.amt : Math.round((ol.line_total * qtyMilli) / ol.qty_milli);
+    prepared.push({ orig: ol, qtyMilli, lineTotal, cost: allocationCost(alloc), alloc, restock: l.restock, reason: l.reason });
+  }
+
+  const total = prepared.reduce((s, x) => s + x.lineTotal, 0);
+  const costTotal = prepared.reduce((s, x) => s + x.cost, 0);
+  const fundId = total > 0 ? await fundFor(db, orig.store_id, body.refundMethod, shift) : null;
+  const code = await nextCode(db, PREFIX.return);
+  const note = prepared.map((x) => `${x.orig.id}: ${x.reason}${x.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500);
+  const r = await db
+    .prepare(
+      `INSERT INTO orders(code, channel, kind, original_order_id, store_id, shift_id, customer_id, status, note, created_by)
+       VALUES (?,?,'return',?,?,?,?,'draft',?,?)`,
+    )
+    .bind(code, orig.channel, origId, orig.store_id, shift?.id ?? null, orig.customer_id, note, user.id)
+    .run();
+  const retId = r.meta.last_row_id as number;
+  try {
+    const lineIds: number[] = [];
+    for (const x of prepared) {
+      const row = await db
+        .prepare(
+          `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, cost_amount, original_line_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        )
+        .bind(retId, x.orig.product_id, x.orig.unit, x.qtyMilli, x.orig.unit_price, x.orig.price_list_id, Math.max(0, lineAmount(x.orig.unit_price, x.qtyMilli) - x.lineTotal), x.lineTotal, x.cost, x.orig.id)
+        .first<{ id: number }>();
+      lineIds.push(row!.id);
+    }
+    const stmts: D1PreparedStatement[] = [];
+    prepared.forEach((x, i) => {
+      if (!x.restock) return;
+      for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
+      stmts.push(...moveStatements(db, x.orig.product_id, x.alloc, 1, "return", "order", retId, user.id));
+    });
+    if (total > 0) {
+      stmts.push(db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?,?,?,?, 'confirmed')`).bind(retId, body.refundMethod, -total, fundId));
+    }
+    stmts.push(
+      db
+        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
+        .bind(total, total, costTotal, total, retId),
+      auditStmt(c, {
+        action: "order.return",
+        entity: "order",
+        entityId: retId,
+        after: { code, originalOrderId: origId, total, lines: prepared.map((x) => ({ orderLineId: x.orig.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
+        reason: note,
+      }),
+    );
+    await db.batch(stmts);
+  } catch (e) {
+    await db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(retId).run();
+    throw e;
+  }
+  return c.json(await getOrderFull(c, retId), 201);
+});
+
+// ===================== Huỷ đơn =====================
+
+posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const body = await parseBody(c, z.object({ reason: z.string().trim().min(3).max(300) }));
+  const db = c.env.DB;
+  const user = c.get("user");
+  const o = await db.prepare(`SELECT * FROM orders WHERE id = ?`).bind(id).first<any>();
+  if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  if (o.kind !== "sale" || o.status !== "completed") throw conflict("not_voidable", "Chỉ huỷ được đơn bán đã hoàn tất");
+  if (o.shift_id) {
+    const sh = await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(o.shift_id).first<{ status: string }>();
+    if (sh?.status === "closed" && user.role !== "manager" && user.role !== "owner") {
+      throw forbidden("forbidden", "Đơn thuộc ca đã chốt, chỉ quản lý/chủ mới được huỷ");
+    }
+  }
+  const hasReturn = await db.prepare(`SELECT 1 AS x FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed' LIMIT 1`).bind(id).first();
+  if (hasReturn) throw conflict("has_returns", "Đơn đã có phiếu trả hàng, không thể huỷ");
+  const rows = (
+    await db
+      .prepare(
+        `SELECT ol.product_id, oll.lot_id, oll.qty_milli, oll.unit_cost
+           FROM order_line_lots oll JOIN order_lines ol ON ol.id = oll.order_line_id WHERE ol.order_id = ? ORDER BY oll.id`,
+      )
+      .bind(id)
+      .all<any>()
+  ).results;
+  const byProduct = new Map<number, LotAllocation[]>();
+  for (const r of rows) byProduct.set(r.product_id, [...(byProduct.get(r.product_id) ?? []), { lotId: r.lot_id, qtyMilli: r.qty_milli, unitCost: r.unit_cost }]);
+  const stmts: D1PreparedStatement[] = [];
+  for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
+  stmts.push(
+    db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, id),
+    db.prepare(`UPDATE payments SET status='refunded' WHERE order_id=?`).bind(id),
+    auditStmt(c, {
+      action: "order.void",
+      entity: "order",
+      entityId: id,
+      before: { status: o.status, total: o.total, shiftId: o.shift_id },
+      after: { status: "cancelled" },
+      reason: body.reason,
+    }),
+  );
+  await db.batch(stmts);
+  return c.json(await getOrderFull(c, id));
+});
