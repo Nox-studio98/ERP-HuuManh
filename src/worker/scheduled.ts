@@ -4,6 +4,18 @@ import { enqueueDebtReminders, sweepJobs } from "./services/jobs";
 import { cancelExpiredAwaitingPayment } from "./services/online-payments";
 import { swapBadReservations } from "./services/reservations";
 import { sysAudit } from "./services/sysaudit";
+import { hrAttendanceAlerts } from "./services/hr-cron";
+import { runDueCompetitorCrawls } from "./services/competitor-cron";
+import { generateRecurringOrders } from "./services/recurring-cron";
+
+/** Chạy một bước cron độc lập: lỗi một bước không chặn bước khác. */
+async function step(name: string, fn: () => Promise<unknown>) {
+  try {
+    await fn();
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", msg: `cron_${name}`, err: String((e as Error)?.message).slice(0, 200) }));
+  }
+}
 
 /**
  * Cron Triggers (wrangler.jsonc → triggers.crons):
@@ -16,7 +28,9 @@ import { sysAudit } from "./services/sysaudit";
 export async function runScheduled(event: ScheduledController, env: Env) {
   const now = new Date().toISOString();
   if (event.cron === "*/30 * * * *") {
-    await env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL`).bind(now).run();
+    await step("sessions", () => env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL`).bind(now).run());
+    await step("hr_alerts", () => hrAttendanceAlerts(env)); // Đợt 4 — M9-23
+    await step("competitor_crawl", () => runDueCompetitorCrawls(env)); // Đợt 4 — M7
     return;
   }
   if (event.cron === "*/5 * * * *") {
@@ -68,7 +82,7 @@ async function dailyMorning(env: Env) {
   } catch (e) {
     console.error(JSON.stringify({ level: "error", msg: "swap_bad_reservations", err: String((e as Error)?.message).slice(0, 200) }));
   }
-  // TODO(M4-08): sinh đơn sỉ lặp cho ngày mai khi Agent A cung cấp helper (vd. generateRecurringOrders(env, deliveryDate)) trong routes/b2b.ts hoặc services/.
+  await step("recurring_orders", () => generateRecurringOrders(env)); // M4-08 (Đợt 4)
   try {
     await enqueueDebtReminders(env); // M5-06
   } catch (e) {

@@ -17,6 +17,13 @@ import { exportRoutes } from "./exports";
 // Đợt 3
 import { onlineOrderRoutes } from "./online-orders";
 import { cmsRoutes } from "./cms";
+// Đợt 4
+import { hrRoutes } from "./hr";
+import { payrollRoutes } from "./payroll";
+import { competitorRoutes } from "./competitors";
+import { purchasingRoutes } from "./purchasing";
+import { promotionRoutes } from "./promotions";
+import { financeExtraRoutes } from "./finance-extra";
 
 /**
  * Đăng ký route các module. Mỗi file export một Hono<AppBindings> mount tại gốc /api/v1
@@ -38,4 +45,10 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", exportRoutes);
   v1.route("/", onlineOrderRoutes);
   v1.route("/", cmsRoutes);
+  v1.route("/", hrRoutes);
+  v1.route("/", payrollRoutes);
+  v1.route("/", competitorRoutes);
+  v1.route("/", purchasingRoutes);
+  v1.route("/", promotionRoutes);
+  v1.route("/", financeExtraRoutes);
 }

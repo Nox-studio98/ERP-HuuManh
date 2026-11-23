@@ -19,9 +19,11 @@ export interface Env {
   VAPID_PRIVATE_KEY?: string; // secret: JWK JSON của khoá riêng P-256
   VAPID_SUBJECT?: string; // var: "mailto:..." hoặc URL https của cửa hàng (claim sub của VAPID)
   SHOP_BASE_URL?: string; // var: origin website (vd https://huumanh.vn) để dựng link tra cứu trong email
+  // Đợt 4
+  ATTENDANCE_QR_SECRET?: string; // secret HMAC sinh mã QR chấm công xoay vòng (M9-13)
 }
 
-export type Role = "owner" | "manager" | "cashier" | "warehouse" | "accountant" | "online_staff";
+export type Role = "owner" | "manager" | "cashier" | "warehouse" | "accountant" | "online_staff" | "staff";
 
 export interface SessionUser {
   id: number;
