@@ -8,19 +8,22 @@
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/img/*"]
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "huu-manh-erp",
-      // Thay bằng id thật sau khi chạy: npx wrangler d1 create huu-manh-erp
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "01557b74-7189-49a6-adf5-9591ec6bb3ba",
       "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }],
-  "triggers": { "crons": ["0 17 * * *", "*/30 * * * *"] },
+  "triggers": { "crons": ["0 17 * * *", "*/30 * * * *", "*/5 * * * *", "0 1 * * *"] },
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }],
+    "consumers": [{ "queue": "huu-manh-erp-jobs", "max_batch_size": 10, "max_retries": 5, "dead_letter_queue": "huu-manh-erp-jobs-dlq" }]
+  },
   "vars": { "APP_ENV": "production" },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "workers_dev": true,
@@ -36,7 +39,11 @@
           "migrations_dir": "migrations"
         }
       ],
-      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }]
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }],
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs-staging" }],
+        "consumers": [{ "queue": "huu-manh-erp-jobs-staging", "max_batch_size": 10, "max_retries": 5, "dead_letter_queue": "huu-manh-erp-jobs-staging-dlq" }]
+      }
     }
   }
 }

@@ -7,6 +7,8 @@ import { requireAuth } from "./lib/auth";
 import { authRoutes } from "./routes/auth";
 import { registerModuleRoutes } from "./routes";
 import { runScheduled } from "./scheduled";
+import { webhookRoutes } from "./routes/webhooks";
+import { processJob } from "./services/jobs";
 
 const app = new Hono<AppBindings>();
 
@@ -34,7 +36,11 @@ app.use(
   }),
 );
 
-app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } }));
+// Giới hạn body: 1 MB mặc định; riêng upload ảnh (sản phẩm, CMS) 2,5 MB — route tự kiểm ≤ 2 MB + magic bytes.
+const UPLOAD_PATH = /^\/api\/v1\/(products\/\d+\/images|cms\/images)$/;
+const limitDefault = bodyLimit({ maxSize: 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } });
+const limitUpload = bodyLimit({ maxSize: 2.5 * 1024 * 1024, onError: () => { throw new AppError(422, "payload_too_large"); } });
+app.use("/api/*", (c, next) => (UPLOAD_PATH.test(c.req.path) ? limitUpload(c, next) : limitDefault(c, next)));
 app.use("/api/*", async (c, next) => {
   await next();
   c.header("Cache-Control", "no-store");
@@ -42,6 +48,8 @@ app.use("/api/*", async (c, next) => {
 
 app.get("/api/health", (c) => c.json({ ok: true, env: c.env.APP_ENV }));
 app.route("/api/auth", authRoutes);
+// Webhook công khai (xác thực bằng chữ ký HMAC) — NGOÀI router /api/v1 có đăng nhập, TRƯỚC 404 của /api/*
+app.route("/api/integrations", webhookRoutes);
 
 // Mọi route nghiệp vụ dưới /api/v1 đều yêu cầu đăng nhập; quyền chi tiết khai báo từng route bằng requirePerm()
 const v1 = new Hono<AppBindings>();
@@ -52,12 +60,40 @@ app.route("/api/v1", v1);
 app.all("/api/*", (c) => c.json({ error: { code: "not_found", message: "Không tìm thấy" } }, 404));
 app.onError(onError);
 
+// Ảnh sản phẩm / CMS từ R2 (cùng quy tắc với shop worker): chỉ prefix products/ và cms/, chặn "..".
+app.get("/img/*", async (c) => {
+  const key = decodeURIComponent(c.req.path.slice("/img/".length));
+  if (!/^(products|cms)\//.test(key) || key.includes("..") || key.includes("\\")) return c.text("Not found", 404);
+  const obj = await c.env.FILES.get(key);
+  if (!obj) return c.text("Not found", 404);
+  return new Response(obj.body, {
+    headers: {
+      "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff",
+    },
+  });
+});
+
 // Ngoài /api: trả SPA tĩnh (Workers Static Assets, not_found_handling = single-page-application)
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
   scheduled: (event: ScheduledController, env: Env, ctx: ExecutionContext) => ctx.waitUntil(runScheduled(event, env)),
+  // Queue consumer (outbox integration_jobs): ack khi xong / bỏ qua; retry có trì hoãn khi job thất bại
+  async queue(batch: MessageBatch<unknown>, env: Env) {
+    for (const msg of batch.messages) {
+      try {
+        const o = await processJob(env, Number((msg.body as { jobId?: number })?.jobId));
+        if (o.status === "failed") msg.retry({ delaySeconds: o.delaySeconds });
+        else msg.ack();
+      } catch (e) {
+        console.error(JSON.stringify({ level: "error", msg: "queue_job_error", jobId: (msg.body as { jobId?: number })?.jobId, err: String((e as Error)?.message).slice(0, 200) }));
+        msg.retry({ delaySeconds: 60 });
+      }
+    }
+  },
 } satisfies ExportedHandler<Env>;
 
 export { app };

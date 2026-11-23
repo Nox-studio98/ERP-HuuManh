@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Website + app bán hàng cho khách (M8). Worker công khai, TÁCH khỏi ERP nội bộ; dùng chung D1/R2/Queue.
+  "name": "huu-manh-shop",
+  "main": "src/shop/worker/index.ts",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist-shop/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/img/*", "/sitemap.xml", "/robots.txt"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "huu-manh-erp",
+      "database_id": "01557b74-7189-49a6-adf5-9591ec6bb3ba",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }],
+  "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }] },
+  "vars": { "APP_ENV": "production" },
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "env": {
+    // Staging: D1/R2/Queue RIÊNG của staging — tuyệt đối không trỏ vào dữ liệu production
+    "staging": {
+      "name": "huu-manh-shop-staging",
+      "vars": { "APP_ENV": "staging" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "huu-manh-erp-staging",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files-staging" }],
+      "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs-staging" }] }
+    }
+  }
+}
