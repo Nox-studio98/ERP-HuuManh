@@ -4,7 +4,8 @@ import { vnDate } from "../lib/time";
  * Mô hình công nợ (nguồn sự thật cho M4/M5/báo cáo):
  *  - Hoá đơn bán `invoices` kind='sale'|'replacement' là khoản phải thu. Hoá đơn kind='adjustment' (tổng âm hoặc dương)
  *    trỏ original_invoice_id và cộng vào khoản gốc — không phải dòng nợ riêng.
- *  - Còn nợ của 1 hoá đơn = total + Σ total các hoá đơn điều chỉnh của nó − Σ debt_allocations.amount.
+ *  - Còn nợ của 1 hoá đơn = total + Σ total các hoá đơn điều chỉnh của nó − Σ debt_allocations.amount
+ *    (chỉ allocations của payment/adjustment còn status 'posted' — phiếu đã đảo không còn tác dụng).
  *  - Số dư khách = Σ còn nợ các hoá đơn open − tiền đã trả chưa gạch (số dư có, EC-24).
  *  - Phải trả NCC: tương tự với supplier_bills (không có hoá đơn điều chỉnh; điều chỉnh bằng debt_adjustments).
  * Tất cả là SQL thuần để dùng được trong báo cáo.
@@ -13,10 +14,16 @@ import { vnDate } from "../lib/time";
 /** Biểu thức SQL: số còn nợ của hoá đơn alias `i`. */
 export const INVOICE_OUTSTANDING_SQL = `(i.total
   + COALESCE((SELECT SUM(a.total) FROM invoices a WHERE a.original_invoice_id = i.id AND a.kind = 'adjustment' AND a.status = 'open'), 0)
-  - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x WHERE x.invoice_id = i.id), 0))`;
+  - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x
+               LEFT JOIN debt_payments xp ON xp.id = x.payment_id
+               LEFT JOIN debt_adjustments xd ON xd.id = x.adjustment_id
+              WHERE x.invoice_id = i.id AND (xp.status = 'posted' OR xd.status = 'posted')), 0))`;
 
 /** Biểu thức SQL: số còn phải trả của hoá đơn mua alias `b`. */
-export const BILL_OUTSTANDING_SQL = `(b.total - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x WHERE x.bill_id = b.id), 0))`;
+export const BILL_OUTSTANDING_SQL = `(b.total - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x
+               LEFT JOIN debt_payments xp ON xp.id = x.payment_id
+               LEFT JOIN debt_adjustments xd ON xd.id = x.adjustment_id
+              WHERE x.bill_id = b.id AND (xp.status = 'posted' OR xd.status = 'posted')), 0))`;
 
 export interface PartnerDebtStatus {
   balance: number;          // còn nợ ròng (đã trừ tiền trả trước chưa gạch); âm = khách đang có số dư có
