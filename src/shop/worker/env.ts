@@ -8,7 +8,7 @@ export interface ShopEnv {
   FILES: R2Bucket;
   ASSETS: Fetcher;
   JOBS?: Queue<{ jobId: number }>;
-  APP_ENV: "dev" | "staging" | "production";
+  APP_ENV: "dev" | "staging" | "demo" | "production";
   TURNSTILE_SECRET?: string;
   RATE_LIMITER?: RateLimiterBinding;
   PAYMENT_WEBHOOK_SECRET?: string;
