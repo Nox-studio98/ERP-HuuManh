@@ -14,8 +14,7 @@
     {
       "binding": "DB",
       "database_name": "huu-manh-erp",
-      // Thay bằng id thật sau khi chạy: npx wrangler d1 create huu-manh-erp
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "01557b74-7189-49a6-adf5-9591ec6bb3ba",
       "migrations_dir": "migrations"
     }
   ],
