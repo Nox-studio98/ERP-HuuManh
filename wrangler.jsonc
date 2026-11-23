@@ -20,7 +20,11 @@
     }
   ],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }],
-  "triggers": { "crons": ["0 17 * * *", "*/30 * * * *"] },
+  "triggers": { "crons": ["0 17 * * *", "*/30 * * * *", "*/5 * * * *", "0 1 * * *"] },
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }],
+    "consumers": [{ "queue": "huu-manh-erp-jobs", "max_batch_size": 10, "max_retries": 5, "dead_letter_queue": "huu-manh-erp-jobs-dlq" }]
+  },
   "vars": { "APP_ENV": "production" },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "workers_dev": true,

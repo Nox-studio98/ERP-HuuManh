@@ -17,7 +17,7 @@ export interface ResolvedPrice {
 export async function resolvePrice(
   db: D1Database,
   productId: number,
-  opts: { channel: Channel; customerGroupId?: number | null; at?: string },
+  opts: { channel: Channel; customerGroupId?: number | null; customerId?: number | null; at?: string },
 ): Promise<ResolvedPrice> {
   const at = opts.at ?? new Date().toISOString();
   const row = await db
@@ -27,11 +27,12 @@ export async function resolvePrice(
         WHERE p.product_id = ?1 AND p.status = 'active' AND pl.active = 1
           AND pl.channel IN (?2, 'all')
           AND (pl.customer_group_id IS NULL OR pl.customer_group_id = ?3)
+          AND (pl.customer_id IS NULL OR pl.customer_id = ?5)
           AND p.effective_from <= ?4 AND (p.effective_to IS NULL OR p.effective_to > ?4)
         ORDER BY pl.priority DESC, p.effective_from DESC, p.id DESC
         LIMIT 1`,
     )
-    .bind(productId, opts.channel, opts.customerGroupId ?? null, at)
+    .bind(productId, opts.channel, opts.customerGroupId ?? null, at, opts.customerId ?? null)
     .first<{ id: number; unit_price: number; price_list_id: number; kind: string }>();
   if (!row) throw new AppError(422, "no_price", "Mặt hàng chưa có giá bán hiệu lực", { productId });
   return { unitPrice: row.unit_price, priceListId: row.price_list_id, priceId: row.id, kind: row.kind };
