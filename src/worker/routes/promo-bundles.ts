@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppBindings } from "../env";
-import { requirePerm } from "../lib/rbac";
+import { can, requirePerm } from "../lib/rbac";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode } from "../lib/codes";
@@ -68,7 +68,7 @@ bundleRoutes.put("/bundles/:productId/components", requirePerm("products.write")
   return c.json({ bundleProductId: id, components: await componentsView(db, id) });
 });
 
-const assemblyView = async (db: D1Database, id: number) => {
+const assemblyView = async (db: D1Database, id: number, showCost: boolean) => {
   const a = await db
     .prepare(
       `SELECT a.*, p.name AS product_name, l.lot_code, l.unit_cost AS lot_unit_cost, l.qty_on_hand_milli
@@ -88,9 +88,9 @@ const assemblyView = async (db: D1Database, id: number) => {
   ).results;
   return {
     id: a.id, code: a.code, status: a.status, bundleProductId: a.bundle_product_id, productName: a.product_name,
-    qtyMilli: a.qty_milli, extraCost: a.extra_cost, expiresAt: a.expires_at, lotId: a.lot_id, lotCode: a.lot_code,
-    unitCost: a.lot_unit_cost, createdAt: a.created_at, note: a.note,
-    components: used.map((u) => ({ productId: u.product_id, name: u.name, lotId: u.lot_id, qtyMilli: -u.qty_delta_milli, unitCost: u.unit_cost })),
+    qtyMilli: a.qty_milli, ...(showCost ? { extraCost: a.extra_cost } : {}), expiresAt: a.expires_at, lotId: a.lot_id, lotCode: a.lot_code,
+    ...(showCost ? { unitCost: a.lot_unit_cost } : {}), createdAt: a.created_at, note: a.note,
+    components: used.map((u) => ({ productId: u.product_id, name: u.name, lotId: u.lot_id, qtyMilli: -u.qty_delta_milli, ...(showCost ? { unitCost: u.unit_cost } : {}) })),
   };
 };
 
@@ -98,10 +98,11 @@ bundleRoutes.get("/assembly-orders", requirePerm("inventory.view"), async (c) =>
   const { results } = await c.env.DB
     .prepare(`SELECT a.id, a.code, a.status, a.qty_milli, a.extra_cost, a.created_at, p.name AS product_name FROM assembly_orders a JOIN products p ON p.id = a.bundle_product_id ORDER BY a.id DESC LIMIT 100`)
     .all<any>();
-  return c.json({ items: results.map((a) => ({ id: a.id, code: a.code, status: a.status, qtyMilli: a.qty_milli, extraCost: a.extra_cost, productName: a.product_name, createdAt: a.created_at })) });
+  const showCost = can(c.get("user").role, "prices.view_cost");
+  return c.json({ items: results.map((a) => ({ id: a.id, code: a.code, status: a.status, qtyMilli: a.qty_milli, ...(showCost ? { extraCost: a.extra_cost } : {}), productName: a.product_name, createdAt: a.created_at })) });
 });
 
-bundleRoutes.get("/assembly-orders/:id", requirePerm("inventory.view"), async (c) => c.json(await assemblyView(c.env.DB, Number(c.req.param("id")))));
+bundleRoutes.get("/assembly-orders/:id", requirePerm("inventory.view"), async (c) => c.json(await assemblyView(c.env.DB, Number(c.req.param("id")), can(c.get("user").role, "prices.view_cost"))));
 
 bundleRoutes.post("/assembly-orders", requirePerm("inventory.write"), async (c) => {
   const b = await parseBody(c, z.object({
@@ -158,5 +159,5 @@ bundleRoutes.post("/assembly-orders", requirePerm("inventory.write"), async (c) 
     if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn thành phần (tồn vừa thay đổi), vui lòng thử lại");
     throw e;
   }
-  return c.json(await assemblyView(db, id), 201);
+  return c.json(await assemblyView(db, id, can(user.role, "prices.view_cost")), 201);
 });

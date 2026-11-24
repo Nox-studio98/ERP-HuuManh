@@ -63,8 +63,9 @@ describe("Phân quyền & dữ liệu nhạy cảm", () => {
     const stale = await call("accountant", "PUT", `/api/v1/employees/${id}`, { baseSalary: 9_000_000, version: e.body.version });
     expect(stale.status).toBe(409);
     const row = await db().prepare(`SELECT before_json, after_json FROM audit_log WHERE action='hr.employee.update' AND entity_id=?`).bind(String(id)).first<any>();
-    expect(JSON.parse(row.before_json)).toEqual({ baseSalary: 7_000_000 });
-    expect(JSON.parse(row.after_json)).toEqual({ baseSalary: 8_000_000 });
+    // giá trị lương không được ghi vào nhật ký, chỉ tên trường đã đổi
+    expect(JSON.parse(row.before_json)).toEqual({ changed: ["baseSalary"] });
+    expect(JSON.parse(row.after_json)).toEqual({ changed: ["baseSalary"] });
   });
 });
 
@@ -86,6 +87,9 @@ describe("Tạo tài khoản & nghỉ việc", () => {
     expect(login.status).toBe(200);
     const { token } = (await login.json()) as { token: string };
     const me = () => app.request("/api/v1/me/schedule", { headers: { authorization: `Bearer ${token}` } }, testEnv);
+    expect((await me()).status).toBe(403); // must_change_password được chặn ở server
+    const chg = await app.request("/api/auth/change-password", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ current: c.body.tempPassword, next: "Mat-Khau-Moi-123" }) }, testEnv);
+    expect(chg.status).toBe(200);
     expect((await me()).status).toBe(200);
 
     const sched = await call("manager", "POST", "/api/v1/schedule/bulk", { assignments: [

@@ -23,14 +23,18 @@ export const requireAuth: MiddlewareHandler<AppBindings> = async (c, next) => {
   }
 
   const row = await c.env.DB.prepare(
-    `SELECT s.id sid, s.device_id, u.id, u.username, u.full_name, u.role, u.store_id
+    `SELECT s.id sid, s.device_id, u.id, u.username, u.full_name, u.role, u.store_id, u.must_change_password
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.id = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND u.active = 1`,
   )
     .bind(await sha256(token), new Date().toISOString())
-    .first<{ sid: string; device_id: string | null; id: number; username: string; full_name: string; role: Role; store_id: number | null }>();
+    .first<{ sid: string; device_id: string | null; id: number; username: string; full_name: string; role: Role; store_id: number | null; must_change_password: number }>();
   if (!row) throw new AppError(401, "session_expired", "Phiên đăng nhập hết hạn");
 
+  // Buộc đổi mật khẩu ở server: /api/auth/* (me, change-password, logout) không đi qua nhánh /api/v1 này
+  if (row.must_change_password && c.req.path.startsWith("/api/v1")) {
+    throw new AppError(403, "password_change_required", "Cần đổi mật khẩu trước khi sử dụng hệ thống");
+  }
   c.set("user", {
     id: row.id,
     username: row.username,
