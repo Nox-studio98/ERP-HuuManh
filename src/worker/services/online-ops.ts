@@ -13,7 +13,7 @@ import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveSt
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
 import { assertStmt } from "./guard";
-import { guardStmts, notifyJob, paidNet, refundPlan, runOrderBatch } from "./online-payments";
+import { guardStmts, notifyJob, paidNet, refundObligation, refundPlan, runOrderBatch } from "./online-payments";
 import { assertPeriodOpen } from "./period";
 import { unitFactor } from "./http";
 import { earnFor, pointsStmts, reversalStatements } from "./loyalty-points";
@@ -367,19 +367,19 @@ export async function returnToStock(
     summary.push({ orderLineId: l.id, restockMilli, wasteMilli, reason: r?.reason ?? null });
   }
   // Giao không thành công: chưa từng ghi nhận doanh thu → vẫn chuyển đơn gốc sang 'returned' (không có phiếu trả)
-  const refund = await refundPlan(db, id, o.total);
+  // A-14: chỉ ghi nghĩa vụ hoàn tiền; kế toán (finance.write) hoàn thực tế qua /refund
+  const due = await refundObligation(db, id, o.refund_due ?? 0);
   const t = transitionStmts(db, id, o.status, "returned", staff(c), {
     note: "Đơn đã được trả hàng",
     internalNote: input.lines.map((l) => `${l.orderLineId}: ${l.reason}${l.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500) || undefined,
-    extraSet: refund ? "payment_status = ?3, paid_total = paid_total - ?4, diff_status = 'none', diff_amount = 0" : "diff_status = 'none', diff_amount = 0",
-    extraBinds: refund ? [refund.status, refund.amount] : undefined,
+    extraSet: "refund_due = refund_due + ?3, diff_status = 'none', diff_amount = 0",
+    extraBinds: [due],
   });
   stmts.unshift(t[0]);
-  if (refund) stmts.push(refund.guard, refund.stmt);
-  stmts.push(...t.slice(1), notifyJob(db, id, { status: "returned" }), auditStmt(c, { action: "online_order.return", entity: "order", entityId: id, before: { status: o.status }, after: { status: "returned", lines: summary, refund: refund?.amount ?? 0 } }));
+  stmts.push(...t.slice(1), notifyJob(db, id, { status: "returned" }), auditStmt(c, { action: "online_order.return", entity: "order", entityId: id, before: { status: o.status }, after: { status: "returned", lines: summary, refundDue: due } }));
   await runOrderBatch(db, id, o.status, stmts);
   await finish(c, id);
-  return { refund: refund?.amount ?? 0 };
+  return { refund: 0, refundDue: due };
 }
 
 /**
@@ -471,7 +471,7 @@ async function returnAfterDelivery(
   const shippingBack = fullyReturned ? Math.max(0, o.total - priorTotal - prepared.reduce((s, x) => s + x.lineTotal, 0)) : 0;
   const total = prepared.reduce((s, x) => s + x.lineTotal, 0) + shippingBack;
   const costTotal = prepared.reduce((s, x) => s + x.cost, 0);
-  const refund = await refundPlan(db, id, o.total, 0, total, "refund_return");
+  const refundDue = await refundObligation(db, id, o.refund_due ?? 0, total); // A-14: nghĩa vụ hoàn, chưa ghi quỹ
   const code = await nextCode(db, PREFIX.return);
   const note = prepared.map((x) => `${x.l.id}: ${x.reason}${x.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500);
   const r = await db
@@ -512,22 +512,21 @@ async function returnAfterDelivery(
       for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
       stmts.push(...moveStatements(db, x.l.product_id, x.alloc, 1, "return", "order", retId, user.id));
     });
-    if (refund) {
+    if (refundDue > 0) {
       stmts.push(
-        refund.guard,
-        refund.stmt,
-        db.prepare(`UPDATE orders SET payment_status = ?, paid_total = paid_total - ? WHERE id = ?`).bind(refund.status, refund.amount, id),
+        assertStmt(db, "online.return.due", `SELECT COALESCE((SELECT SUM(amount) FROM payments WHERE order_id = ? AND status = 'confirmed'), 0) - (SELECT refund_due FROM orders WHERE id = ?) >= ?`, [id, id, refundDue]),
+        db.prepare(`UPDATE orders SET refund_due = refund_due + ? WHERE id = ?`).bind(refundDue, id),
       );
     }
     stmts.push(
       db
-        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
-        .bind(total - shippingBack, total, costTotal, refund?.amount ?? 0, retId),
+        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=0, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
+        .bind(total - shippingBack, total, costTotal, retId),
       notifyJob(db, id, { status: "returned" }),
       auditStmt(c, {
         action: "online_order.return", entity: "order", entityId: id,
         before: { status: o.status },
-        after: { status: o.status, returnOrder: code, returnTotal: total, fullyReturned, refund: refund?.amount ?? 0, lines: prepared.map((x) => ({ orderLineId: x.l.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
+        after: { status: o.status, returnOrder: code, returnTotal: total, fullyReturned, refundDue, lines: prepared.map((x) => ({ orderLineId: x.l.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
         reason: note,
       }),
     );
@@ -537,7 +536,7 @@ async function returnAfterDelivery(
     throw e;
   }
   await finish(c, id);
-  return { refund: refund?.amount ?? 0, returnOrder: code, returnTotal: total, fullyReturned };
+  return { refund: 0, refundDue, returnOrder: code, returnTotal: total, fullyReturned };
 }
 
 // ---------------------------------------------------------------- chênh lệch cân đơn trả trước (A-02)
@@ -595,45 +594,46 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
   }
   const policy = (await db.prepare(`SELECT value FROM settings WHERE key='online.cancel_fee_policy'`).first<{ value: string }>())?.value ?? "shop";
   const keepFee = policy === "customer" && o.status === "preparing" ? o.shipping_fee : 0;
-  const refund = await refundPlan(db, id, o.total, keepFee);
-  const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0"];
-  const binds: unknown[] = [reason, keepFee ? "customer" : policy];
-  if (refund) {
-    set.push("payment_status = ?5", "paid_total = paid_total - ?6");
-    binds.push(refund.status, refund.amount);
-  }
+  // A-14: huỷ chỉ ghi nghĩa vụ hoàn tiền (refund_due); không chèn dòng quỹ. Hoàn thực tế do finance.write qua /refund. COD chưa thu → 0.
+  const due = await refundObligation(db, id, keepFee);
+  const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0", "refund_due = ?5"];
+  const binds: unknown[] = [reason, keepFee ? "customer" : policy, due];
   const t = transitionStmts(db, id, o.status, "cancelled", staff(c), { note: "Đơn đã được huỷ", internalNote: reason, extraSet: set.join(", "), extraBinds: binds });
   const stmts = [
     t[0],
     ...release,
     ...restock,
     db.prepare(`UPDATE payment_intents SET status='cancelled' WHERE order_id=? AND status='pending'`).bind(id),
-    ...(refund ? [refund.guard, refund.stmt] : []),
     ...t.slice(1),
     notifyJob(db, id, { status: "cancelled" }),
-    auditStmt(c, { action: "online_order.cancel", entity: "order", entityId: id, before: { status: o.status }, after: { status: "cancelled", refund: refund?.amount ?? 0, restocked: lots.size > 0 }, reason }),
+    auditStmt(c, { action: "online_order.cancel", entity: "order", entityId: id, before: { status: o.status }, after: { status: "cancelled", refundDue: due, restocked: lots.size > 0 }, reason }),
   ];
   await runOrderBatch(db, id, o.status, stmts);
   await finish(c, id);
-  return { refund: refund?.amount ?? 0 };
+  return { refund: 0, refundDue: due };
 }
 
-/** Hoàn tiền cho đơn đã huỷ/trả mà chưa hoàn (vd khách tự huỷ sau khi đã trả — shop worker không xử lý tiền). */
+/**
+ * Hoàn tiền thực tế (finance.write) cho nghĩa vụ `refund_due` do huỷ/trả hàng tạo ra (A-14): dòng payments âm cùng phương thức/quỹ gốc.
+ * Đơn huỷ/trả: hoàn đúng `refund_due`; đơn đã giao có phiếu trả (completed) cũng hoàn theo `refund_due`. Hoàn đôi bị chặn bởi guard.
+ */
 export async function refundOrder(c: Ctx, id: number) {
   const db = c.env.DB;
   const o = await loadOpsOrder(db, id);
-  if (o.status !== "cancelled" && o.status !== "returned") throw conflict("not_refundable", "Chỉ hoàn tiền cho đơn đã huỷ hoặc đã trả hàng");
+  if (o.status !== "cancelled" && o.status !== "returned" && !(o.status === "completed" && o.refund_due > 0)) throw conflict("not_refundable", "Chỉ hoàn tiền cho đơn đã huỷ hoặc đã trả hàng");
   await assertPeriodOpen(db, new Date(), "hoàn tiền"); // B-08
-  const refund = await refundPlan(db, id, o.total);
+  if (!(o.refund_due > 0)) throw conflict("nothing_to_refund", "Đơn không còn khoản tiền cần hoàn");
+  const refund = await refundPlan(db, id, o.total, 0, o.refund_due);
   if (!refund) throw conflict("nothing_to_refund", "Đơn không còn khoản tiền cần hoàn");
   const [g1, g2] = guardStmts(db, id, o.status);
   await runOrderBatch(db, id, o.status, [
     g1,
+    assertStmt(db, "order.refund_due", `SELECT refund_due >= ? FROM orders WHERE id = ?`, [refund.amount, id]),
     refund.guard,
     refund.stmt,
-    db.prepare(`UPDATE orders SET payment_status=?, paid_total = paid_total - ? WHERE id=?`).bind(refund.status, refund.amount, id),
+    db.prepare(`UPDATE orders SET payment_status=?, paid_total = paid_total - ?, refund_due = refund_due - ? WHERE id=?`).bind(refund.status, refund.amount, refund.amount, id),
     g2,
-    auditStmt(c, { action: "online_order.refund", entity: "order", entityId: id, after: { amount: refund.amount, status: refund.status } }),
+    auditStmt(c, { action: "online_order.refund", entity: "order", entityId: id, before: { refundDue: o.refund_due }, after: { amount: refund.amount, status: refund.status } }),
   ]);
   return { refund: refund.amount };
 }

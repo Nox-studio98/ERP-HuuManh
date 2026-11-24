@@ -55,7 +55,7 @@ function OrderList() {
                 <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
                 {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
                 {o.weightAdjustStatus === "pending_customer" && <Badge tone="warn">Chờ khách xác nhận cân</Badge>}
-                {o.needsRefund && <Badge tone="danger">Cần hoàn tiền</Badge>}
+                {o.needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
                 {o.diffAmount > 0 && <Badge tone="warn">Thu thêm {money(o.diffAmount)}</Badge>}
                 {o.diffAmount < 0 && <Badge tone="danger">Hoàn lại {money(-o.diffAmount)}</Badge>}
               </div>
@@ -93,7 +93,7 @@ function OrderDetail({ id }: { id: number }) {
   if (needsPay) shipBlocked.push("Đơn chuyển khoản chưa nhận được tiền — hãy xác nhận đã nhận tiền trước.");
   if (weightBlock) shipBlocked.push(o.weightAdjustStatus === "rejected" ? "Khách từ chối khối lượng thực cân." : "Đang chờ khách xác nhận khối lượng thực cân.");
   const canCancel = ["awaiting_payment", "new", "confirmed", "preparing"].includes(st);
-  const needsRefund = ["cancelled", "returned"].includes(st) && o.paymentStatus === "paid";
+  const needsRefund = o.refundDue > 0;
   const Act = ({ children, ...p }: any) => <Button size="lg" loading={busy && !mode} {...p}>{children}</Button>;
 
   return (
@@ -110,7 +110,7 @@ function OrderDetail({ id }: { id: number }) {
         <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
         {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
         {WEIGHT_LABEL[o.weightAdjustStatus] && <Badge tone={weightBlock ? "warn" : "info"}>{WEIGHT_LABEL[o.weightAdjustStatus]}</Badge>}
-        {needsRefund && <Badge tone="danger">Cần hoàn tiền</Badge>}
+        {needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
       </div>
 
       {shipBlock(st, shipBlocked)}
@@ -118,7 +118,7 @@ function OrderDetail({ id }: { id: number }) {
       {o.diffKind === "refund" && <Banner tone="danger">Hoàn lại {money(-o.diffAmount)}: sau cân tổng thấp hơn số khách đã chuyển. Cần hoàn phần dư hoặc miễn (người có quyền duyệt) trước khi hoàn tất đơn.</Banner>}
       {o.diffStatus === "waived" && <Banner>Đã miễn khoản chênh lệch cân: {o.diffNote}</Banner>}
       {o.returnedTotal > 0 && <Banner>Đã trả hàng {money(o.returnedTotal)}{o.fullyReturned ? " (trả hết)" : ""} — {(o.returns ?? []).map((r: any) => r.code).join(", ")}</Banner>}
-      {needsRefund && <Banner tone="danger">Đơn đã {STATUS_LABEL[st].toLowerCase()} nhưng khách đã thanh toán — cần hoàn tiền.</Banner>}
+      {needsRefund && <Banner tone="danger">Chờ hoàn {money(o.refundDue)} cho khách (đơn {STATUS_LABEL[st].toLowerCase()}). {can("finance.write") ? "Bấm “Hoàn tiền” để ghi chi quỹ." : "Chỉ kế toán/quản lý (quyền ghi sổ quỹ) mới hoàn tiền thực tế."}</Banner>}
 
       <div className="row wrap action-bar" data-testid="action-bar">
         {st === "new" && <Act onClick={() => run("confirm", {}, "Đã xác nhận đơn")}>Xác nhận</Act>}
@@ -132,7 +132,7 @@ function OrderDetail({ id }: { id: number }) {
         {needsPay && !["cancelled", "returned", "completed"].includes(st) && can("finance.write") && <Act variant="soft" onClick={() => setMode("paid")}>Xác nhận đã nhận tiền</Act>}
         {o.diffKind === "refund" && o.diffStatus === "pending" && can("finance.write") && <Act variant="danger" onClick={async () => { const r = await run("refund-diff", {}, "Đã hoàn phần chênh lệch"); if (r?.result?.refund) toast(`Đã hoàn ${money(r.result.refund)}`, "ok"); }}>Hoàn lại {money(-o.diffAmount)}</Act>}
         {o.diffStatus === "pending" && can("finance.approve") && <Act variant="soft" onClick={() => { const reason = window.prompt("Lý do miễn khoản chênh lệch (bắt buộc):"); if (reason && reason.trim().length >= 3) run("waive-diff", { reason: reason.trim() }, "Đã miễn chênh lệch"); }}>Miễn chênh lệch</Act>}
-        {needsRefund && can("finance.write") && <Act variant="danger" onClick={async () => { const r = await run("refund", {}, "Đã hoàn tiền"); if (r?.result?.refund) toast(`Đã hoàn ${money(r.result.refund)}`, "ok"); }}>Hoàn tiền</Act>}
+        {needsRefund && can("finance.write") && <Act variant="danger" onClick={async () => { const r = await run("refund", {}, "Đã hoàn tiền"); if (r?.result?.refund) toast(`Đã hoàn ${money(r.result.refund)}`, "ok"); }}>Hoàn tiền {money(o.refundDue)}</Act>}
         {canCancel && <Act variant="danger" onClick={() => setMode("cancel")}>Huỷ đơn</Act>}
         <Button variant="ghost" onClick={() => window.print()}>In phiếu soạn</Button>
       </div>
