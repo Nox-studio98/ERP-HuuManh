@@ -476,8 +476,6 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .filterbar .fb-end { margin-left: auto; align-self: flex-end; }
 @media (max-width: 767px) { .filterbar .fb-end { margin-left: 0; } }
 .hero-grid { align-items: stretch; }
-.two-col { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
-@media (min-width: 1100px) { .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .dt-card .kv > span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
 .dt-card .kv > span.num { white-space: normal; }
 @media (min-width: 1024px) {
@@ -490,3 +488,71 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 }
 .detail-panel .dt-wrap, .split.open .dt-wrap { overflow-x: auto; }
 .detail-panel .dt-table th, .detail-panel .dt-table td { padding: 8px var(--s-2); }
+/* ===== UX 2C: bổ sung (chỉ thêm lớp mới) ===== */
+.seg.fit { align-self: flex-start; max-width: 100%; }
+@media (min-width: 768px) { .seg.fit { display: inline-flex; width: fit-content; max-width: 100%; } .seg.fit button { flex: 0 0 auto; } }
+.card-grid { display: grid; gap: var(--s-3); grid-template-columns: 1fr; }
+@media (min-width: 768px) { .card-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); } }
+.export-card { display: flex; align-items: center; gap: var(--s-3); }
+.export-ico { flex: none; width: 44px; height: 44px; border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.export-card .btn { flex: none; }
+.kv-grid { display: grid; gap: var(--s-2) var(--s-4); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.kv-grid .kv2 { display: flex; justify-content: space-between; gap: var(--s-3); padding: 6px 0; border-bottom: 1px solid var(--border); }
+.kv-grid .kv2 > :first-child { color: var(--muted); }
+.two-col { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .two-col.wide-left { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+.fund-cards { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.fund-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-3) var(--s-4); text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.fund-card:hover { border-color: var(--accent); }
+.fund-card .v { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fund-card .l { font-size: .8rem; color: var(--muted); }
+.quick-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+/* bảng cuộn ngang với cột đầu dính (Lịch ca, Bảng công) */
+.grid-scroll { overflow: auto; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); max-height: calc(100dvh - 260px); }
+.grid-scroll table { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+.grid-scroll th, .grid-scroll td { padding: 8px 10px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: center; white-space: nowrap; background: var(--surface); }
+.grid-scroll thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); }
+.grid-scroll .sticky-col { position: sticky; left: 0; z-index: 2; text-align: left; background: var(--surface); min-width: 150px; box-shadow: 1px 0 0 var(--border); }
+.grid-scroll thead .sticky-col { z-index: 4; background: var(--surface-2); }
+.settings-layout { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1024px) { .settings-layout { grid-template-columns: 240px minmax(0, 1fr); } }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: calc(var(--topbar-h) + var(--s-4)); }
+.settings-nav button { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); text-align: left; min-height: 40px; padding: 0 var(--s-3); border: 0; border-radius: var(--r-md); background: none; color: var(--text); cursor: pointer; font: inherit; }
+.settings-nav button:hover { background: var(--surface-2); }
+.settings-nav button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+@media (max-width: 1023px) { .settings-nav { display: none; } }
+.btn.inline { width: auto; }
+@media (min-width: 1280px) { .audit-filters { grid-template-columns: repeat(6, minmax(0, 1fr)); } .audit-filters .row { grid-column: auto; } }
+@media (min-width: 1024px) { .set-group .set-row { grid-template-columns: minmax(0, 1fr) minmax(260px, 380px); } }
+.sch-table { min-width: 640px; }
+.sch-table th { font-size: .82rem; font-weight: 600; }
+.sch-table th.today, .sch-table td.today { background: var(--accent-soft); }
+.sch-table td.today { background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+.sch-table .sch-name { font-weight: 600; font-size: .85rem; line-height: 1.25; white-space: normal; max-width: 130px; min-width: 100px; overflow-wrap: anywhere; }
+.sch-cell { vertical-align: top; min-width: 74px; height: 58px; padding: 3px !important; text-align: left !important; }
+.sch-cell.on { background: var(--accent-soft) !important; outline: 2px solid var(--accent); outline-offset: -2px; }
+.sch-chip { border: 0; display: block; width: 100%; margin-bottom: 2px; text-align: left; font-size: .72rem; padding: 2px 6px; }
+@media (min-width: 1024px) {
+  .sch-table .sch-name { max-width: none; min-width: 190px; font-size: .92rem; }
+  .sch-cell { min-width: 120px; height: 64px; }
+  .sch-chip { font-size: .8rem; padding: 4px 8px; }
+  .sch-table th { padding: 10px; }
+}
+.grid-full { grid-column: 1 / -1; }
+.store-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
+@media (min-width: 900px) { .store-grid { grid-template-columns: minmax(0, 1fr) 260px; align-items: start; } }
+.store-actions { justify-content: flex-end; }
+.store-save { min-width: 120px; }
+.geo-prev { display: flex; flex-direction: column; gap: var(--s-2); }
+.geo-prev svg { width: 100%; max-width: 260px; margin: 0 auto; display: block; }
+.geo-bg { fill: var(--surface-2); } .geo-grid { stroke: var(--border); stroke-width: 1; }
+.geo-fence { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.geo-pin { fill: var(--danger); } .geo-rad { stroke: var(--accent); stroke-width: 1; }
+.geo-txt { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.me-page { max-width: 640px; }
+@media (min-width: 1100px) {
+  .me-page { max-width: 1120px; }
+  .me-cols > .stack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: var(--s-3) var(--s-4); }
+  .me-cols > .stack > .banner, .me-cols > .stack > .hint { grid-column: 1 / -1; }
+  .me-sched { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-5); }
+}

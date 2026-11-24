@@ -6,7 +6,7 @@ import { requirePerm, can } from "../lib/rbac";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
-import { vnDayRangeUtc, vnPeriod } from "../lib/time";
+import { vnDayRangeUtc, vnPeriod, parseDayRange } from "../lib/time";
 import { getSettingInt } from "../services/settings";
 import { approveVoucher } from "../services/vouchers";
 import { assertStmt } from "../services/guard";
@@ -47,9 +47,18 @@ financeRoutes.get("/vouchers", requirePerm("finance.view"), async (c) => {
   if (q.fundId) { conds.push(`v.fund_id = ?`); params.push(Number(q.fundId)); }
   if (q.direction) { conds.push(`v.direction = ?`); params.push(q.direction); }
   if (q.status) { conds.push(`v.status = ?`); params.push(q.status); }
-  if (q.cursor) { conds.push(`v.id < ?`); params.push(Number(q.cursor)); }
+  const range = parseDayRange(q.from, q.to);
+  if (range) { conds.push(`v.created_at >= ? AND v.created_at < ?`); params.push(vnDayRangeUtc(range.from).from, vnDayRangeUtc(range.to).to); }
+  const term = q.q?.trim();
+  if (term) {
+    const like = `%${term.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
+    conds.push(`(v.code LIKE ? ESCAPE '\\' OR COALESCE(v.counterparty,'') LIKE ? ESCAPE '\\' OR COALESCE(v.note,'') LIKE ? ESCAPE '\\' OR cc.name LIKE ? ESCAPE '\\')`);
+    params.push(like, like, like, like);
+  }
   // Phiếu lương/tạm ứng là dữ liệu nhạy cảm của nhân sự: chỉ người có hr.sensitive mới thấy
   if (!can(c.get("user").role, "hr.sensitive")) conds.push(`COALESCE(v.ref_type,'') NOT IN ('payroll_item','salary_advance','payroll') AND cc.code <> 'LUONG'`);
+  const baseConds = [...conds], baseParams = [...params];
+  if (q.cursor) { conds.push(`v.id < ?`); params.push(Number(q.cursor)); }
   const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
   const rows = (
     await c.env.DB
@@ -62,7 +71,21 @@ financeRoutes.get("/vouchers", requirePerm("finance.view"), async (c) => {
       .all<any>()
   ).results;
   const items = rows.slice(0, limit);
-  return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
+  // Tổng hợp trên TOÀN BỘ kết quả lọc (chỉ phiếu đã ghi): tổng thu, tổng chi, số phiếu
+  const s = await c.env.DB
+    .prepare(
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM(CASE WHEN v.direction='in' AND v.status='posted' THEN v.amount END),0) AS total_in,
+              COALESCE(SUM(CASE WHEN v.direction='out' AND v.status='posted' THEN v.amount END),0) AS total_out,
+              COALESCE(SUM(CASE WHEN v.status='pending_approval' THEN 1 ELSE 0 END),0) AS pending
+         FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id JOIN funds f ON f.id = v.fund_id
+        ${baseConds.length ? "WHERE " + baseConds.join(" AND ") : ""}`,
+    )
+    .bind(...baseParams)
+    .first<any>();
+  return c.json({
+    items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null,
+    summary: { count: s?.cnt ?? 0, totalIn: s?.total_in ?? 0, totalOut: s?.total_out ?? 0, pending: s?.pending ?? 0 },
+  });
 });
 
 const voucherSchema = z.object({

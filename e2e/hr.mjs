@@ -325,7 +325,7 @@ try {
   ok("bảng công: B thiếu công 1 ngày");
   await shot(w.page, "hr-timesheets-d.png");
   await rowA.click();
-  await w.page.getByRole("dialog").locator(".dt-table tbody tr").first().waitFor();
+  await w.page.locator('aside.detail-panel, [role="dialog"]').last().locator(".dt-table tbody tr").first().waitFor(); // màn rộng: panel chi tiết thay cho hộp thoại
   ok("drill-down từng ngày");
   await w.page.keyboard.press("Escape");
   await btn(w.page, "Chốt bảng công").click();

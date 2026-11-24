@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ApiError, get, items, post } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { METHODS, downloadHref, fmtDateTime, money, num, todayVN } from "../../format";
 import { navigate } from "../../router";
@@ -23,17 +24,21 @@ export default function Debts() {
   const pre = qparam("statement");
   const [stmt, setStmt] = useState<{ pt: PT; id: number; name?: string } | null>(pre && /^(customer|supplier):\d+$/.test(pre) ? { pt: pre.split(":")[0] as PT, id: Number(pre.split(":")[1]) } : null);
   const [pay, setPay] = useState<{ pt: PT } | null>(null);
+  const subtitle: Record<string, string> = { recv: "Công nợ khách hàng theo tuổi nợ — bấm một khách để xem sao kê", pay: "Công nợ nhà cung cấp theo tuổi nợ", pays: "Sổ phiếu thu / chi công nợ", remind: "Khách sắp đến hạn hoặc quá hạn", adj: "Chiết khấu, xoá nợ, cấn trừ", open: "Số dư công nợ đầu kỳ" };
   return (
     <div className="stack">
-      <Segmented wrap value={tab} onChange={setTab} options={[{ v: "recv", label: "Phải thu" }, { v: "pay", label: "Phải trả" }, { v: "pays", label: "Phiếu thu/chi" }, { v: "remind", label: "Nhắc nợ" }, { v: "adj", label: "Điều chỉnh" }, { v: "open", label: "Đầu kỳ" }]} />
-      {tab === "recv" && <Aging side="receivable" onOpen={(r) => setStmt({ pt: "customer", id: r.customerId, name: r.customerName })} />}
-      {tab === "pay" && <Aging side="payable" onOpen={(r) => setStmt({ pt: "supplier", id: r.supplierId, name: r.supplierName })} />}
-      {tab === "pays" && <AllPayments />}
-      {tab === "remind" && <Reminders />}
-      {tab === "adj" && <Adjustments />}
-      {tab === "open" && <Opening />}
-      {can("debt.write") && tab !== "remind" && tab !== "pays" && tab !== "open" && tab !== "adj" && <div><Button variant="soft" onClick={() => setPay({ pt: tab === "pay" ? "supplier" : "customer" })}>{tab === "pay" ? "+ Trả tiền NCC" : "+ Thu tiền khách"}</Button></div>}
-      {stmt && <PartnerSheet pt={stmt.pt} id={stmt.id} name={stmt.name} onClose={() => { setStmt(null); if (pre) history.replaceState({}, "", "/debts"); }} />}
+      <PageHeader subtitle={subtitle[tab]} actions={can("debt.write") && (tab === "recv" || tab === "pay") ? <Button size="sm" onClick={() => setPay({ pt: tab === "pay" ? "supplier" : "customer" })}>{tab === "pay" ? "+ Trả tiền NCC" : "+ Thu tiền khách"}</Button> : undefined} />
+      <Segmented fit wrap value={tab} onChange={setTab} options={[{ v: "recv", label: "Phải thu" }, { v: "pay", label: "Phải trả" }, { v: "pays", label: "Phiếu thu/chi" }, { v: "remind", label: "Nhắc nợ" }, { v: "adj", label: "Điều chỉnh" }, { v: "open", label: "Đầu kỳ" }]} />
+      <SplitLayout open={!!stmt} panel={stmt ? <PartnerSheet key={`${stmt.pt}:${stmt.id}`} pt={stmt.pt} id={stmt.id} name={stmt.name} onClose={() => { setStmt(null); if (pre) history.replaceState({}, "", "/debts"); }} /> : null}>
+        <div className="stack">
+          {tab === "recv" && <Aging side="receivable" selected={stmt?.pt === "customer" ? stmt.id : null} onOpen={(r) => setStmt({ pt: "customer", id: r.customerId, name: r.customerName })} />}
+          {tab === "pay" && <Aging side="payable" selected={stmt?.pt === "supplier" ? stmt.id : null} onOpen={(r) => setStmt({ pt: "supplier", id: r.supplierId, name: r.supplierName })} />}
+          {tab === "pays" && <AllPayments />}
+          {tab === "remind" && <Reminders />}
+          {tab === "adj" && <Adjustments />}
+          {tab === "open" && <Opening />}
+        </div>
+      </SplitLayout>
       {pay && <PickPartnerPay pt={pay.pt} onClose={() => setPay(null)} />}
     </div>
   );
@@ -41,35 +46,38 @@ export default function Debts() {
 
 function AllPayments() {
   const can = useCan();
-  const [dir, setDir] = useState(""), [kind, setKind] = useState<"" | PT>(""), [from, setFrom] = useState(""), [to, setTo] = useState(""), [status, setStatus] = useState("");
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [dir, setDir] = useState(""), [kind, setKind] = useState<"" | PT>(""), [status, setStatus] = useState(""), [q, setQ] = useState("");
   const [partner, setPartner] = useState<{ id: number; name: string } | null>(null);
   const [rev, setRev] = useState<any>(null);
-  const l = useAsync(() => get("/debts/payments", { direction: dir, partnerType: kind, partnerId: partner?.id, from, to, status, limit: 100 }).then((r) => items<any>(r)), [dir, kind, partner?.id, from, to, status]);
-  const rows = l.data ?? [];
+  const l = useAsync(() => get("/debts/payments", { direction: dir, partnerType: kind, partnerId: partner?.id, from: range.from, to: range.to, status, limit: 100 }).then((r) => items<any>(r)), [dir, kind, partner?.id, range.from, range.to, status]);
+  const term = q.trim().toLowerCase();
+  const rows = (l.data ?? []).filter((p) => !term || `${p.code} ${p.partnerName ?? ""} ${p.ref ?? ""}`.toLowerCase().includes(term));
   const sum = rows.filter((p) => p.status === "posted").reduce((a, p) => ({ in: a.in + (p.direction === "in" ? p.amount : 0), out: a.out + (p.direction === "out" ? p.amount : 0) }), { in: 0, out: 0 });
+  const dirty = !!(dir || kind || status || q || partner);
+  const reset = () => { setDir(""); setKind(""); setStatus(""); setQ(""); setPartner(null); };
   return (
     <div className="stack" data-testid="all-payments">
-      <div className="grid3">
-        <Select label="Loại phiếu" value={dir} onChange={(e) => setDir(e.target.value)}><option value="">Thu và chi</option><option value="in">Phiếu thu (khách trả)</option><option value="out">Phiếu chi (trả NCC)</option></Select>
-        <Select label="Đối tác" value={kind} onChange={(e) => { setKind(e.target.value as any); setPartner(null); }}><option value="">Tất cả</option><option value="customer">Khách hàng</option><option value="supplier">Nhà cung cấp</option></Select>
-        <Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option><option value="posted">Đã ghi</option><option value="reversed">Đã đảo</option></Select>
-        <Input label="Từ ngày" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        <Input label="Đến ngày" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-      </div>
-      {kind && (kind === "customer" ? <CustomerSelect value={partner as any} onChange={setPartner} label="Lọc theo khách" /> : <SupplierSelect value={partner} onChange={setPartner} />)}
-      <div className="kpis">
-        <div className="kpi"><div className="l">Tổng thu (đã ghi)</div><div className="v">{money(sum.in)}</div></div>
-        <div className="kpi"><div className="l">Tổng chi (đã ghi)</div><div className="v">{money(sum.out)}</div></div>
-      </div>
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[dir, kind, status].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Loại phiếu" value={dir} onChange={setDir} allLabel="Thu và chi" options={[{ v: "in", label: "Phiếu thu (khách trả)" }, { v: "out", label: "Phiếu chi (trả NCC)" }]} />
+        <FilterSelect label="Đối tác" value={kind} onChange={(v) => { setKind(v as any); setPartner(null); }} options={[{ v: "customer", label: "Khách hàng" }, { v: "supplier", label: "Nhà cung cấp" }]} />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={[{ v: "posted", label: "Đã ghi" }, { v: "reversed", label: "Đã đảo" }]} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã phiếu, đối tác…" label="Tìm phiếu" />
+        <span style={{ marginLeft: "auto" }}><ExportButton filename={`phieu-thu-chi-cong-no-${range.from}_${range.to}`} rows={rows} columns={[{ label: "Mã", value: (p) => p.code }, { label: "Ngày", value: (p) => fmtDateTime(p.paidAt) }, { label: "Loại", value: (p) => (p.direction === "in" ? "Thu" : "Chi") }, { label: "Đối tác", value: (p) => p.partnerName }, { label: "Hình thức", value: (p) => METHODS[p.method] ?? p.method }, { label: "Trạng thái", value: (p) => p.status }, { label: "Số tiền", value: (p) => p.amount }]} /></span>
+      </FilterBar>
+      {kind && <div style={{ maxWidth: 420 }}>{kind === "customer" ? <CustomerSelect value={partner as any} onChange={setPartner} label="Lọc theo khách" /> : <SupplierSelect value={partner} onChange={setPartner} />}</div>}
+      <KpiRow items={[{ label: "Số phiếu", value: rows.length }, { label: "Tổng thu (đã ghi)", value: money(sum.in), tone: "ok" }, { label: "Tổng chi (đã ghi)", value: money(sum.out) }, { label: "Chênh lệch", value: money(sum.in - sum.out) }]} />
       {l.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(p) => p.id} empty="Không có phiếu phù hợp" cols={[
-          { key: "c", label: "Mã", title: true, render: (p) => <b>{p.code}</b> },
-          { key: "d", label: "Ngày", render: (p) => fmtDateTime(p.paidAt) },
+        <DataTable rows={rows} rowKey={(p) => p.id} pageSize={50} emptyState={<EmptyState title={dirty ? "Không có phiếu nào khớp bộ lọc" : "Chưa có phiếu trong khoảng này"} action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}<Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button></div>} />} cols={[
+          { key: "c", label: "Mã", title: true, sort: (p) => p.code, render: (p) => <b className="nw">{p.code}</b> },
+          { key: "d", label: "Ngày", sort: (p) => p.paidAt, render: (p) => <span className="nw">{fmtDateTime(p.paidAt)}</span> },
           { key: "k", label: "Loại", render: (p) => <Badge tone={p.direction === "in" ? "ok" : "info"}>{p.direction === "in" ? "Thu" : "Chi"}</Badge> },
-          { key: "n", label: "Đối tác", render: (p) => p.partnerName ?? `#${p.partnerId}` },
-          { key: "m", label: "Hình thức", hideMobile: true, render: (p) => METHODS[p.method] ?? p.method },
+          { key: "n", label: "Đối tác", sort: (p) => p.partnerName ?? "", render: (p) => p.partnerName ?? `#${p.partnerId}` },
+          { key: "m", label: "Hình thức", hideMobile: true, hideBelow: 1280, render: (p) => METHODS[p.method] ?? p.method },
           { key: "s", label: "Trạng thái", render: (p) => (p.status === "posted" ? <Badge tone="ok">Đã ghi</Badge> : <Badge tone="danger">Đã đảo</Badge>) },
-          { key: "a", label: "Số tiền", right: true, render: (p) => <span className="money">{money(p.amount)}</span> },
+          { key: "a", label: "Số tiền", num: true, sort: (p) => p.amount, render: (p) => <span className="money">{money(p.amount)}</span> },
           { key: "r", label: "", render: (p) => (can("debt.write") && p.status === "posted" ? <Button size="sm" variant="ghost" onClick={() => setRev(p)}>Đảo phiếu</Button> : null) },
         ]} />
       )}
@@ -101,38 +109,42 @@ function BucketBar({ b, total }: { b: Record<string, number>; total: number }) {
   );
 }
 
-function Aging({ side, onOpen }: { side: "receivable" | "payable"; onOpen: (r: any) => void }) {
+function Aging({ side, onOpen, selected }: { side: "receivable" | "payable"; onOpen: (r: any) => void; selected?: number | null }) {
   const [q, setQ] = useState(""), [od, setOd] = useState(false);
-  const dq = useDebounced(q);
-  const r = useAsync(() => getRaw(side === "receivable" ? "/debts/receivables" : "/debts/payables", { q: dq, overdueOnly: od ? 1 : undefined }), [side, dq, od]);
+  const r = useAsync(() => getRaw(side === "receivable" ? "/debts/receivables" : "/debts/payables", { q, overdueOnly: od ? 1 : undefined }), [side, q, od]);
   const rows: any[] = r.data?.items ?? [];
   const t = r.data?.totals ?? { outstanding: 0, unapplied: 0, balance: 0, overdueAmount: 0 };
   const sum: Record<string, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, over90: 0 };
   for (const x of rows) for (const k of Object.keys(sum)) sum[k] += x.buckets?.[k] ?? 0;
   const nameOf = (x: any) => x.customerName ?? x.supplierName;
+  const dirty = !!(q || od);
+  const reset = () => { setQ(""); setOd(false); };
   return (
     <div className="stack">
-      <div className="kpis">
-        <div className="kpi"><div className="l">{side === "receivable" ? "Còn phải thu" : "Còn phải trả"}</div><div className="v">{money(t.outstanding)}</div></div>
-        <div className="kpi"><div className="l">Đã trả trước chưa gạch</div><div className="v" style={{ color: t.unapplied ? "var(--accent)" : undefined }}>{money(t.unapplied)}</div></div>
-        <div className="kpi"><div className="l">Số dư ròng</div><div className="v">{money(t.balance)}</div></div>
-        <div className="kpi"><div className="l">Khách dư có</div><div className="v" style={{ color: t.credit ? "var(--accent)" : undefined }}>{money(t.credit ?? 0)}</div></div>
-        <div className="kpi"><div className="l">Quá hạn</div><div className="v" style={{ color: t.overdueAmount ? "var(--warn)" : undefined }}>{money(t.overdueAmount)}</div></div>
-      </div>
+      <KpiRow cols={5} items={[
+        { label: side === "receivable" ? "Còn phải thu" : "Còn phải trả", value: money(t.outstanding) },
+        { label: "Đã trả trước chưa gạch", value: money(t.unapplied), tone: t.unapplied ? "ok" : undefined },
+        { label: "Số dư ròng", value: money(t.balance) },
+        { label: side === "receivable" ? "Khách dư có" : "NCC dư có", value: money(t.credit ?? 0), tone: t.credit ? "ok" : undefined },
+        { label: "Quá hạn", value: money(t.overdueAmount), tone: t.overdueAmount ? "warn" : undefined, onClick: () => setOd(!od) },
+      ]} />
       <Card title="Tuổi nợ"><BucketBar b={sum} total={BK.reduce((s, x) => s + sum[x.k], 0)} /></Card>
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
-        <div className="grow" style={{ minWidth: 200 }}><Input label={side === "receivable" ? "Tìm khách" : "Tìm nhà cung cấp"} value={q} onChange={(e) => setQ(e.target.value)} /></div>
-        <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={od} onChange={(e) => setOd(e.target.checked)} /> Chỉ quá hạn</label>
-      </div>
+      <FilterBar dirty={dirty} onReset={reset}>
+        <SearchInput value={q} onSearch={setQ} placeholder={side === "receivable" ? "Tên hoặc mã khách…" : "Tên hoặc mã nhà cung cấp…"} label={side === "receivable" ? "Tìm khách" : "Tìm nhà cung cấp"} />
+        <label className="row" style={{ minHeight: 40 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={od} onChange={(e) => setOd(e.target.checked)} /> Chỉ quá hạn</label>
+        <span style={{ marginLeft: "auto" }}><ExportButton filename={side === "receivable" ? "cong-no-phai-thu" : "cong-no-phai-tra"} rows={rows} columns={[{ label: side === "receivable" ? "Khách hàng" : "Nhà cung cấp", value: nameOf }, ...BK.map((b) => ({ label: b.label, value: (x: any) => x.buckets?.[b.k] ?? 0 })), { label: "Quá hạn", value: (x: any) => x.overdueAmount }, { label: "Trả trước", value: (x: any) => x.unapplied }, { label: "Số dư", value: (x: any) => x.balance }]} /></span>
+      </FilterBar>
       {r.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(x) => x.customerId ?? x.supplierId} onRowClick={onOpen} empty="Không có công nợ" cols={[
-          { key: "n", label: side === "receivable" ? "Khách hàng" : "Nhà cung cấp", title: true, render: (x) => <b>{nameOf(x)}</b> },
-          ...BK.map((b) => ({ key: b.k, label: b.label, right: true, hideMobile: true, render: (x: any) => (x.buckets?.[b.k] ? <span className="money" style={{ color: b.k === "current" ? undefined : b.color }}>{num(x.buckets[b.k])}</span> : <span className="muted">—</span>) })),
-          { key: "age", label: "Tuổi nợ", hideDesktop: true, render: (x: any) => <span className="small">{BK.filter((b) => x.buckets?.[b.k] > 0).map((b) => `${b.label}: ${num(x.buckets[b.k])}`).join(" · ") || "—"}</span> },
-          { key: "o", label: "Quá hạn", right: true, render: (x) => (x.overdueAmount ? <Badge tone="warn">{money(x.overdueAmount)}{x.oldestOverdueDays ? ` · ${x.oldestOverdueDays}n` : ""}</Badge> : <span className="muted">—</span>) },
-          { key: "u", label: "Trả trước", right: true, hideMobile: true, render: (x) => (x.unapplied ? <span className="money" style={{ color: "var(--accent)" }}>{money(x.unapplied)}</span> : "—") },
-          { key: "b", label: "Số dư", right: true, render: (x) => (x.balance < 0 ? <b className="money" style={{ color: "var(--accent)" }}>Khách dư có {money(-x.balance)}</b> : <b className="money">{money(x.balance)}</b>) },
-        ]} />
+        <DataTable rows={rows} rowKey={(x) => x.customerId ?? x.supplierId} onRowClick={onOpen} selectedKey={selected} defaultSort={{ key: "b", dir: "desc" }} pageSize={50}
+          emptyState={<EmptyState title={dirty ? "Không có công nợ nào khớp bộ lọc" : "Không có công nợ"} hint={dirty ? undefined : side === "receivable" ? "Khách chưa nợ khoản nào." : "Chưa nợ nhà cung cấp nào."} action={dirty ? <Button variant="soft" onClick={reset}>Xoá lọc</Button> : undefined} />}
+          cols={[
+            { key: "n", label: side === "receivable" ? "Khách hàng" : "Nhà cung cấp", title: true, sort: (x) => nameOf(x), render: (x) => <b>{nameOf(x)}</b> },
+            ...BK.map((b) => ({ key: b.k, label: b.label, num: true, hideMobile: true, hideBelow: (b.k === "d61_90" ? 1440 : b.k === "d31_60" ? 1280 : undefined) as any, sort: (x: any) => x.buckets?.[b.k] ?? 0, render: (x: any) => (x.buckets?.[b.k] ? <span className="money" style={{ color: b.k === "current" ? undefined : b.color }}>{num(x.buckets[b.k])}</span> : <span className="muted">—</span>) })),
+            { key: "age", label: "Tuổi nợ", hideDesktop: true, render: (x: any) => <span className="small">{BK.filter((b) => x.buckets?.[b.k] > 0).map((b) => `${b.label}: ${num(x.buckets[b.k])}`).join(" · ") || "—"}</span> },
+            { key: "o", label: "Quá hạn", num: true, sort: (x) => x.overdueAmount, render: (x) => (x.overdueAmount ? <Badge tone="warn">{money(x.overdueAmount)}{x.oldestOverdueDays ? ` · ${x.oldestOverdueDays}n` : ""}</Badge> : <span className="muted">—</span>) },
+            { key: "u", label: "Trả trước", num: true, hideMobile: true, hideBelow: 1280, sort: (x) => x.unapplied, render: (x) => (x.unapplied ? <span className="money" style={{ color: "var(--accent)" }}>{money(x.unapplied)}</span> : "—") },
+            { key: "b", label: "Số dư", num: true, sort: (x) => x.balance, render: (x) => (x.balance < 0 ? <b className="money" style={{ color: "var(--accent)" }}>{side === "receivable" ? "Khách" : "NCC"} dư có {money(-x.balance)}</b> : <b className="money">{money(x.balance)}</b>) },
+          ]} />
       )}
     </div>
   );
@@ -151,7 +163,7 @@ function PartnerSheet({ pt, id, name, onClose }: { pt: PT; id: number; name?: st
   const csv = downloadHref(`/debts/statements/${pt}/${id}?format=csv${from ? `&from=${from}` : ""}${to ? `&to=${to}` : ""}`);
   const reloadAll = () => { s.reload(); pays.reload(); };
   return (
-    <Sheet open wide onClose={onClose} title={`Sao kê ${d?.partnerName ?? name ?? ""}`}>
+    <DetailPanel onClose={onClose} title={`Sao kê ${d?.partnerName ?? name ?? ""}`}>
       <div className="stack">
         <Segmented value={tab} onChange={setTab} options={[{ v: "stmt", label: "Sao kê" }, { v: "pays", label: "Phiếu thu/chi" }]} />
         <div className="row wrap">
@@ -204,7 +216,7 @@ function PartnerSheet({ pt, id, name, onClose }: { pt: PT; id: number; name?: st
       {rev && <ReasonSheet title={`Đảo phiếu ${rev.code}`} confirm={`Đảo phiếu ${money(rev.amount)}`} danger onClose={() => setRev(null)} onSubmit={async (reason) => { await post(`/debts/payments/${rev.id}/reverse`, { reason }); toast("Đã đảo phiếu — tạo phiếu đảo ở kỳ hiện tại", "ok"); setRev(null); reloadAll(); }}>
         <Banner>Phiếu cũ không bị sửa. Các khoản đã gạch bởi phiếu này được trả về còn nợ.</Banner>
       </ReasonSheet>}
-    </Sheet>
+    </DetailPanel>
   );
 }
 
@@ -317,20 +329,28 @@ function AdjustSheet({ partnerType, partnerId, partnerName, onClose, onDone }: {
 }
 
 function Adjustments() {
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(""), [q, setQ] = useState("");
   const a = useAsync(() => get("/debts/adjustments", { status }).then((r) => items<any>(r)), [status]);
   const ST: Record<string, string> = { posted: "Đã ghi", pending_approval: "Chờ duyệt", rejected: "Bị từ chối" };
+  const term = q.trim().toLowerCase();
+  const all = a.data ?? [];
+  const rows = all.filter((x) => !term || `${x.code} ${x.reason ?? ""}`.toLowerCase().includes(term));
   return (
     <div className="stack">
-      <Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option>{Object.entries(ST).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+      <FilterBar dirty={!!(status || q)} onReset={() => { setStatus(""); setQ(""); }}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã phiếu, lý do…" label="Tìm điều chỉnh" />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(ST).map(([v, label]) => ({ v, label }))} />
+        <span style={{ marginLeft: "auto" }}><ExportButton filename="dieu-chinh-cong-no" rows={rows} columns={[{ label: "Mã", value: (x) => x.code }, { label: "Loại", value: (x) => ADJ_TYPE[x.type] ?? x.type }, { label: "Đối tác", value: (x) => `${x.partnerType} #${x.partnerId}` }, { label: "Trạng thái", value: (x) => ST[x.status] ?? x.status }, { label: "Lý do", value: (x) => x.reason }, { label: "Số tiền", value: (x) => x.amount }]} /></span>
+      </FilterBar>
+      <KpiRow items={[{ label: "Số điều chỉnh", value: rows.length }, { label: "Chờ duyệt", value: rows.filter((x) => x.status === "pending_approval").length, tone: rows.some((x) => x.status === "pending_approval") ? "warn" : undefined }, { label: "Tổng đã ghi", value: money(rows.filter((x) => x.status === "posted").reduce((s2, x) => s2 + x.amount, 0)) }]} />
       <div className="hint">Lập điều chỉnh từ màn sao kê của từng khách / nhà cung cấp (Phải thu → chọn đối tác).</div>
-      {a.loading ? <Spinner /> : <DataTable rows={a.data ?? []} rowKey={(x) => x.id} empty="Chưa có điều chỉnh" cols={[
-        { key: "c", label: "Mã", title: true, render: (x) => <b>{x.code}</b> },
-        { key: "t", label: "Loại", render: (x) => ADJ_TYPE[x.type] ?? x.type },
+      {a.loading ? <Spinner /> : <DataTable rows={rows} rowKey={(x) => x.id} pageSize={50} emptyState={<EmptyState title="Chưa có điều chỉnh công nợ" hint="Chiết khấu, xoá nợ, cấn trừ lập từ sao kê từng đối tác." />} cols={[
+        { key: "c", label: "Mã", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
+        { key: "t", label: "Loại", sort: (x) => x.type, render: (x) => ADJ_TYPE[x.type] ?? x.type },
         { key: "p", label: "Đối tác", render: (x) => `${x.partnerType === "customer" ? "Khách" : "NCC"} #${x.partnerId}` },
         { key: "s", label: "Trạng thái", render: (x) => <Badge tone={x.status === "posted" ? "ok" : x.status === "pending_approval" ? "warn" : "danger"}>{ST[x.status] ?? x.status}</Badge> },
         { key: "r", label: "Lý do", hideMobile: true, render: (x) => x.reason },
-        { key: "a", label: "Số tiền", right: true, render: (x) => <span className="money">{money(x.amount)}</span> },
+        { key: "a", label: "Số tiền", num: true, sort: (x) => x.amount, render: (x) => <span className="money">{money(x.amount)}</span> },
       ]} />}
     </div>
   );
@@ -344,12 +364,13 @@ function Reminders() {
   const rows: any[] = r.data?.items ?? [];
   return (
     <div className="stack">
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
+      <FilterBar>
         <div style={{ width: 200 }}><Input label="Sắp đến hạn trong (ngày)" inputMode="numeric" value={String(days)} onChange={(e) => setDays(Math.max(0, Math.min(60, parseInt(e.target.value) || 0)))} /></div>
         {can("debt.write") && <Button disabled={!sel.length} loading={busy} onClick={async () => { setBusy(true); try { const x = await post("/debts/reminders/send", { customerIds: sel }); toast(`Đã xếp lịch nhắc ${x.queued} khách`, "ok"); setSel([]); } catch {} finally { setBusy(false); } }}>Gửi nhắc ({sel.length})</Button>}
-      </div>
+      </FilterBar>
+      {!r.loading && rows.length > 0 && <KpiRow items={[{ label: "Khách cần nhắc", value: rows.length }, { label: "Tổng cần thu", value: money(rows.reduce((a, x) => a + x.total, 0)) }, { label: "Đã quá hạn", value: money(rows.reduce((a, x) => a + (x.overdueAmount ?? 0), 0)), tone: "warn" }]} />}
       {r.loading ? <Spinner /> : !rows.length ? <EmptyState title="Không có khoản nào sắp đến hạn / quá hạn" /> : (
-        <div className="stack">
+        <div className="card-grid">
           {rows.map((x) => (
             <div key={x.customerId} className="card flat">
               <div className="row between">
@@ -383,7 +404,7 @@ function Opening() {
   const [busy, setBusy] = useState(false), [errs, setErrs] = useState<{ row: number; message: string }[]>([]), [lock, setLock] = useState(false);
   const locked = st.data?.locked;
   return (
-    <div className="stack">
+    <div className="stack" style={{ maxWidth: 900 }}>
       {locked ? <Banner tone="info">Số dư đầu kỳ đã khoá vĩnh viễn ({fmtDateTime(st.data.lockedAt)}). Không nhập thêm được.</Banner> : <Banner>Nhập số dư công nợ đầu kỳ một lần khi bắt đầu dùng hệ thống. Sau khi chủ khoá, không thể nhập thêm.</Banner>}
       {!locked && can("debt.write") && (
         <>
