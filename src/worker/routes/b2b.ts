@@ -20,6 +20,7 @@ import {
   confirmOrderFlow, createB2bOrder, loadCustomerForOrder, loadOrderDetail, orderLineInsert, priceLines, storeIdOf, isCheckFail, DATE_RE, type LineIn,
 } from "../services/b2b-orders";
 import { enqueueJobByInvoiceCode, invoiceStmts } from "../services/b2b-invoice";
+import { assertPeriodOpen } from "../services/period";
 
 export const b2bRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -505,6 +506,8 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
   }));
   const o = await orderRow(db, oid);
   if (o.status !== "completed") throw conflict("not_returnable", "Chỉ trả hàng cho đơn đã giao", { status: o.status });
+  // B-08/EC-33: phiếu trả + hoá đơn điều chỉnh lập ngày hôm nay (không sửa số quá khứ); hôm nay thuộc kỳ khoá thì chặn
+  await assertPeriodOpen(db, new Date(), "phiếu trả hàng / hoá đơn điều chỉnh");
   const orig = await db.prepare(`SELECT * FROM invoices WHERE order_id = ? AND kind = 'sale' AND status = 'open' ORDER BY id LIMIT 1`).bind(oid).first<any>();
   if (!orig) throw conflict("not_invoiced", "Đơn chưa có hoá đơn, không cần hoá đơn điều chỉnh");
 
