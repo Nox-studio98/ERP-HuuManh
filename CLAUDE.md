@@ -9,7 +9,7 @@ Nền tảng: Cloudflare Workers, D1 (SQLite), R2, Queues, Cron. Giao diện và
 ## Đọc trước khi làm
 
 1. `docs/HANDOFF.md`: trạng thái dự án, việc còn lại, cách deploy.
-2. `docs/WIP-UX-PC.md`: **việc đang dở** (giao diện PC, nhánh `ux-2b` và `ux-2c`).
+2. `docs/WIP-UX-PC.md`: giao diện PC (đã xong bước 1, 2B, 2C): cách chụp/rà ảnh, quyết định đã chốt, việc nhỏ còn để lại.
 3. `docs/UI-KIT.md`: bộ thành phần giao diện dùng chung (danh sách, bộ lọc, khung chi tiết).
 4. `docs/GO-LIVE.md`: kế hoạch go-live.
 5. `docs/audit/README.md`: lỗi nghiệp vụ còn tồn sau audit.
@@ -44,7 +44,7 @@ Cài trong claude.ai → Settings → Plugins → Anthropic Directory. Với Cla
 
 | Plugin | Dùng khi | Skill chính |
 |---|---|---|
-| **UI Design Review** (UXKIN) | Đợt hoàn thiện giao diện PC đang dở (`docs/WIP-UX-PC.md`) | `ui-review`, `ui-polish`, `ui-compare` |
+| **UI Design Review** (UXKIN) | Rà, đánh bóng giao diện (xem `docs/WIP-UX-PC.md`) | `ui-review`, `ui-polish`, `ui-compare` |
 | **Design** (Anthropic), tuỳ chọn | Rà khả năng tiếp cận, câu chữ trên giao diện | `accessibility-review`, `ux-copy`, `design-critique` |
 | **design-skills** (Carlos Cuellar), tuỳ chọn | Tham khảo phương pháp UX: critique, design system, interaction | `design-critique`, `design-systems`, `interaction-design` |
 

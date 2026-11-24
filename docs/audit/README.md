@@ -66,4 +66,5 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - C-09 (lễ không lương), C-14 (lương tháng theo giờ làm thực tế — chọn được trong Cài đặt), C-15 (ngày phép chỉ tính ngày làm việc).
   - C-16, C-17: màn **Cài đặt** (tham số theo nhóm, nhãn "Cần xác nhận", khoá/mở khoá sổ có lý do, nhật ký thay đổi).
   - Thêm khoản mục **Số dư quỹ đầu kỳ** (không tính vào lãi lỗ) để nhập số dư khi go-live.
-- **Còn tồn sau đợt 4**: 45 lỗi trung bình/thấp còn lại trong danh sách — xử lý theo phát sinh trong tuần chạy song song.
+- **Sửa thêm (PR giao diện PC 2B+2C, 25/11/2026)**: B-17 — lọc `from`/`to` của `/debts/payments` theo ngày VN (test `test/fix-debts-payments-vn-day.test.ts`).
+- **Còn tồn sau đợt 4**: 44 lỗi trung bình/thấp còn lại trong danh sách — xử lý theo phát sinh trong tuần chạy song song.
