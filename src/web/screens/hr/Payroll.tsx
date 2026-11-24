@@ -59,7 +59,7 @@ function Periods({ onOpen }: { onOpen: (p: string) => void }) {
           {l.data!.map((p) => (
             <button key={p.period} className="dt-card" onClick={() => onOpen(p.period)}>
               <div className="row between"><b>{periodLabel(p.period)}</b><Badge tone={periodTone(p.status)}>{PERIOD_STATUS[p.status] ?? p.status}</Badge></div>
-              <div className="row between small"><span className="muted">{p.employeeCount} nhân viên</span><span className="num">Thực lĩnh {money(p.totalNet)} · Chi phí {money(p.totalCost)}</span></div>
+              <div className="row between small wrap"><span className="muted nw">{p.employeeCount} nhân viên</span><span className="num">Thực lĩnh {money(p.totalNet)} · Chi phí {money(p.totalCost)}</span></div>
             </button>
           ))}
         </div>
@@ -102,7 +102,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
           <SplitLayout open={!!row} panel={row ? <RowDetail r={row} onClose={() => setRow(null)} /> : null}>
           <DataTable<any> rows={d.items} rowKey={(r) => r.employeeId} onRowClick={setRow} selectedKey={row?.employeeId} emptyState={<EmptyState title="Kỳ này chưa có nhân viên" />}
             cols={[
-              { key: "n", label: "Nhân viên (số tiền: ₫)", title: true, sort: (r) => r.name, render: (r) => <b>{r.name} <span className="muted small">{r.code}</span></b> },
+              { key: "n", label: "Nhân viên (số tiền: ₫)", title: true, sort: (r) => r.name, render: (r) => <b>{r.name} <span className="muted small nw">{r.code}</span></b> },
               { key: "w", label: "Công", num: true, render: (r) => (r.payType === "shift" ? `${r.shifts} ca` : r.payType === "hourly" ? hm(r.workedMinutes) : `${days10(r.paidDaysX10)} ngày`) },
               { key: "b", label: "Lương", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => r.basePay, render: (r) => M(r.basePay) },
               { key: "a", label: "Phụ cấp", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => r.allowances, render: (r) => M(r.allowances) },

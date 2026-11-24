@@ -75,7 +75,7 @@ function UserForm({ u, onClose, onSaved }: { u: any; onClose: () => void; onSave
         {isNew
           ? <Input label="Mật khẩu tạm (≥ 8 ký tự, để trống: hệ thống tự sinh)" type="text" value={f.tempPassword} onChange={(e) => setF({ ...f, tempPassword: e.target.value })} hint="Người dùng sẽ phải đổi mật khẩu khi đăng nhập lần đầu." />
           : <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.reset} onChange={(e) => setF({ ...f, reset: e.target.checked })} /> Đặt lại mật khẩu tạm (hệ thống sinh mã mới, thu hồi phiên)</label>}
-        {!isNew && <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Cho phép đăng nhập {!f.active && <span className="err">(khoá sẽ đăng xuất mọi phiên)</span>}</label>}
+        {!isNew && <label className="row wrap" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> <span>Cho phép đăng nhập</span> {!f.active && <span className="err small">(khoá sẽ đăng xuất mọi phiên)</span>}</label>}
       </div>
     </DetailPanel>
   );

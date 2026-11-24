@@ -46,12 +46,12 @@ function Funds({ funds, loading, reloadKey, onOpen, onAdd }: { funds: any[]; loa
   if (loading) return <Spinner />;
   return (
     <div className="stack">
-      <KpiRow cols={Math.min(5, funds.length + 1)} items={[
+      <KpiRow cols={funds.length + 1 > 5 ? 3 : funds.length + 1} items={[
         { label: "Tổng số dư", value: <span style={{ color: total < 0 ? "var(--danger)" : undefined }}>{money(total)}</span>, sub: `${funds.length} quỹ` },
         ...funds.map((f) => ({ label: f.name, value: <span style={{ color: f.balance < 0 ? "var(--danger)" : undefined }}>{money(f.balance)}</span>, sub: f.type === "bank" ? "Ngân hàng" : "Tiền mặt", onClick: () => onOpen(String(f.id)) })),
       ]} />
       <div className="two-col wide-left">
-        <Card title="Phiếu thu chi gần đây" actions={<Button size="sm" variant="ghost" onClick={() => onOpen()}>Xem tất cả →</Button>}>
+        <Card title="Phiếu thu chi gần đây" className="finance-recent" actions={<Button size="sm" variant="ghost" onClick={() => onOpen()}>Xem tất cả →</Button>}>
           {recent.loading ? <Spinner /> : (
             <DataTable rows={recent.data ? items<any>(recent.data) : []} rowKey={(x) => x.id} onRowClick={() => onOpen()}
               emptyState={<EmptyState title="Tháng này chưa có phiếu thu chi" hint="Lập phiếu để ghi nhận tiền vào / ra các quỹ." action={can("finance.write") ? <div className="row wrap" style={{ justifyContent: "center" }}><Button variant="soft" onClick={() => onAdd("in")}>+ Phiếu thu</Button><Button onClick={() => onAdd("out")}>+ Phiếu chi</Button></div> : undefined} />}

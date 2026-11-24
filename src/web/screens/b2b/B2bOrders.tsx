@@ -33,7 +33,7 @@ function OrderList() {
   const dirty = !!(status || day || cust || q);
   const reset = () => { setStatus(""); setDay(""); setCust(""); setQ(""); };
   const tabs = can("b2b.write") ? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} /> : null;
-  if (tab === "recurring") return <div className="stack">{tabs ?? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />}<Recurring /></div>;
+  if (tab === "recurring") return <Recurring tabs={tabs ?? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />} />;
   const rangeLabel = range.from === range.to ? ymd(range.from) : `${ymd(range.from)} – ${ymd(range.to)}`;
   return (
     <div className="stack">
@@ -52,7 +52,7 @@ function OrderList() {
         <label className="field"><span className="lbl">Ngày giao</span><input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} style={{ minHeight: 40 }} /></label>
       </>}>
         <DateRangeFilter value={range} onChange={setRange} presets={["today", "7d", "month", "lastMonth", "custom"]} />
-        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên khách…" label="Tìm đơn sỉ" />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, khách…" label="Tìm đơn sỉ" />
       </FilterBar>
       <KpiRow items={[
         { label: "Số đơn", value: sum ? sum.count : "—", sub: sum ? `${by("cancelled")} đã huỷ` : undefined },

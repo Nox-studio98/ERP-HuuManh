@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { get, items, post, put } from "../../api";
 import { Badge, Button, Card, EmptyState, Input, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -10,7 +10,7 @@ import { CustomerSelect, LinesEditor, linePayload, qtyU, ymd, type CustomerLite,
 const WD: [number, string][] = [[1, "T2"], [2, "T3"], [3, "T4"], [4, "T5"], [5, "T6"], [6, "T7"], [7, "CN"]];
 const wdText = (w: number[]) => (w.length === 7 ? "Hằng ngày" : WD.filter(([n]) => w.includes(n)).map(([, l]) => l).join(", "));
 
-export default function Recurring() {
+export default function Recurring({ tabs }: { tabs?: ReactNode } = {}) {
   const list = useAsync(() => get("/b2b/recurring").then((r) => items<any>(r)), []);
   const [q, setQ] = useState(""), [cust, setCust] = useState(""), [act, setAct] = useState("");
   const all = list.data ?? [];
@@ -28,6 +28,7 @@ export default function Recurring() {
   return (
     <div className="stack" data-testid="recurring">
       <PageHeader compact subtitle="Mẫu đơn tự sinh lúc 08:00 cho ngày giao hôm sau theo các thứ đã chọn." actions={<Button onClick={() => setEdit("new")}>+ Mẫu đơn lặp</Button>} />
+      {tabs}
       <FilterBar dirty={dirty} onReset={reset} activeCount={[cust, act].filter(Boolean).length} advanced={<>
         <FilterSelect label="Khách hàng" value={cust} onChange={setCust} options={custOpts} />
         <FilterSelect label="Trạng thái" value={act} onChange={setAct} options={[{ v: "1", label: "Đang chạy" }, { v: "0", label: "Đã tắt" }]} />
