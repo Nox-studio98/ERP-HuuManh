@@ -86,9 +86,10 @@ authRoutes.post("/logout", requireAuth, async (c) => {
   return c.json({ ok: true });
 });
 
-authRoutes.get("/me", requireAuth, (c) => {
+authRoutes.get("/me", requireAuth, async (c) => {
   const u = c.get("user");
-  return c.json({ ...u, sessionId: undefined, permissions: [...ROLE_PERMS[u.role]] });
+  const store = u.storeId ? await c.env.DB.prepare(`SELECT name FROM stores WHERE id = ?`).bind(u.storeId).first<{ name: string }>() : null;
+  return c.json({ ...u, sessionId: undefined, storeName: store?.name ?? null, permissions: [...ROLE_PERMS[u.role]] });
 });
 
 authRoutes.post("/change-password", requireAuth, async (c) => {

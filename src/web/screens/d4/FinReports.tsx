@@ -17,7 +17,6 @@ export default function FinReports() {
   const ranged = tab === "cash" || tab === "pnl";
   return (
     <div className="stack d4">
-      <div className="page-head"><h1 style={{ margin: 0 }}>Báo cáo tài chính</h1></div>
       <Segmented wrap value={tab} onChange={setTab} options={[{ v: "cash", label: "Dòng tiền" }, { v: "pnl", label: "Lãi lỗ theo kênh" }, { v: "vat", label: "Thuế GTGT" }, { v: "budget", label: "Ngân sách & thực tế" }]} />
       {ranged ? <div className="grid2"><Input label="Từ ngày" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /><Input label="Đến ngày" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></div>
         : <Input label="Kỳ (tháng)" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} />}

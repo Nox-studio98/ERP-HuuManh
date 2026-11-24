@@ -3,6 +3,8 @@ import { ApiError, get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { Scanner } from "../../components/Scanner";
 import { toast } from "../../components/toast";
+import { navigate } from "../../router";
+import { useCan } from "../../store";
 import { money, todayVN } from "../../format";
 import { CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, addDaysS, days10, dm, dmy, errCode, hm, periodLabel, reqTone, useLeaveTypes, vnIso, vnTime, WD_SHORT, wdOf } from "./kit";
 
@@ -12,11 +14,35 @@ const TABS: { v: Tab; label: string }[] = [
   { v: "ot", label: "Đăng ký tăng ca" }, { v: "corr", label: "Quên chấm công" }, { v: "payslip", label: "Phiếu lương" },
 ];
 
+/** Tài khoản chủ/admin có thể chưa có hồ sơ nhân viên: không có chấm công/lịch ca/phiếu lương. */
+function NoProfile() {
+  const can = useCan();
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <Card>
+        <EmptyState
+          title="Tài khoản này chưa gắn hồ sơ nhân viên"
+          hint="Chấm công, lịch ca, phiếu lương chỉ dành cho nhân viên."
+          action={can("hr.view", "hr.manage") ? <Button onClick={() => navigate("/hr/employees")}>Mở Nhân sự</Button> : undefined}
+        />
+      </Card>
+    </div>
+  );
+}
+
 export default function Me() {
   const [tab, setTab] = useState<Tab>("today");
   const [prefill, setPrefill] = useState<any>(null);
+  const [linked, setLinked] = useState<"loading" | "yes" | "no">("loading");
+  useEffect(() => {
+    get("/me/attendance/today", undefined, { silent: true })
+      .then(() => setLinked("yes"))
+      .catch((e) => setLinked(e instanceof ApiError && e.code === "employee_not_linked" ? "no" : "yes")); // lỗi khác: để các tab tự báo
+  }, []);
+  if (linked === "loading") return <Spinner />;
+  if (linked === "no") return <NoProfile />;
   return (
-    <div className="stack" style={{ maxWidth: 640, margin: "0 auto" }}>
+    <div className="stack" style={{ maxWidth: 640 }}>
       <Segmented wrap value={tab} onChange={setTab} options={TABS} />
       {tab === "today" && <Today onCorrection={(p) => { setPrefill(p); setTab("corr"); }} />}
       {tab === "schedule" && <MySchedule />}
@@ -57,7 +83,7 @@ function Today({ onCorrection }: { onCorrection: (p: any) => void }) {
 
   const load = useCallback(async () => {
     try { setD(await get("/me/attendance/today", undefined, { silent: true })); setNoEmp(false); }
-    catch (e) { if (e instanceof ApiError && e.code === "employee_not_found") setNoEmp(true); else if (!(e instanceof ApiError && e.status === 0)) toast((e as Error).message, "error"); }
+    catch (e) { if (e instanceof ApiError && e.code === "employee_not_linked") setNoEmp(true); else if (!(e instanceof ApiError && e.status === 0)) toast((e as Error).message, "error"); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
