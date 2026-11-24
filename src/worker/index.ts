@@ -62,7 +62,12 @@ app.onError(onError);
 
 // Ảnh sản phẩm / CMS từ R2 (cùng quy tắc với shop worker): chỉ prefix products/ và cms/, chặn "..".
 app.get("/img/*", async (c) => {
-  const key = decodeURIComponent(c.req.path.slice("/img/".length));
+  let key: string;
+  try {
+    key = decodeURIComponent(c.req.path.slice("/img/".length));
+  } catch {
+    return c.text("Not found", 404);
+  }
   if (!/^(products|cms)\//.test(key) || key.includes("..") || key.includes("\\")) return c.text("Not found", 404);
   const obj = await c.env.FILES.get(key);
   if (!obj) return c.text("Not found", 404);

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppBindings } from "../env";
 import { AppError, conflict, forbidden, notFound, onError } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
+import { assertStmt } from "../services/guard";
 import { hashPassword, randomToken } from "../lib/crypto";
 import { can, requirePerm } from "../lib/rbac";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
@@ -36,6 +37,29 @@ const idOf = (c: Ctx, name = "id") => {
 const sensOf = (c: Ctx) => can(c.get("user").role, "hr.sensitive");
 const bool = (v: unknown) => !!v;
 const nowIso = () => new Date().toISOString();
+
+/** Segregation of duties: người duyệt không được là người yêu cầu / đối tượng của yêu cầu (trừ chủ). */
+async function assertNotSelf(c: Ctx, o: { requestedBy?: number | null; employeeIds?: (number | null | undefined)[]; userIds?: (number | null | undefined)[] }) {
+  const u = c.get("user");
+  if (u.role === "owner") return;
+  const selfErr = () => new AppError(403, "self_approval", "Không được tự duyệt yêu cầu của chính mình");
+  if (o.requestedBy != null && o.requestedBy === u.id) throw selfErr();
+  if (o.userIds?.some((x) => x != null && x === u.id)) throw selfErr();
+  const ids = (o.employeeIds ?? []).filter((x): x is number => x != null);
+  if (ids.length) {
+    const mine = await c.env.DB.prepare(`SELECT id FROM employees WHERE user_id = ?`).bind(u.id).first<{ id: number }>();
+    if (mine && ids.includes(mine.id)) throw selfErr();
+  }
+}
+const SENS_FIELDS = new Set(["baseSalary", "hourlyRate", "shiftRate", "insuranceSalary", "idNumber", "bankAccount", "bankName", "dob", "address", "dependents", "salary", "amount", "phone", "email", "pitEnabled"]);
+/** Nhật ký chỉ ghi TÊN trường nhạy cảm đã đổi, không ghi giá trị. */
+function redactSens(o: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const changed: string[] = [];
+  for (const [k, v] of Object.entries(o)) (SENS_FIELDS.has(k) ? changed.push(k) : (out[k] = v));
+  if (changed.length) out.changed = changed;
+  return out;
+}
 const SENS_ERR = () => forbidden("sensitive_forbidden", "Cần quyền xem dữ liệu nhạy cảm (lương, CCCD, ngân hàng…)");
 
 // ============================================================================================
@@ -153,6 +177,9 @@ hrRoutes.post("/employees", requirePerm("hr.manage"), async (c) => {
   let tempPassword: string | undefined;
   const userStmts: D1PreparedStatement[] = [];
   if (body.createUser) {
+    const callerRole = c.get("user").role;
+    const r = body.createUser.role;
+    if (callerRole === "owner" ? r === "owner" : r !== "staff") throw forbidden("role_forbidden", "Không đủ quyền tạo tài khoản với vai trò này");
     const dup = await db.prepare(`SELECT id FROM users WHERE username = ?`).bind(body.createUser.username).first();
     if (dup) throw conflict("username_taken", "Tên đăng nhập đã tồn tại");
     tempPassword = randomToken(9);
@@ -217,7 +244,7 @@ hrRoutes.put("/employees/:id", requirePerm("hr.manage"), async (c) => {
   if (!sets.length) throw new AppError(422, "validation_error", "Không có thay đổi nào");
   const res = await db.batch([
     db.prepare(`UPDATE employees SET ${sets.join(", ")}, version = version + 1 WHERE id = ? AND version = ?`).bind(...params, id, body.version),
-    auditStmt(c, { action: "hr.employee.update", entity: "employee", entityId: id, before: b, after: a }),
+    auditStmt(c, { action: "hr.employee.update", entity: "employee", entityId: id, before: redactSens(b), after: redactSens(a) }),
   ]);
   if (res[0].meta.changes === 0) throw conflict("version_conflict", "Hồ sơ vừa được người khác sửa, hãy tải lại");
   return c.json(await employeeDetail(c, id));
@@ -230,6 +257,13 @@ hrRoutes.post("/employees/:id/terminate", requirePerm("hr.manage"), async (c) =>
   const e = await db.prepare(`SELECT id, user_id, status, hire_date FROM employees WHERE id = ?`).bind(id).first<any>();
   if (!e) throw notFound("employee_not_found", "Không tìm thấy nhân viên");
   if (e.status === "terminated") throw conflict("already_terminated", "Nhân viên đã nghỉ việc");
+  if (e.user_id) {
+    const me = c.get("user");
+    const tu = await db.prepare(`SELECT role FROM users WHERE id = ?`).bind(e.user_id).first<{ role: string }>();
+    if (e.user_id === me.id || (me.role !== "owner" && tu && ["owner", "manager", "accountant"].includes(tu.role))) {
+      throw forbidden("terminate_forbidden", "Không được cho nghỉ việc / khoá tài khoản này");
+    }
+  }
   if (body.terminationDate < e.hire_date) throw new AppError(422, "validation_error", "Ngày nghỉ việc trước ngày vào làm");
   const at = nowIso();
   const stmts = [
@@ -263,7 +297,7 @@ hrRoutes.post("/employees/:id/contracts", requirePerm("hr.manage"), async (c) =>
   const db = c.env.DB;
   const r = await db.prepare(`INSERT INTO employee_contracts(employee_id, type, start_date, end_date, salary, file_key, note, created_by) VALUES (?,?,?,?,?,?,?,?)`)
     .bind(id, b.type, b.startDate, b.endDate ?? null, b.salary ?? null, b.fileKey ?? null, b.note ?? null, c.get("user").id).run();
-  await auditStmt(c, { action: "hr.contract.create", entity: "employee", entityId: id, after: { ...b, contractId: r.meta.last_row_id } }).run();
+  await auditStmt(c, { action: "hr.contract.create", entity: "employee", entityId: id, after: { ...redactSens(b), contractId: r.meta.last_row_id } }).run();
   return c.json({ id: r.meta.last_row_id }, 201);
 });
 
@@ -279,7 +313,7 @@ hrRoutes.put("/employees/:id/contracts/:cid", requirePerm("hr.manage"), async (c
   if (!sets.length) throw new AppError(422, "validation_error", "Không có thay đổi nào");
   await db.batch([
     db.prepare(`UPDATE employee_contracts SET ${sets.map((k) => `${map[k]}=?`).join(", ")} WHERE id=?`).bind(...sets.map((k) => (b as any)[k]), cid),
-    auditStmt(c, { action: "hr.contract.update", entity: "employee", entityId: id, before: Object.fromEntries(sets.map((k) => [k, before[map[k]]])), after: b }),
+    auditStmt(c, { action: "hr.contract.update", entity: "employee", entityId: id, before: redactSens(Object.fromEntries(sets.map((k) => [k, before[map[k]]]))), after: redactSens(b) }),
   ]);
   return c.json({ id: cid });
 });
@@ -289,7 +323,7 @@ hrRoutes.post("/employees/:id/allowances", requirePerm("hr.manage", "hr.sensitiv
   const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), amount: money, taxable: z.boolean().optional() }));
   await requireEmployee(c, id);
   const r = await c.env.DB.prepare(`INSERT INTO employee_allowances(employee_id, name, amount, taxable) VALUES (?,?,?,?)`).bind(id, b.name, b.amount, b.taxable === false ? 0 : 1).run();
-  await auditStmt(c, { action: "hr.allowance.create", entity: "employee", entityId: id, after: { ...b, allowanceId: r.meta.last_row_id } }).run();
+  await auditStmt(c, { action: "hr.allowance.create", entity: "employee", entityId: id, after: { ...redactSens(b), allowanceId: r.meta.last_row_id } }).run();
   return c.json({ id: r.meta.last_row_id }, 201);
 });
 
@@ -304,7 +338,7 @@ hrRoutes.put("/employees/:id/allowances/:aid", requirePerm("hr.manage"), async (
   const v = (k: string) => { const x = (b as any)[k]; return typeof x === "boolean" ? (x ? 1 : 0) : x; };
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE employee_allowances SET ${keys.map((k) => `${k}=?`).join(", ")} WHERE id=?`).bind(...keys.map(v), aid),
-    auditStmt(c, { action: "hr.allowance.update", entity: "employee", entityId: id, before: Object.fromEntries(keys.map((k) => [k, before[k]])), after: b }),
+    auditStmt(c, { action: "hr.allowance.update", entity: "employee", entityId: id, before: redactSens(Object.fromEntries(keys.map((k) => [k, before[k]]))), after: redactSens(b) }),
   ]);
   return c.json({ id: aid });
 });
@@ -518,7 +552,9 @@ hrRoutes.post("/schedule/swaps/:id/decide", requirePerm("hr.schedule"), async (c
   if (!s) throw notFound("swap_not_found", "Không tìm thấy yêu cầu đổi ca");
   if (!["pending", "accepted"].includes(s.status)) throw conflict("already_decided", "Yêu cầu đã được xử lý");
   const uid = c.get("user").id;
-  const stmts: D1PreparedStatement[] = [];
+  const fromA = await db.prepare(`SELECT employee_id FROM shift_assignments WHERE id=?`).bind(s.from_assignment_id).first<{ employee_id: number }>();
+  await assertNotSelf(c, { requestedBy: s.requested_by, employeeIds: [fromA?.employee_id, s.to_employee_id] });
+  const stmts: D1PreparedStatement[] = [assertStmt(db, "swap.decide", `SELECT status = ? FROM shift_swap_requests WHERE id = ?`, [s.status, id])];
   if (b.decision === "approved") {
     if (s.status !== "accepted") throw conflict("not_accepted", "Nhân viên nhận ca chưa chấp nhận");
     const from = await db.prepare(`SELECT * FROM shift_assignments WHERE id=?`).bind(s.from_assignment_id).first<any>();
@@ -756,8 +792,9 @@ hrRoutes.post("/attendance/corrections/:id/decide", requirePerm("hr.schedule"), 
   const r = await db.prepare(`SELECT * FROM attendance_corrections WHERE id=?`).bind(id).first<any>();
   if (!r) throw notFound("correction_not_found", "Không tìm thấy yêu cầu");
   if (r.status !== "pending") throw conflict("already_decided", "Yêu cầu đã được xử lý");
+  await assertNotSelf(c, { requestedBy: r.requested_by, employeeIds: [r.employee_id] });
   const at = nowIso();
-  const stmts = [db.prepare(`UPDATE attendance_corrections SET status=?, decided_by=?, decided_at=?, decision_note=? WHERE id=? AND status='pending'`).bind(b.decision, uid, at, b.note ?? null, id)];
+  const stmts = [assertStmt(db, "correction.decide", `SELECT status = 'pending' FROM attendance_corrections WHERE id = ?`, [id]), db.prepare(`UPDATE attendance_corrections SET status=?, decided_by=?, decided_at=?, decision_note=? WHERE id=? AND status='pending'`).bind(b.decision, uid, at, b.note ?? null, id)];
   if (b.decision === "approved") {
     if (!r.kind || !r.requested_at) throw new AppError(422, "incomplete_correction", "Yêu cầu thiếu loại (vào/ra) hoặc giờ đề nghị, không thể tạo bản ghi chấm công");
     await assertPeriodsOpen(db, [r.work_date, vnDate(new Date(r.requested_at))]);
@@ -806,8 +843,10 @@ hrRoutes.post("/attendance/punches/:id/decide", requirePerm("hr.schedule"), asyn
   if (!p) throw notFound("punch_not_found", "Không tìm thấy lần chấm công");
   if (p.status !== "pending") throw conflict("already_decided", "Lần chấm công không ở trạng thái chờ duyệt");
   await assertPeriodsOpen(db, [vnDate(new Date(p.server_at))]);
+  await assertNotSelf(c, { requestedBy: p.created_by, employeeIds: [p.employee_id] });
   const status = b.decision === "rejected" ? "rejected" : "accepted";
   await db.batch([
+    assertStmt(db, "punch.decide", `SELECT status = 'pending' FROM attendance_punches WHERE id = ?`, [id]),
     db.prepare(`UPDATE attendance_punches SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(status, c.get("user").id, nowIso(), id),
     auditStmt(c, { action: `hr.punch.${status}`, entity: "attendance_punch", entityId: id, before: { status: "pending" }, after: { status }, reason: b.note }),
   ]);
@@ -832,8 +871,9 @@ hrRoutes.post("/devices/requests/:id/decide", requirePerm("hr.schedule"), async 
   if (!r) throw notFound("request_not_found", "Không tìm thấy yêu cầu");
   if (r.status !== "pending") throw conflict("already_decided", "Yêu cầu đã được xử lý");
   const uid = c.get("user").id;
+  await assertNotSelf(c, { userIds: [r.user_id] });
   const at = nowIso();
-  const stmts = [db.prepare(`UPDATE devices_registry_requests SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(b.decision, uid, at, id)];
+  const stmts = [assertStmt(db, "device.decide", `SELECT status = 'pending' FROM devices_registry_requests WHERE id = ?`, [id]), db.prepare(`UPDATE devices_registry_requests SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(b.decision, uid, at, id)];
   if (b.decision === "approved") {
     const dev = await db.prepare(`SELECT user_id FROM devices WHERE id=?`).bind(r.device_id).first<{ user_id: number }>();
     if (dev && dev.user_id !== r.user_id) throw conflict("device_taken", "Thiết bị đang đăng ký cho tài khoản khác");
@@ -913,11 +953,13 @@ hrRoutes.post("/leave-requests/:id/decide", requirePerm("hr.schedule"), async (c
   const r = await db.prepare(`SELECT * FROM leave_requests WHERE id=?`).bind(id).first<any>();
   if (!r) throw notFound("leave_not_found", "Không tìm thấy đơn nghỉ");
   if (r.status !== "pending") throw conflict("already_decided", "Đơn đã được xử lý");
+  await assertNotSelf(c, { requestedBy: r.requested_by, employeeIds: [r.employee_id] });
   if (b.decision === "approved") {
     if (r.over_balance && !b.allowOverBalance) throw conflict("over_balance", "Đơn vượt số ngày phép còn lại — cần duyệt ngoại lệ (allowOverBalance: true)");
     await assertPeriodsOpen(db, eachDate(r.from_date, r.to_date));
   }
   await db.batch([
+    assertStmt(db, "leave.decide", `SELECT status = 'pending' FROM leave_requests WHERE id = ?`, [id]),
     db.prepare(`UPDATE leave_requests SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(b.decision, c.get("user").id, nowIso(), id),
     auditStmt(c, { action: `hr.leave.${b.decision}`, entity: "leave_request", entityId: id, before: { status: "pending" }, after: { status: b.decision, overBalanceException: !!(r.over_balance && b.allowOverBalance) }, reason: b.note }),
   ]);
@@ -942,6 +984,7 @@ hrRoutes.post("/overtime-requests", requirePerm("hr.schedule"), async (c) => {
   const b = await parseBody(c, z.object({ employeeId: z.number().int().positive(), workDate: dateS, minutes: z.number().int().min(1).max(720), multiplierBp: z.number().int().min(10000).max(50000).optional(), reason: z.string().trim().max(300).optional() }));
   const db = c.env.DB;
   await requireEmployee(c, b.employeeId);
+  await assertNotSelf(c, { employeeIds: [b.employeeId] });
   await assertPeriodsOpen(db, [b.workDate]);
   const uid = c.get("user").id;
   const r = await db.prepare(`INSERT INTO overtime_requests(employee_id, work_date, minutes, multiplier_bp, reason, status, requested_by, decided_by, decided_at) VALUES (?,?,?,?,?, 'approved', ?,?,?)`)
@@ -963,8 +1006,10 @@ hrRoutes.post("/overtime-requests/:id/decide", requirePerm("hr.schedule"), async
   const r = await db.prepare(`SELECT * FROM overtime_requests WHERE id=?`).bind(id).first<any>();
   if (!r) throw notFound("overtime_not_found", "Không tìm thấy yêu cầu tăng ca");
   if (r.status !== "pending") throw conflict("already_decided", "Yêu cầu đã được xử lý");
+  await assertNotSelf(c, { requestedBy: r.requested_by, employeeIds: [r.employee_id] });
   await assertPeriodsOpen(db, [r.work_date]);
   await db.batch([
+    assertStmt(db, "overtime.decide", `SELECT status = 'pending' FROM overtime_requests WHERE id = ?`, [id]),
     db.prepare(`UPDATE overtime_requests SET status=?, decided_by=?, decided_at=?, multiplier_bp=COALESCE(?, multiplier_bp) WHERE id=? AND status='pending'`).bind(b.decision, c.get("user").id, nowIso(), b.multiplierBp ?? null, id),
     auditStmt(c, { action: `hr.overtime.${b.decision}`, entity: "overtime_request", entityId: id, before: { status: "pending" }, after: { status: b.decision, minutes: r.minutes }, reason: b.note }),
   ]);

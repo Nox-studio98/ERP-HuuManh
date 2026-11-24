@@ -63,6 +63,7 @@ adminRoutes.post("/approvals/:id/decide", requirePerm("approvals.decide"), async
   const handler = getApprovalHandler(a.type as string);
   const need = handler?.perm ?? NEEDS[a.type as string];
   if (need && !can(user.role, need)) throw new AppError(403, "forbidden", "Bạn không có quyền duyệt loại yêu cầu này");
+  if (user.role !== "owner" && a.requested_by === user.id) throw new AppError(403, "self_approval", "Không được tự duyệt yêu cầu của chính mình");
   const refId = Number(a.ref_id);
   const finish = [
     db
@@ -203,7 +204,12 @@ adminRoutes.get("/audit", requirePerm("audit.view"), async (c) => {
       .bind(...params, limit + 1)
       .all<any>()
   ).results;
-  const items = rows.slice(0, limit);
+  const sens = can(c.get("user").role, "hr.sensitive");
+  const items = rows.slice(0, limit).map((r) =>
+    !sens && (/^(hr|payroll)\./.test(r.action) || ["employee", "salary_advance"].includes(r.entity) || String(r.entity ?? "").startsWith("payroll"))
+      ? { ...r, before_json: r.before_json ? '"***"' : null, after_json: r.after_json ? '"***"' : null }
+      : r,
+  );
   return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
 });
 

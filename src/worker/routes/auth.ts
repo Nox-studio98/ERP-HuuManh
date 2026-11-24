@@ -7,6 +7,7 @@ import { AppError } from "../lib/errors";
 import { audit } from "../lib/audit";
 import { requireAuth, SESSION_COOKIE } from "../lib/auth";
 import { ROLE_PERMS } from "../lib/rbac";
+import { parseBody } from "../services/http";
 
 const MAX_FAILS = 5;
 const LOCK_MINUTES = 15;
@@ -18,9 +19,14 @@ const PasswordSchema = z.string().min(10, "Mật khẩu tối thiểu 10 ký t�
 export const authRoutes = new Hono<AppBindings>();
 
 authRoutes.post("/login", async (c) => {
-  const body = z
-    .object({ username: z.string().min(1).max(64), password: z.string().min(1).max(128), deviceId: z.string().max(64).optional() })
-    .parse(await c.req.json());
+  if (c.env.RL_AUTH && c.env.APP_ENV !== "dev") {
+    const rl = await c.env.RL_AUTH.limit({ key: `login:${c.req.header("cf-connecting-ip") ?? "unknown"}` });
+    if (!rl.success) throw new AppError(429, "rate_limited", "Quá nhiều lần thử, vui lòng thử lại sau");
+  }
+  const body = await parseBody(
+    c,
+    z.object({ username: z.string().min(1).max(64), password: z.string().min(1).max(128), deviceId: z.string().max(64).optional() }),
+  );
 
   const u = await c.env.DB.prepare(
     `SELECT id, pass_hash, role, active, failed_logins, locked_until, must_change_password FROM users WHERE username = ?`,
@@ -29,17 +35,21 @@ authRoutes.post("/login", async (c) => {
     .first<{ id: number; pass_hash: string; role: string; active: number; failed_logins: number; locked_until: string | null; must_change_password: number }>();
 
   const now = new Date();
-  if (u?.locked_until && u.locked_until > now.toISOString()) {
-    throw new AppError(429, "account_locked", "Tài khoản tạm khoá do đăng nhập sai nhiều lần");
-  }
+  // Luôn chạy PBKDF2 (hash giả khi không có user) và trả cùng một lỗi cho: sai mật khẩu / không tồn tại / đang khoá
+  const locked = !!(u?.locked_until && u.locked_until > now.toISOString());
   const ok = await verifyPassword(body.password, u?.pass_hash ?? DUMMY_HASH);
-  if (!u || !ok || !u.active) {
+  if (!u || !ok || !u.active || locked) {
     if (u) {
-      const fails = u.failed_logins + 1;
-      const lock = fails >= MAX_FAILS ? new Date(now.getTime() + LOCK_MINUTES * 60_000).toISOString() : null;
-      await c.env.DB.prepare(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`)
-        .bind(lock ? 0 : fails, lock, u.id)
-        .run();
+      if (locked) {
+        await audit(c, { action: "auth.login_blocked_locked", entity: "user", entityId: u.id }, u.id);
+      } else {
+        const fails = u.failed_logins + 1;
+        const lock = fails >= MAX_FAILS ? new Date(now.getTime() + LOCK_MINUTES * 60_000).toISOString() : null;
+        await c.env.DB.prepare(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`)
+          .bind(lock ? 0 : fails, lock, u.id)
+          .run();
+        if (lock) await audit(c, { action: "auth.account_locked", entity: "user", entityId: u.id, after: { lockedUntil: lock } }, u.id);
+      }
     }
     await audit(c, { action: "auth.login_failed", entity: "user", entityId: body.username }, u?.id ?? null);
     throw new AppError(401, "invalid_credentials", "Sai tên đăng nhập hoặc mật khẩu");
@@ -71,6 +81,7 @@ authRoutes.post("/login", async (c) => {
 authRoutes.post("/logout", requireAuth, async (c) => {
   const u = c.get("user");
   await c.env.DB.prepare(`UPDATE sessions SET revoked_at = ? WHERE id = ?`).bind(new Date().toISOString(), u.sessionId).run();
+  await audit(c, { action: "auth.logout", entity: "user", entityId: u.id });
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
   return c.json({ ok: true });
 });
@@ -82,7 +93,7 @@ authRoutes.get("/me", requireAuth, (c) => {
 
 authRoutes.post("/change-password", requireAuth, async (c) => {
   const u = c.get("user");
-  const body = z.object({ current: z.string(), next: PasswordSchema }).parse(await c.req.json());
+  const body = await parseBody(c, z.object({ current: z.string(), next: PasswordSchema }));
   const row = await c.env.DB.prepare(`SELECT pass_hash FROM users WHERE id = ?`).bind(u.id).first<{ pass_hash: string }>();
   if (!row || !(await verifyPassword(body.current, row.pass_hash))) throw new AppError(401, "invalid_credentials", "Mật khẩu hiện tại không đúng");
   await c.env.DB.batch([
