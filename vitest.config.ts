@@ -13,6 +13,7 @@ export default defineConfig(async () => {
         },
       }),
     ],
-    test: { include: ["test/**/*.test.ts"], setupFiles: ["./test/apply-migrations.ts"] },
+    // testTimeout: một số test gọi nhiều API liên tiếp, máy bận có thể vượt mặc định 5 giây
+    test: { include: ["test/**/*.test.ts"], setupFiles: ["./test/apply-migrations.ts"], testTimeout: 20000, hookTimeout: 30000 },
   };
 });

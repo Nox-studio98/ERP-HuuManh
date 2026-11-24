@@ -27,6 +27,8 @@ export const PERMISSIONS = [
   "competitors.view", "competitors.write", "purchasing.view", "promotions.write", "promotions.approve", "loyalty.adjust",
   // Chung
   "reports.view", "customers.view_pii", "users.manage", "audit.view", "approvals.decide",
+  // Cài đặt hệ thống: xem (chủ + quản lý), sửa (chỉ chủ)
+  "settings.view", "settings.manage",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -39,7 +41,7 @@ export const ROLE_PERMS: Record<Role, ReadonlySet<Permission>> = {
     "inventory.view", "inventory.write", "inventory.approve", "products.write",
     "prices.view_sell", "prices.view_cost", "prices.write", "prices.approve",
     "finance.view", "finance.shift_reconcile",
-    "reports.view", "customers.view_pii", "approvals.decide", "audit.view",
+    "reports.view", "customers.view_pii", "approvals.decide", "audit.view", "settings.view",
     "b2b.view", "b2b.write", "b2b.approve", "b2b.deliver", "debt.view", "debt.write", "invoices.issue",
     // M9: quản lý xem chấm công, xếp ca, duyệt quên chấm/phép/tăng ca (không xem lương)
     "hr.self", "hr.view", "hr.schedule",

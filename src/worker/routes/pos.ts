@@ -7,7 +7,7 @@ import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { lineAmount } from "../lib/money";
-import { vnDayRangeUtc, vnPeriod } from "../lib/time";
+import { vnDate, vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
 import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
@@ -133,7 +133,15 @@ async function expectedCash(db: D1Database, shift: { id: number; opening_cash: n
     )
     .bind((shift as any).fund_id, (shift as any).user_id, (shift as any).opened_at, (shift as any).closed_at ?? null, (shift as any).closed_at ?? null)
     .first<{ s: number }>();
-  return shift.opening_cash + (r?.s ?? 0) + (dep?.s ?? 0);
+  // A-06: tiền mặt hoàn khi huỷ đơn của CA ĐÃ CHỐT được lấy từ két ca này → trừ khỏi dự kiến (số liệu ca cũ giữ nguyên)
+  const voidRef = await db
+    .prepare(
+      `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
+        WHERE o.refund_shift_id = ? AND p.method = 'cash' AND p.status = 'refunded'`,
+    )
+    .bind(shift.id)
+    .first<{ s: number }>();
+  return shift.opening_cash + (r?.s ?? 0) + (dep?.s ?? 0) - (voidRef?.s ?? 0);
 }
 
 posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
@@ -578,6 +586,7 @@ const returnSchema = z.object({
     .min(1)
     .max(200),
   refundMethod: z.enum(METHODS),
+  approvalId: z.number().int().positive().optional(), // A-16: mã duyệt của quản lý (trả hàng cần duyệt)
 });
 
 posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
@@ -633,6 +642,22 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
 
   const total = prepared.reduce((s, x) => s + x.lineTotal, 0);
   const costTotal = prepared.reduce((s, x) => s + x.cost, 0);
+
+  // A-16 (M1-09): thu ngân chỉ tự trả hàng đơn của CA ĐANG MỞ (hoặc cùng ngày VN của ca còn mở), dưới ngưỡng giá trị, có nhập lại kho.
+  // Còn lại cần quản lý (approvals.decide) tự làm hoặc duyệt qua approvals (gắn băm yêu cầu trả như duyệt giảm giá POS).
+  let approvalUsed: number | null = null;
+  if (!can(user.role, "approvals.decide")) {
+    const reasons: string[] = [];
+    if (!(shift && orig.shift_id === shift.id)) {
+      const osh = orig.shift_id ? await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(orig.shift_id).first<{ status: string }>() : null;
+      const sameDay = vnDate(new Date(orig.completed_at ?? orig.created_at)) === vnDate();
+      if (!(sameDay && osh?.status === "open")) reasons.push("other_shift");
+    }
+    const threshold = await getSettingInt(db, "approval.pos_return_vnd", 500000);
+    if (total >= threshold) reasons.push("high_value");
+    if (prepared.some((x) => !x.restock)) reasons.push("no_restock");
+    if (reasons.length) approvalUsed = await requireReturnApproval(c, origId, body, reasons, total);
+  }
   const fundId = total > 0 ? await fundFor(db, orig.store_id, body.refundMethod, shift) : null;
   const code = await nextCode(db, PREFIX.return);
   const note = prepared.map((x) => `${x.orig.id}: ${x.reason}${x.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500);
@@ -659,6 +684,7 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
     // Chốt chặn trong batch (audit #2): trả đồng thời không được vượt số đã bán / số đã thu
     const stmts: D1PreparedStatement[] = [
       assertStmt(db, "order.return.status", `SELECT status = 'completed' AND kind = 'sale' FROM orders WHERE id = ?`, [origId]),
+      ...(approvalUsed ? [assertStmt(db, "order.return.approval", `SELECT status = 'approved' AND ref_id IS NULL FROM approvals WHERE id = ?`, [approvalUsed])] : []),
       ...[...claimed].map(([olId, q]) =>
         assertStmt(
           db,
@@ -692,11 +718,12 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
       db
         .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
         .bind(total, total, costTotal, total, retId),
+      ...(approvalUsed ? [db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=? AND ref_id IS NULL`).bind(String(retId), approvalUsed)] : []),
       auditStmt(c, {
         action: "order.return",
         entity: "order",
         entityId: retId,
-        after: { code, originalOrderId: origId, total, lines: prepared.map((x) => ({ orderLineId: x.orig.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
+        after: { code, originalOrderId: origId, total, approvalId: approvalUsed, lines: prepared.map((x) => ({ orderLineId: x.orig.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
         reason: note,
       }),
     );
@@ -707,6 +734,40 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
   }
   return c.json(await getOrderFull(c, retId), 201);
 });
+
+/** A-16: duyệt trả hàng gắn đúng đơn gốc + dòng/số lượng/phương thức hoàn (băm), dùng một lần, không tự duyệt. */
+async function requireReturnApproval(c: Ctx, origId: number, body: z.infer<typeof returnSchema>, reasons: string[], total: number): Promise<number> {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const canon = JSON.stringify({ o: origId, m: body.refundMethod, l: body.lines.map((l) => [l.orderLineId, l.qty, l.unit, l.restock]).sort((a, b) => Number(a[0]) - Number(b[0])) });
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
+  const hash = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const type = "order.return";
+  if (body.approvalId) {
+    const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(body.approvalId).first<any>();
+    const match = a && a.type === type && a.requested_by === user.id && (() => { try { return JSON.parse(a.payload_json ?? "{}").hash === hash; } catch { return false; } })();
+    if (match) {
+      if (a.status === "approved" && !a.ref_id) return a.id;
+      if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt trả hàng đã bị từ chối", { approvalId: a.id });
+      if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt trả hàng", { approvalId: a.id, reasons });
+    }
+    throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId: body.approvalId });
+  }
+  const pending = await db
+    .prepare(`SELECT id FROM approvals WHERE type=? AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.hash')=?`)
+    .bind(type, user.id, hash)
+    .first<{ id: number }>();
+  let id = pending?.id;
+  if (!id) {
+    const r = await db
+      .prepare(`INSERT INTO approvals(type, ref_type, payload_json, reason, requested_by) VALUES (?,?,?,?,?)`)
+      .bind(type, "order_return_draft", JSON.stringify({ originalOrderId: origId, hash, reasons, total }), reasons.join(","), user.id)
+      .run();
+    id = r.meta.last_row_id as number;
+    await auditStmt(c, { action: "approval.request", entity: "approval", entityId: id, after: { type, reasons, originalOrderId: origId, total } }).run();
+  }
+  throw conflict("approval_required", "Trả hàng này cần quản lý duyệt (đơn ca khác / giá trị lớn / không nhập lại kho)", { approvalId: id, reasons });
+}
 
 // ===================== Huỷ đơn =====================
 
@@ -720,14 +781,26 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   if (o.kind !== "sale" || o.status !== "completed") throw conflict("not_voidable", "Chỉ huỷ được đơn bán đã hoàn tất");
   // Đơn online/B2B/fresco có luồng huỷ riêng (giữ tồn, công nợ, COD…) — POS void sẽ làm sai kho/tiền
   if (o.channel !== "pos") throw conflict("wrong_channel", "Đơn kênh này có luồng huỷ riêng, không huỷ bằng POS");
+  // A-07: đơn đặt trước đã giao (cọc đã trừ vào đơn) — huỷ bằng void không hoàn cọc → chặn, dùng Trả hàng (hoàn đủ tổng gồm cả cọc)
+  const dep = await db.prepare(`SELECT id FROM order_deposits WHERE order_id = ? AND status IN ('applied','refunded','forfeited') LIMIT 1`).bind(id).first();
+  if (dep) throw conflict("preorder_void_blocked", "Đơn đặt trước đã giao (đã trừ cọc) không huỷ bằng POS — dùng chức năng Trả hàng để hoàn đủ tiền cả phần cọc");
   const period = vnPeriod(new Date(o.completed_at ?? o.created_at));
   if (await db.prepare(`SELECT 1 AS x FROM periods WHERE period = ? AND locked_at IS NOT NULL`).bind(period).first()) {
     throw new AppError(423, "period_locked", "Kỳ đã khoá sổ, không huỷ được đơn của kỳ này");
   }
+  // A-06 (EC-32): đơn của ca đã chốt chỉ quản lý huỷ; tiền mặt hoàn lấy từ két CA ĐANG MỞ của người huỷ → gắn vào ca đó,
+  // số liệu ca đã chốt giữ nguyên. Không có ca mở mà đơn có tiền mặt → 409 no_open_shift.
+  let refundShiftId: number | null = null;
   if (o.shift_id) {
     const sh = await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(o.shift_id).first<{ status: string }>();
-    if (sh?.status === "closed" && user.role !== "manager" && user.role !== "owner") {
-      throw forbidden("forbidden", "Đơn thuộc ca đã chốt, chỉ quản lý/chủ mới được huỷ");
+    if (sh?.status === "closed") {
+      if (user.role !== "manager" && user.role !== "owner") throw forbidden("forbidden", "Đơn thuộc ca đã chốt, chỉ quản lý/chủ mới được huỷ");
+      const cash = await db.prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE order_id = ? AND method='cash' AND status='confirmed'`).bind(id).first<{ s: number }>();
+      if ((cash?.s ?? 0) > 0) {
+        const cur = await openShiftOf(db, user.id);
+        if (!cur) throw conflict("no_open_shift", "Đơn của ca đã chốt có tiền mặt: cần mở ca để hoàn tiền từ két hiện tại");
+        refundShiftId = cur.id;
+      }
     }
   }
   const hasReturn = await db.prepare(`SELECT 1 AS x FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed' LIMIT 1`).bind(id).first();
@@ -754,17 +827,18 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
       [period, id],
     ),
   ];
+  if (refundShiftId) stmts.push(assertStmt(db, "order.void.refund_shift", `SELECT status = 'open' FROM shifts WHERE id = ?`, [refundShiftId]));
   for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
   stmts.push(...(await reversalStatements(db, o, o.total, user.id, "huỷ đơn")));
   stmts.push(
-    db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, id),
+    db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=?, refund_shift_id=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, refundShiftId, id),
     db.prepare(`UPDATE payments SET status='refunded' WHERE order_id=?`).bind(id),
     auditStmt(c, {
       action: "order.void",
       entity: "order",
       entityId: id,
       before: { status: o.status, total: o.total, shiftId: o.shift_id },
-      after: { status: "cancelled" },
+      after: { status: "cancelled", refundShiftId },
       reason: body.reason,
     }),
   );

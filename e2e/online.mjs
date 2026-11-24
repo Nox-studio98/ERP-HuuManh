@@ -215,12 +215,12 @@ try {
   await dlg(o.page).getByRole("button", { name: "Xác nhận hoàn kho" }).click();
   await statusIs(o.page, "Đã trả hàng");
   const dC = await apiGet(o.ctx, `/online-orders/${C.id}`);
-  if (dC.paymentStatus === "paid") {
-    await o.page.locator(".badge", { hasText: "Cần hoàn tiền" }).first().waitFor();
-    await act(o.page, "Hoàn tiền").click();
+  if (dC.refundDue > 0) { // A-14: huỷ/trả chỉ ghi nghĩa vụ hoàn, finance.write hoàn thực
+    await o.page.locator(".badge", { hasText: "Chờ hoàn tiền" }).first().waitFor();
+    await o.page.getByRole("button", { name: /^Hoàn tiền/ }).click();
     await o.page.locator(".badge", { hasText: /Đã hoàn/ }).first().waitFor();
     ok("hoàn tiền đơn đã trả");
-  } else ok("hoàn kho đã tự hoàn tiền (" + dC.paymentStatus + ")");
+  } else ok("không có khoản cần hoàn (" + dC.paymentStatus + ")");
 
   // ============ Đơn D: huỷ sau khi soạn → hàng về kho
   step("Đơn D: huỷ sau khi soạn → tồn kho được khôi phục");

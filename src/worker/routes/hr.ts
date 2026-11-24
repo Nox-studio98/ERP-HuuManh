@@ -11,7 +11,7 @@ import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { pageParams, parseBody } from "../services/http";
 import { getSettingInt } from "../services/settings";
 import {
-  addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, leaveBalance, minutesBetween, shiftWindow,
+  addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, leaveBalance, leaveCountableDates, weekStart, minutesBetween, shiftWindow,
 } from "../services/hr-common";
 import { haversineM } from "../services/hr-geo";
 import { makeQrCode, qrWindowExpiresAt, qrWindowOf, verifyQrCode } from "../services/hr-qr";
@@ -967,9 +967,11 @@ hrRoutes.post("/me/leave-requests", requirePerm("hr.self"), async (c) => {
   const lt = await db.prepare(`SELECT id, uses_balance FROM leave_types WHERE code=? AND active=1`).bind(b.leaveTypeCode).first<any>();
   if (!lt) throw new AppError(422, "leave_type_invalid", "Loại nghỉ không tồn tại hoặc đã ngừng dùng");
   const hol = new Set((await db.prepare(`SELECT day FROM holidays WHERE day >= ? AND day <= ?`).bind(b.fromDate, b.toDate).all<{ day: string }>()).results.map((h) => h.day));
-  // Chỉ bỏ ngày lễ (không bỏ Chủ nhật — ngày nghỉ hằng tuần do lịch ca quyết định)
-  const dates = eachDate(b.fromDate, b.toDate).filter((d) => !hol.has(d));
-  if (!dates.length) throw new AppError(422, "no_working_days", "Khoảng nghỉ chỉ gồm ngày lễ");
+  // C-15: chỉ đếm ngày làm việc theo lịch — bỏ ngày lễ, ngày nghỉ hằng tuần (hr.weekly_off_days) và ngày không có ca khi tuần đó đã xếp lịch
+  const asg = new Set((await db.prepare(`SELECT work_date FROM shift_assignments WHERE employee_id=? AND work_date >= ? AND work_date <= ? AND status != 'cancelled'`)
+    .bind(me.id, weekStart(b.fromDate), addDays(weekStart(b.toDate), 6)).all<{ work_date: string }>()).results.map((a) => a.work_date));
+  const dates = leaveCountableDates(eachDate(b.fromDate, b.toDate), hol, (await hrSettings(db)).weeklyOffDays, asg);
+  if (!dates.length) throw new AppError(422, "no_working_days", "Khoảng nghỉ không có ngày làm việc nào (chỉ gồm ngày lễ, ngày nghỉ tuần hoặc ngày không có ca)");
   const daysX10 = b.halfDay ? 5 : dates.length * 10;
   const overlap = await db.prepare(`SELECT id FROM leave_requests WHERE employee_id=? AND status IN ('pending','approved') AND from_date <= ? AND to_date >= ?`).bind(me.id, b.toDate, b.fromDate).first();
   if (overlap) throw conflict("leave_overlap", "Đã có đơn nghỉ trùng khoảng ngày này");
