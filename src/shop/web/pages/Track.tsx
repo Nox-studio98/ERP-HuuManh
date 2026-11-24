@@ -164,6 +164,9 @@ export function OrderPanel({ o, token, phone4, onChange, placed, me: meMode, onC
       {o.weightAdjustStatus === "pending_customer" && !(token && phone4) && <Notice kind="warn">Cửa hàng cần bạn xác nhận khối lượng thực tế. Vui lòng mở đơn bằng liên kết tra cứu trong email hoặc tin nhắn để xác nhận.</Notice>}
       {o.weightAdjustStatus === "accepted" && <Notice kind="ok">Bạn đã đồng ý giá theo khối lượng thực tế.</Notice>}
       {o.weightAdjustStatus === "auto_accepted" && <Notice kind="info">Khối lượng thực tế chênh lệch nhỏ, tổng tiền đã được chốt theo cân.</Notice>}
+      {o.diffKind === "collect" && <Notice kind="info"><strong>Thu thêm {money(o.diffAmount ?? 0)}</strong> khi nhận hàng: bạn đã chuyển khoản theo giá tạm tính, sau khi cân tổng tiền cao hơn. Phần chênh lệch được thu khi giao.</Notice>}
+      {o.diffKind === "refund" && <Notice kind="info"><strong>Hoàn lại {money(-(o.diffAmount ?? 0))}</strong>: sau khi cân tổng tiền thấp hơn số bạn đã chuyển. Cửa hàng sẽ hoàn phần chênh lệch cho bạn.</Notice>}
+      {!!o.returnedTotal && <Notice kind="ok">Cửa hàng đã ghi nhận trả hàng {money(o.returnedTotal)} cho đơn này.</Notice>}
 
       {showTransfer && <TransferPanel t={o.transfer!} code={o.code} />}
       {placed && <PushOptIn />}

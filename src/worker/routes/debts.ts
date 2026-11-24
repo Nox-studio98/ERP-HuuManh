@@ -7,7 +7,8 @@ import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDate } from "../lib/time";
-import { addDays, BILL_OUTSTANDING_SQL, INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { addDays, BILL_OUTSTANDING_SQL, customerCreditSql, customerInvoiceCredit, INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { assertPeriodOpen, periodOf } from "../services/period";
 import { enqueueJobStmt, kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { matchOnlineOrder } from "../services/online-payments";
@@ -63,9 +64,9 @@ async function unappliedMap(db: D1Database, side: "receivable" | "payable") {
   const pay = await db
     .prepare(
       `SELECT p.partner_id pid, SUM(p.amount - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x WHERE x.payment_id = p.id), 0)) u
-         FROM debt_payments p WHERE p.partner_type = ? AND p.status = 'posted' GROUP BY p.partner_id`,
+         FROM debt_payments p WHERE p.partner_type = ? AND p.direction = ? AND p.status = 'posted' GROUP BY p.partner_id`,
     )
-    .bind(pt)
+    .bind(pt, side === "receivable" ? "in" : "out")
     .all<{ pid: number; u: number }>();
   for (const r of pay.results) m.set(r.pid, (m.get(r.pid) ?? 0) + r.u);
   if (side === "receivable") {
@@ -80,6 +81,28 @@ async function unappliedMap(db: D1Database, side: "receivable" | "payable") {
   return m;
 }
 
+/** Số dư có của khách từ hoá đơn (trả hàng sau thanh toán, A-01) theo khách: Σ(−còn nợ âm) − đã cấn − đã hoàn. */
+async function creditMap(db: D1Database) {
+  const m = new Map<number, number>();
+  const neg = await db
+    .prepare(
+      `SELECT pid, SUM(-os) AS c FROM (SELECT i.customer_id AS pid, ${INVOICE_OUTSTANDING_SQL} AS os FROM invoices i
+          WHERE i.status = 'open' AND i.kind IN ('sale','replacement') AND i.customer_id IS NOT NULL) WHERE os < 0 GROUP BY pid`,
+    )
+    .all<{ pid: number; c: number }>();
+  for (const r of neg.results) m.set(r.pid, r.c);
+  const used = await db
+    .prepare(`SELECT partner_id pid, SUM(amount) c FROM debt_adjustments WHERE partner_type = 'customer' AND type = 'return_credit' AND status = 'posted' GROUP BY partner_id`)
+    .all<{ pid: number; c: number }>();
+  for (const r of used.results) m.set(r.pid, (m.get(r.pid) ?? 0) - r.c);
+  const out = await db
+    .prepare(`SELECT partner_id pid, SUM(amount) c FROM debt_payments WHERE partner_type = 'customer' AND direction = 'out' AND status = 'posted' GROUP BY partner_id`)
+    .all<{ pid: number; c: number }>();
+  for (const r of out.results) m.set(r.pid, (m.get(r.pid) ?? 0) - r.c);
+  for (const [k, v] of m) if (v <= 0) m.delete(k);
+  return m;
+}
+
 async function summarize(c: Ctx, side: "receivable" | "payable") {
   const db = c.env.DB;
   const today = vnDate();
@@ -88,18 +111,20 @@ async function summarize(c: Ctx, side: "receivable" | "payable") {
   const overdueOnly = c.req.query("overdueOnly") === "1" || c.req.query("overdueOnly") === "true";
   const docs = await allOpenDocs(db, side);
   const un = await unappliedMap(db, side);
+  const cr = side === "receivable" ? await creditMap(db) : new Map<number, number>();
   const partners = (
     await db
       .prepare(side === "receivable" ? `SELECT id, code, name, credit_limit FROM customers` : `SELECT id, code, name FROM suppliers`)
       .all<{ id: number; code: string; name: string; credit_limit?: number }>()
   ).results;
   const items: any[] = [];
-  const totals = { outstanding: 0, unapplied: 0, balance: 0, overdueAmount: 0 };
+  const totals = { outstanding: 0, unapplied: 0, invoiceCredit: 0, credit: 0, balance: 0, overdueAmount: 0 };
   for (const p of partners) {
     if (q && !`${p.name} ${p.code}`.toLowerCase().includes(q)) continue;
     const mine = docs.filter((d) => d.pid === p.id);
     const unapplied = un.get(p.id) ?? 0;
-    if (!mine.length && !unapplied) continue;
+    const invoiceCredit = cr.get(p.id) ?? 0;
+    if (!mine.length && !unapplied && !invoiceCredit) continue;
     const buckets = emptyBuckets();
     let outstanding = 0, overdueAmount = 0, oldest = 0;
     for (const d of mine) {
@@ -109,8 +134,11 @@ async function summarize(c: Ctx, side: "receivable" | "payable") {
       if (od > 0) { overdueAmount += d.os; oldest = Math.max(oldest, od); }
     }
     if (overdueOnly && overdueAmount <= 0) continue;
-    const base: any = { outstanding, unapplied, balance: outstanding - unapplied, overdueAmount, oldestOverdueDays: oldest, buckets };
-    totals.outstanding += outstanding; totals.unapplied += unapplied; totals.balance += base.balance; totals.overdueAmount += overdueAmount;
+    // balance âm = "Khách dư có" (tiền đã trả trước chưa gạch + số dư có do trả hàng sau thanh toán); aging chỉ tính phần còn nợ dương
+    const balance = outstanding - unapplied - invoiceCredit;
+    const base: any = { outstanding, unapplied, invoiceCredit, credit: Math.max(0, -balance), balance, overdueAmount, oldestOverdueDays: oldest, buckets };
+    totals.outstanding += outstanding; totals.unapplied += unapplied; totals.invoiceCredit += invoiceCredit; totals.balance += base.balance; totals.overdueAmount += overdueAmount;
+    totals.credit += base.credit;
     if (side === "receivable") items.push({ customerId: p.id, customerCode: p.code, customerName: p.name, ...base, creditLimit: p.credit_limit ?? 0 });
     else
       items.push({
@@ -199,11 +227,15 @@ debtRoutes.post("/bills/:id/finalize", requirePerm("debt.write"), async (c) => {
   if (newTotal < (paid?.s ?? 0)) throw new AppError(422, "total_below_paid", "Tổng chốt nhỏ hơn số đã thanh toán");
   const newVat = body.vatAmount ?? b.vat_amount ?? 0; // B-07: VAT đầu vào, không vượt tổng hoá đơn
   if (newVat > newTotal) throw new AppError(422, "vat_exceeds_total", "VAT đầu vào không được lớn hơn tổng hoá đơn", { vatAmount: newVat, total: newTotal });
+  // B-08: chốt hoá đơn mua đổi AP/VAT của kỳ phát hành → kỳ đã khoá thì không được chốt (và hôm nay cũng không được ghi vào kỳ khoá)
+  await assertPeriodOpen(db, b.issue_date, "chốt hoá đơn mua");
+  await assertPeriodOpen(db, new Date(), "chốt hoá đơn mua");
   const r = await db.batch([
+    assertStmt(db, "bill.finalize", `SELECT is_provisional = 1 AND status = 'open' FROM supplier_bills WHERE id = ?`, [id]),
     db.prepare(`UPDATE supplier_bills SET supplier_ref = ?, total = ?, vat_amount = ?, is_provisional = 0 WHERE id = ? AND is_provisional = 1`).bind(body.supplierRef, newTotal, newVat, id),
     auditStmt(c, { action: "bill.finalize", entity: "supplier_bill", entityId: id, before: { total: b.total, vat: b.vat_amount ?? 0, supplierRef: b.supplier_ref, provisional: true }, after: { total: newTotal, vat: newVat, supplierRef: body.supplierRef, provisional: false }, reason: body.reason }),
   ]);
-  if (!r[0].meta.changes) throw conflict("not_provisional", "Hoá đơn đã được chốt");
+  if (!r[1].meta.changes) throw conflict("not_provisional", "Hoá đơn đã được chốt");
   return c.json(camel(await db.prepare(`SELECT * FROM supplier_bills WHERE id = ?`).bind(id).first()));
 });
 
@@ -234,7 +266,10 @@ debtRoutes.post("/debts/payments/:id/allocate", requirePerm("debt.write"), async
   const db = c.env.DB;
   const p = await db.prepare(`SELECT * FROM debt_payments WHERE id = ?`).bind(id).first<any>();
   if (!p) throw notFound("payment_not_found", "Không tìm thấy phiếu thu/chi công nợ");
-  if (p.status !== "posted") throw conflict("payment_reversed", "Phiếu đã bị đảo");
+  if (p.status !== "posted") throw conflict("payment_reversed", p.status === "pending_approval" ? "Phiếu đang chờ duyệt, chưa gạch nợ được" : "Phiếu đã bị đảo / từ chối");
+  if (p.direction === "out" && p.partner_type === "customer") throw conflict("refund_not_allocatable", "Phiếu hoàn tiền dư có cho khách không gạch vào hoá đơn");
+  await assertPeriodOpen(db, p.paid_at, "gạch nợ");
+  await assertPeriodOpen(db, new Date(), "gạch nợ");
   const cur = await paymentResult(db, id);
   if (cur.unapplied <= 0) throw conflict("nothing_to_allocate", "Phiếu đã gạch hết");
   const docs = await openDocs(db, p.partner_type, p.partner_id, true);
@@ -289,7 +324,7 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
   if (q.partnerType === "customer" || q.partnerType === "supplier") { conds.push(`p.partner_type = ?`); params.push(q.partnerType); }
   if (q.partnerId) { conds.push(`p.partner_id = ?`); params.push(Number(q.partnerId)); }
   if (q.direction === "in" || q.direction === "out") { conds.push(`p.direction = ?`); params.push(q.direction); }
-  if (q.status === "posted" || q.status === "reversed") { conds.push(`p.status = ?`); params.push(q.status); }
+  if (q.status === "posted" || q.status === "reversed" || q.status === "pending_approval" || q.status === "rejected") { conds.push(`p.status = ?`); params.push(q.status); }
   if (q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from)) { conds.push(`substr(p.paid_at,1,10) >= ?`); params.push(q.from); }
   if (q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to)) { conds.push(`substr(p.paid_at,1,10) <= ?`); params.push(q.to); }
   if (q.cursor) { conds.push(`p.id < ?`); params.push(Number(q.cursor)); }
@@ -304,7 +339,7 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
 
 // ---------------------------------------------------------------- điều chỉnh: chiết khấu, xoá nợ, cấn trừ
 const adjSchema = z.object({
-  type: z.enum(["discount", "write_off", "offset"]),
+  type: z.enum(["discount", "write_off", "offset", "return_credit"]),
   partnerType: partnerTypeEnum,
   partnerId: z.number().int().positive(),
   amount: money,
@@ -328,6 +363,29 @@ debtRoutes.post("/debts/adjustments", requirePerm("debt.write"), async (c) => {
   const db = c.env.DB;
   const user = c.get("user");
   const partner = await partnerInfo(db, body.partnerType, body.partnerId);
+  // B-08: điều chỉnh công nợ không tạo phiếu quỹ nên trigger khoá sổ không chặn → kiểm ở đây (bút toán ghi vào kỳ hiện tại)
+  await assertPeriodOpen(db, new Date(), "điều chỉnh công nợ");
+
+  if (body.type === "return_credit") {
+    // A-01: cấn số dư có của khách (do trả hàng sau thanh toán) vào hoá đơn còn nợ khác của chính khách
+    if (body.partnerType !== "customer") throw new AppError(422, "validation_error", "Chỉ cấn số dư có cho khách hàng");
+    const credit = await customerInvoiceCredit(db, body.partnerId);
+    if (body.amount > credit) throw new AppError(422, "credit_exceeds_balance", `Số cấn vượt số dư có của khách (${credit}đ)`, { credit });
+    const docs = await adjDocs(db, "customer", body.partnerId, body.invoiceId, undefined);
+    const total = docs.reduce((s, d) => s + d.outstanding, 0);
+    if (body.amount > total) throw new AppError(422, "adjustment_exceeds_outstanding", `Số cấn vượt số còn nợ của hoá đơn (${total}đ)`, { outstanding: total });
+    const plan = planOldestFirst(docs, body.amount);
+    const code = await nextCode(db, "DCN");
+    const q = customerCreditSql(body.partnerId);
+    await db.batch([
+      assertStmt(db, "debt.credit_apply", `SELECT ${q.sql} >= ?`, [...q.binds, body.amount]),
+      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?, 'return_credit', 'customer', ?, ?, 'posted', ?, ?)`).bind(code, body.partnerId, body.amount, body.reason, user.id),
+      ...plan.allocs.map((a) => allocStmt(db, a.doc, a.amount, { adjustmentCode: code })),
+      auditStmt(c, { action: "debt.return_credit", entity: "debt_adjustment", entityId: code, after: { partnerId: body.partnerId, amount: body.amount, allocations: plan.allocs.map((a) => ({ invoice: a.doc.id, amount: a.amount })) }, reason: body.reason }),
+    ]);
+    const adj = await db.prepare(`SELECT * FROM debt_adjustments WHERE code = ?`).bind(code).first<any>();
+    return c.json({ adjustment: camel(adj), status: adj.status, approvalId: null }, 201);
+  }
 
   if (body.type === "offset") {
     // M5-09: cấn trừ khách ↔ NCC cùng đối tác
@@ -402,6 +460,7 @@ registerApprovalHandler("debt_adjustment.post", {
     const adj = await db.prepare(`SELECT * FROM debt_adjustments WHERE id = ?`).bind(adjId).first<any>();
     if (!adj) throw notFound("adjustment_not_found", "Không tìm thấy điều chỉnh");
     if (adj.status !== "pending_approval") throw conflict("not_pending", "Điều chỉnh không còn chờ duyệt");
+    await assertPeriodOpen(db, new Date(), "điều chỉnh công nợ");
     let payload: any = {};
     try { payload = a.payload_json ? JSON.parse(a.payload_json) : {}; } catch { /* bỏ qua */ }
     const docs = await adjDocs(db, adj.partner_type, adj.partner_id, payload.invoiceId ?? undefined, payload.billId ?? undefined);
@@ -523,10 +582,12 @@ debtRoutes.get("/debts/statements/:partnerType/:partnerId", requirePerm("debt.vi
     const bills = (await db.prepare(`SELECT id, code, issue_date, total FROM supplier_bills WHERE supplier_id = ? AND status='open'`).bind(pid).all<any>()).results;
     for (const r of bills) ev.push({ date: r.issue_date, ord: 0, id: r.id, docType: "bill", docCode: r.code, debit: r.total, credit: 0 });
   }
-  const pays = (await db.prepare(`SELECT id, code, paid_at, amount FROM debt_payments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
-  for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: "payment", docCode: r.code, debit: 0, credit: r.amount });
+  const pays = (await db.prepare(`SELECT id, code, paid_at, amount, direction FROM debt_payments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
+  // Hoàn tiền dư có cho khách (direction='out', partner customer) làm số dư tăng lại → ghi bên phát sinh tăng
+  for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: r.direction === "out" && pt === "customer" ? "customer_refund" : "payment", docCode: r.code, debit: r.direction === "out" && pt === "customer" ? r.amount : 0, credit: r.direction === "out" && pt === "customer" ? 0 : r.amount });
   const adjs = (await db.prepare(`SELECT id, code, type, created_at, amount FROM debt_adjustments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
-  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.amount });
+  // 'return_credit' chỉ chuyển số dư có sang hoá đơn khác (tổng nợ không đổi) → hiển thị nhưng không phát sinh
+  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.type === "return_credit" ? 0 : r.amount });
   ev.sort((a, b) => a.date.localeCompare(b.date) || a.ord - b.ord || a.id - b.id);
 
   let opening = 0;

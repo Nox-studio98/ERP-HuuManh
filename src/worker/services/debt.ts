@@ -6,7 +6,8 @@ import { vnDate } from "../lib/time";
  *    trỏ original_invoice_id và cộng vào khoản gốc — không phải dòng nợ riêng.
  *  - Còn nợ của 1 hoá đơn = total + Σ total các hoá đơn điều chỉnh của nó − Σ debt_allocations.amount
  *    (chỉ allocations của payment/adjustment còn status 'posted' — phiếu đã đảo không còn tác dụng).
- *  - Số dư khách = Σ còn nợ các hoá đơn open − tiền đã trả chưa gạch (số dư có, EC-24).
+ *  - Số dư khách = Σ còn nợ DƯƠNG các hoá đơn open − tiền đã trả chưa gạch (EC-24) − số dư có do trả hàng sau thanh toán (hoá đơn còn nợ ÂM, EC-25).
+ *    Âm = "Khách dư có": cấn vào hoá đơn mở khác (debt_adjustments 'return_credit') hoặc hoàn tiền (debt_payments direction='out' cho khách).
  *  - Phải trả NCC: tương tự với supplier_bills (không có hoá đơn điều chỉnh; điều chỉnh bằng debt_adjustments).
  * Tất cả là SQL thuần để dùng được trong báo cáo.
  */
@@ -25,10 +26,31 @@ export const BILL_OUTSTANDING_SQL = `(b.total - COALESCE((SELECT SUM(x.amount) F
                LEFT JOIN debt_adjustments xd ON xd.id = x.adjustment_id
               WHERE x.bill_id = b.id AND (xp.status = 'posted' OR xd.status = 'posted')), 0))`;
 
+/**
+ * Số dư có của khách phát sinh từ hoá đơn (A-01, EC-25): trả hàng sau khi đã thanh toán làm còn nợ hoá đơn ÂM.
+ *  = Σ max(0, −còn nợ) các hoá đơn mở − Σ cấn vào hoá đơn khác (debt_adjustments 'return_credit') − Σ đã hoàn tiền (debt_payments out cho khách).
+ * Trả về điều kiện SQL + binds để dùng trong assertStmt (chặn dùng/hoàn quá số dư có khi đồng thời).
+ */
+export function customerCreditSql(customerId: number) {
+  const sql = `MAX(0,
+    COALESCE((SELECT SUM(-os) FROM (SELECT ${INVOICE_OUTSTANDING_SQL} AS os FROM invoices i WHERE i.customer_id = ? AND i.status = 'open' AND i.kind IN ('sale','replacement')) WHERE os < 0), 0)
+    - COALESCE((SELECT SUM(d.amount) FROM debt_adjustments d WHERE d.partner_type = 'customer' AND d.partner_id = ? AND d.type = 'return_credit' AND d.status = 'posted'), 0)
+    - COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.partner_type = 'customer' AND p.partner_id = ? AND p.direction = 'out' AND p.status = 'posted'), 0))`;
+  return { sql, binds: [customerId, customerId, customerId] };
+}
+
+export async function customerInvoiceCredit(db: D1Database, customerId: number): Promise<number> {
+  const q = customerCreditSql(customerId);
+  const r = await db.prepare(`SELECT ${q.sql} AS c`).bind(...q.binds).first<{ c: number }>();
+  return r?.c ?? 0;
+}
+
 export interface PartnerDebtStatus {
-  balance: number;          // còn nợ ròng (đã trừ tiền trả trước chưa gạch); âm = khách đang có số dư có
-  outstanding: number;      // Σ còn nợ các hoá đơn
+  balance: number;          // còn nợ ròng (đã trừ tiền trả trước chưa gạch và số dư có do trả hàng); âm = khách đang có số dư có
+  outstanding: number;      // Σ còn nợ các hoá đơn (chỉ phần dương)
   unapplied: number;        // tiền đã thu/chi + điều chỉnh chưa gạch vào hoá đơn
+  invoiceCredit: number;    // số dư có từ hoá đơn do trả hàng sau thanh toán (chưa cấn / chưa hoàn)
+  credit: number;           // "Khách dư có" = max(0, −balance)
   overdueAmount: number;
   overdueCount: number;
   oldestOverdueDays: number;
@@ -46,6 +68,9 @@ export async function customerDebtStatus(db: D1Database, customerId: number, tod
        )
        SELECT
          COALESCE((SELECT SUM(os) FROM inv WHERE os > 0), 0) AS outstanding,
+         COALESCE((SELECT SUM(-os) FROM inv WHERE os < 0), 0) AS neg_credit,
+         COALESCE((SELECT SUM(d.amount) FROM debt_adjustments d WHERE d.partner_type='customer' AND d.partner_id=?1 AND d.type='return_credit' AND d.status='posted'), 0) AS used_credit,
+         COALESCE((SELECT SUM(p.amount) FROM debt_payments p WHERE p.partner_type='customer' AND p.partner_id=?1 AND p.direction='out' AND p.status='posted'), 0) AS refunded,
          COALESCE((SELECT SUM(os) FROM inv WHERE os > 0 AND due_date < ?2), 0) AS overdue_amount,
          (SELECT COUNT(*) FROM inv WHERE os > 0 AND due_date < ?2) AS overdue_count,
          COALESCE((SELECT MIN(due_date) FROM inv WHERE os > 0 AND due_date < ?2), NULL) AS oldest_due,
@@ -58,16 +83,19 @@ export async function customerDebtStatus(db: D1Database, customerId: number, tod
          (SELECT credit_limit FROM customers WHERE id = ?1) AS credit_limit`,
     )
     .bind(customerId, today)
-    .first<{ outstanding: number; overdue_amount: number; overdue_count: number; oldest_due: string | null; unapplied_pay: number; unapplied_adj: number; credit_limit: number }>();
+    .first<{ outstanding: number; neg_credit: number; used_credit: number; refunded: number; overdue_amount: number; overdue_count: number; oldest_due: string | null; unapplied_pay: number; unapplied_adj: number; credit_limit: number }>();
   const outstanding = r?.outstanding ?? 0;
   const unapplied = (r?.unapplied_pay ?? 0) + (r?.unapplied_adj ?? 0);
-  const balance = outstanding - unapplied;
+  const invoiceCredit = Math.max(0, (r?.neg_credit ?? 0) - (r?.used_credit ?? 0) - (r?.refunded ?? 0));
+  const balance = outstanding - unapplied - invoiceCredit;
   const creditLimit = r?.credit_limit ?? 0;
   const oldestOverdueDays = r?.oldest_due ? Math.round((Date.parse(today) - Date.parse(r.oldest_due)) / 86400_000) : 0;
   return {
     balance,
     outstanding,
     unapplied,
+    invoiceCredit,
+    credit: Math.max(0, -balance),
     overdueAmount: r?.overdue_amount ?? 0,
     overdueCount: r?.overdue_count ?? 0,
     oldestOverdueDays,

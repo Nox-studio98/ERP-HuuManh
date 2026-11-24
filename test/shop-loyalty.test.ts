@@ -169,7 +169,8 @@ describe("website: tích điểm khi hoàn tất, hoàn/thu hồi khi huỷ/tr�
     expect((await post(oid, "return-to-stock", { lines: [] })).status).toBe(200);
     expect(await bal(m.customerId)).toBe(1000);
     expect(await ledger(r.body.code)).toEqual([
-      { kind: "redeem", points: -100 }, { kind: "earn", points: 14 }, { kind: "reverse", points: 100 }, { kind: "reverse", points: -14 },
+      // A-05: trả hàng sau giao lập phiếu trả (đơn gốc vẫn 'completed') → reversalStatements thu hồi điểm tích trước rồi hoàn điểm đổi; mỗi loại đúng một lần
+      { kind: "redeem", points: -100 }, { kind: "earn", points: 14 }, { kind: "reverse", points: -14 }, { kind: "reverse", points: 100 },
     ]);
   });
 
