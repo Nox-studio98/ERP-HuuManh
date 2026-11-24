@@ -45,8 +45,8 @@ export default function Invoices() {
             cols={[
               { key: "c", label: "Số HĐ", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
               { key: "k", label: "Khách", sort: (x) => x.customerName, render: (x) => x.customerName ?? "—" },
-              { key: "i", label: "Ngày", hideMobile: true, sort: (x) => x.issueDate, render: (x) => ymd(x.issueDate) },
-              { key: "d", label: "Hạn", sort: (x) => x.dueDate, render: (x) => <span className="nw">{ymd(x.dueDate)}{x.overdueDays > 0 && <> <Badge tone="warn">trễ {x.overdueDays} ngày</Badge></>}</span> },
+              { key: "i", label: "Ngày", hideMobile: true, hideBelow: 1440, sort: (x) => x.issueDate, render: (x) => ymd(x.issueDate) },
+              { key: "d", label: "Hạn", sort: (x) => x.dueDate, render: (x) => <span className="nw">{ymd(x.dueDate)}{x.overdueDays > 0 && <span className="hb-1440"> <Badge tone="warn">trễ {x.overdueDays} ngày</Badge></span>}</span> },
               { key: "e", label: "HĐĐT", hideBelow: 1440, render: (x) => <Badge tone={einvTone(x.einvoiceStatus)}>{EINVOICE[x.einvoiceStatus] ?? x.einvoiceStatus}</Badge> },
               { key: "t", label: "Tổng", num: true, sort: (x) => x.total, render: (x) => <span className="money" style={{ color: x.total < 0 ? "var(--danger)" : undefined }}>{money(x.total)}</span> },
               { key: "o", label: "Còn nợ", num: true, sort: (x) => (x.kind === "adjustment" ? 0 : x.outstanding), render: (x) => <span className="money" style={{ color: x.overdueDays > 0 ? "var(--warn)" : undefined }}>{x.kind === "adjustment" ? "—" : money(x.outstanding)}</span> },
@@ -81,7 +81,7 @@ function InvoiceDetail({ id, onClose, onChanged }: { id: number; onClose: () => 
               {can("invoices.issue") && i.einvoiceStatus !== "issued" && i.einvoiceStatus !== "not_required" && i.status === "open" && <div><Button loading={busy} variant={i.einvoiceStatus === "failed" ? "primary" : "soft"} onClick={retry}>{i.einvoiceStatus === "failed" ? "Thử phát hành lại" : "Phát hành HĐĐT"}</Button></div>}
             </div>
           </Card>
-          <DataTable rows={i.lines} rowKey={(l: any) => l.id} cols={[
+          <DataTable rows={i.lines} rowKey={(l: any) => l.id} emptyState={<div className="hint">Hoá đơn chưa có dòng hàng.</div>} cols={[
             { key: "n", label: "Nội dung", title: true, render: (l: any) => l.description },
             { key: "q", label: "SL", right: true, render: (l: any) => qtyText(l.qtyMilli, l.unit) },
             { key: "p", label: "Đơn giá", right: true, render: (l: any) => <span className="money">{money(l.unitPrice)}</span> },

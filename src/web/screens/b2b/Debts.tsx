@@ -139,7 +139,7 @@ function Aging({ side, onOpen, selected }: { side: "receivable" | "payable"; onO
           emptyState={<EmptyState title={dirty ? "Không có công nợ nào khớp bộ lọc" : "Không có công nợ"} hint={dirty ? undefined : side === "receivable" ? "Khách chưa nợ khoản nào." : "Chưa nợ nhà cung cấp nào."} action={dirty ? <Button variant="soft" onClick={reset}>Xoá lọc</Button> : undefined} />}
           cols={[
             { key: "n", label: side === "receivable" ? "Khách hàng" : "Nhà cung cấp", title: true, sort: (x) => nameOf(x), render: (x) => <b>{nameOf(x)}</b> },
-            ...BK.map((b) => ({ key: b.k, label: b.label, num: true, hideMobile: true, hideBelow: (b.k === "d61_90" ? 1440 : b.k === "d31_60" ? 1280 : undefined) as any, sort: (x: any) => x.buckets?.[b.k] ?? 0, render: (x: any) => (x.buckets?.[b.k] ? <span className="money" style={{ color: b.k === "current" ? undefined : b.color }}>{num(x.buckets[b.k])}</span> : <span className="muted">—</span>) })),
+            ...BK.map((b) => ({ key: b.k, label: b.label, num: true, hideMobile: true, hideBelow: (b.k === "d31_60" ? 1280 : 1440) as any, sort: (x: any) => x.buckets?.[b.k] ?? 0, render: (x: any) => (x.buckets?.[b.k] ? <span className="money" style={{ color: b.k === "current" ? undefined : b.color }}>{num(x.buckets[b.k])}</span> : <span className="muted">—</span>) })),
             { key: "age", label: "Tuổi nợ", hideDesktop: true, render: (x: any) => <span className="small">{BK.filter((b) => x.buckets?.[b.k] > 0).map((b) => `${b.label}: ${num(x.buckets[b.k])}`).join(" · ") || "—"}</span> },
             { key: "o", label: "Quá hạn", num: true, sort: (x) => x.overdueAmount, render: (x) => (x.overdueAmount ? <Badge tone="warn">{money(x.overdueAmount)}{x.oldestOverdueDays ? ` · ${x.oldestOverdueDays}n` : ""}</Badge> : <span className="muted">—</span>) },
             { key: "u", label: "Trả trước", num: true, hideMobile: true, hideBelow: 1280, sort: (x) => x.unapplied, render: (x) => (x.unapplied ? <span className="money" style={{ color: "var(--accent)" }}>{money(x.unapplied)}</span> : "—") },
@@ -186,7 +186,7 @@ function PartnerSheet({ pt, id, name, onClose }: { pt: PT; id: number; name?: st
                     <tbody>
                       <tr className="open"><td colSpan={3}>Số dư đầu kỳ</td><td className="right num">{num(d.opening)}</td></tr>
                       {d.lines.map((l: any, i: number) => (
-                        <tr key={i}><td className="nw">{ymd(l.date).slice(0, 6) + ymd(l.date).slice(8)}</td><td className="code"><div>{l.docCode}</div><div className="muted small">{DOC_LABEL[l.docType] ?? l.docType}</div></td>
+                        <tr key={i}><td className="nw">{ymd(l.date).slice(0, 6) + ymd(l.date).slice(8)}</td><td className="code"><div className="nw">{l.docCode}</div><div className="muted small">{DOC_LABEL[l.docType] ?? l.docType}</div></td>
                           <td className="right num" style={{ color: l.credit ? "var(--accent)" : undefined }}>{l.debit ? "+" + num(l.debit) : "−" + num(l.credit)}</td><td className="right num"><b>{num(l.balance)}</b></td></tr>
                       ))}
                       <tr className="open"><td colSpan={3}>Số dư cuối kỳ</td><td className="right num"><b>{num(d.closing)}</b></td></tr>

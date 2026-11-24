@@ -556,3 +556,22 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
   .me-cols > .stack > .banner, .me-cols > .stack > .hint { grid-column: 1 / -1; }
   .me-sched { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-5); }
 }
+
+/* ===== UX 2C — sửa sau rà ảnh ===== */
+/* Ô tìm kiếm trong thanh lọc: đủ rộng để không cắt placeholder (chỉ từ 768px) */
+@media (min-width: 768px) { .filterbar .searchbox { flex: 1 1 260px; max-width: 320px; } }
+/* Lưới thẻ không tràn ngang khi nội dung thẻ dài (Bảng lương → danh sách kỳ) */
+.card-grid > * { min-width: 0; }
+@media (max-width: 767px) { .card-grid { grid-template-columns: minmax(0, 1fr); } }
+/* Khối KPI trong panel chi tiết / sheet: luôn 2 cột, không bị bóp thành 4 cột hẹp */
+.detail-panel .kpis, .sheet .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Khi panel chi tiết mở, phần danh sách hẹp lại: KPI tự co, bảng gọn hơn */
+.split.open .kpi-row { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.split.open .kpi .v { font-size: 1.1rem; }
+.split.open .dt-table th, .split.open .dt-table td { padding-left: var(--s-2); padding-right: var(--s-2); }
+/* Mã chứng từ trong sao kê không bị ngắt giữa chừng */
+.stmt td.code .nw { white-space: nowrap; }
+/* Thu chi (tab Quỹ): bảng phiếu gần đây nằm trong cột hẹp, ẩn cột Quỹ dưới 1600px */
+@media (max-width: 1599px) { .finance-recent .hb-1440 { display: none; } }
+/* Hai ô ngày trong thanh lọc không tràn khung trên điện thoại */
+@media (max-width: 767px) { .daterange-inputs { display: flex; align-items: center; gap: var(--s-2); } .daterange-inputs .input { flex: 1 1 0; min-width: 0; width: auto; } }
