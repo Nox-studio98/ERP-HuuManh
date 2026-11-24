@@ -7,12 +7,14 @@ import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { lineAmount } from "../lib/money";
-import { vnDayRangeUtc } from "../lib/time";
+import { vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
 import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
 import { salesSummary } from "../services/salesreport";
 import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-checkout";
+import { assertStmt } from "../services/guard";
+import { retireStaleDraft } from "../services/online-ops";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 
 export const posRoutes = new Hono<AppBindings>();
@@ -24,6 +26,8 @@ async function parseBody<T extends z.ZodTypeAny>(c: Ctx, schema: T): Promise<z.i
   return schema.parse(raw);
 }
 
+const MAX_VND = 10_000_000_000;
+const MAX_QTY = 1_000_000;
 const METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
 
@@ -89,7 +93,7 @@ posRoutes.get("/shifts/current", requirePerm("pos.shift"), async (c) => {
 });
 
 posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
-  const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0) }));
+  const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0).max(MAX_VND) }));
   const db = c.env.DB;
   const user = c.get("user");
   if (await openShiftOf(db, user.id)) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
@@ -99,8 +103,14 @@ posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
     .bind(storeId)
     .first<{ id: number }>();
   if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ tiền mặt");
-  const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
-  const id = r.meta.last_row_id as number;
+  let id: number;
+  try {
+    const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
+    id = r.meta.last_row_id as number;
+  } catch (e) {
+    if (/UNIQUE/i.test(String((e as Error)?.message))) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
+    throw e;
+  }
   await auditStmt(c, { action: "shift.open", entity: "shift", entityId: id, after: { openingCash: body.openingCash } }).run();
   const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
   return c.json({ shift }, 201);
@@ -128,7 +138,7 @@ async function expectedCash(db: D1Database, shift: { id: number; opening_cash: n
 
 posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
   const id = Number(c.req.param("id"));
-  const body = await parseBody(c, z.object({ countedCash: z.number().int().min(0), diffReason: z.string().trim().min(3).max(500).optional() }));
+  const body = await parseBody(c, z.object({ countedCash: z.number().int().min(0).max(MAX_VND), diffReason: z.string().trim().min(3).max(500).optional() }));
   const db = c.env.DB;
   const user = c.get("user");
   const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first<any>();
@@ -171,19 +181,19 @@ const checkoutSchema = z.object({
       z.object({
         productId: z.number().int().positive(),
         unit: z.string().min(1).max(20),
-        qty: z.number().positive().max(1_000_000),
-        unitPriceOverride: z.number().int().min(0).optional(), // VND / đơn vị chính
-        discount: z.number().int().min(0).optional(), // VND, giảm trực tiếp trên dòng
+        qty: z.number().positive().max(MAX_QTY),
+        unitPriceOverride: z.number().int().min(0).max(MAX_VND).optional(), // VND / đơn vị chính
+        discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm trực tiếp trên dòng
       }),
     )
     .min(1)
     .max(200),
-  discount: z.number().int().min(0).optional(), // VND, giảm cả đơn
-  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive(), ref: z.string().max(100).optional() })).max(10),
+  discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm cả đơn
+  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().max(100).optional() })).max(10),
   note: z.string().max(500).optional(),
   approvalId: z.number().int().positive().optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
-  redeemPoints: z.number().int().positive().optional(), // Đợt 4: đổi điểm tích luỹ
+  redeemPoints: z.number().int().positive().max(1_000_000_000).optional(), // Đợt 4: đổi điểm tích luỹ
 });
 
 async function getOrderFull(c: Ctx, orderId: number) {
@@ -220,9 +230,10 @@ async function getOrderFull(c: Ctx, orderId: number) {
     await db.prepare(`SELECT id, promotion_id, voucher_id, points_redeemed, amount, description FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(orderId).all()
   ).results;
   const canCost = can(role, "prices.view_cost");
-  const { customer_phone, ...rest } = o;
+  const { customer_phone, cost_total, ...rest } = o;
   return {
     ...rest,
+    ...(canCost ? { cost_total } : {}),
     customer: o.customer_id ? { id: o.customer_id, name: o.customer_name, phone: maskPhone(customer_phone, role) } : null,
     lines: lines.map((l) => {
       const { cost_amount, ...r } = l;
@@ -241,7 +252,12 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     c.json({ ...(await getOrderFull(c, id)), change, ...extra }, status);
 
   // EC-04: idempotent theo clientUuid
-  const existing = await db.prepare(`SELECT id, status FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string }>();
+  let existing = await db.prepare(`SELECT id, status, created_at FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string; created_at: string }>();
+  // Đơn nháp mồ côi (crash giữa lúc tạo nháp và batch): quá 2 phút thì giải phóng clientUuid để client thử lại
+  if (existing && existing.status === "draft" && Date.parse(existing.created_at) < Date.now() - 120_000) {
+    await retireStaleDraft(db, existing.id);
+    existing = null;
+  }
   if (existing && existing.status !== "cancelled" && existing.status !== "draft") return orderDone(existing.id, 200);
   if (existing) throw conflict("order_in_progress", "Đơn đang xử lý hoặc đã huỷ, vui lòng tạo đơn mới với clientUuid khác");
 
@@ -342,7 +358,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     if (items.some((it, i) => it.lineTotal + it.promoDiscount < costs[i])) reasons.push("below_cost");
     approvalUsed = null;
     if (reasons.length && !can(user.role, "approvals.decide")) {
-      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue });
+      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue }, await cartHash(body));
     }
     return { lineAllocs, productAllocs, costs, belowCost: reasons.includes("below_cost") };
   };
@@ -441,14 +457,26 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
 });
 
 /** Yêu cầu duyệt (giá dưới vốn / giảm giá vượt ngưỡng): trả approvalId đã duyệt, hoặc 409 approval_required. */
-async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object): Promise<number> {
+async function cartHash(body: z.infer<typeof checkoutSchema>) {
+  const canon = JSON.stringify({
+    l: body.lines.map((l) => [l.productId, l.unit, l.qty, l.unitPriceOverride ?? null, l.discount ?? 0]),
+    d: body.discount ?? 0,
+    v: body.voucherCode ?? null,
+    r: body.redeemPoints ?? 0,
+  });
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object, hash: string): Promise<number> {
   const db = c.env.DB;
   const user = c.get("user");
   const type = reasons.includes("below_cost") ? "order.below_cost" : "order.discount";
   if (approvalId) {
     const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
-    const okUuid = a && (() => { try { return JSON.parse(a.payload_json ?? "{}").clientUuid === clientUuid; } catch { return false; } })();
-    if (a && okUuid && a.requested_by === user.id && String(a.type).startsWith("order.")) {
+    // Duyệt gắn với đúng giỏ hàng (hash dòng + giảm giá) và đúng loại lý do, không chỉ clientUuid
+    const okUuid = a && (() => { try { const j = JSON.parse(a.payload_json ?? "{}"); return j.clientUuid === clientUuid && j.hash === hash; } catch { return false; } })();
+    if (a && okUuid && a.requested_by === user.id && a.type === type) {
       if (a.status === "approved" && !a.ref_id) return a.id;
       if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt đã bị từ chối", { approvalId: a.id });
       if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt", { approvalId: a.id, reasons });
@@ -456,14 +484,14 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
     throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId });
   }
   const pending = await db
-    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=?`)
-    .bind(user.id, clientUuid)
+    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=? AND json_extract(payload_json,'$.hash')=? AND type=?`)
+    .bind(user.id, clientUuid, hash, type)
     .first<{ id: number }>();
   let id = pending?.id;
   if (!id) {
     const r = await db
       .prepare(`INSERT INTO approvals(type, ref_type, payload_json, reason, requested_by) VALUES (?,?,?,?,?)`)
-      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, ...payload }), reasons.join(","), user.id)
+      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, hash, ...payload }), reasons.join(","), user.id)
       .run();
     id = r.meta.last_row_id as number;
     await auditStmt(c, { action: "approval.request", entity: "approval", entityId: id, after: { type, reasons } }).run();
@@ -541,7 +569,7 @@ const returnSchema = z.object({
     .array(
       z.object({
         orderLineId: z.number().int().positive(),
-        qty: z.number().positive(),
+        qty: z.number().positive().max(MAX_QTY),
         unit: z.string().min(1),
         restock: z.boolean(),
         reason: z.string().trim().min(2).max(300),
@@ -628,7 +656,25 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
         .first<{ id: number }>();
       lineIds.push(row!.id);
     }
-    const stmts: D1PreparedStatement[] = [];
+    // Chốt chặn trong batch (audit #2): trả đồng thời không được vượt số đã bán / số đã thu
+    const stmts: D1PreparedStatement[] = [
+      assertStmt(db, "order.return.status", `SELECT status = 'completed' AND kind = 'sale' FROM orders WHERE id = ?`, [origId]),
+      ...[...claimed].map(([olId, q]) =>
+        assertStmt(
+          db,
+          "order.return.qty",
+          `SELECT (SELECT qty_milli FROM order_lines WHERE id = ?)
+                  - COALESCE((SELECT SUM(r.qty_milli) FROM order_lines r WHERE r.original_line_id = ? AND r.order_id IN (SELECT id FROM orders WHERE kind = 'return' AND status = 'completed')), 0) >= ?`,
+          [olId, olId, q],
+        ),
+      ),
+      assertStmt(
+        db,
+        "order.return.amount",
+        `SELECT (SELECT total FROM orders WHERE id = ?) - COALESCE((SELECT SUM(total) FROM orders WHERE original_order_id = ? AND kind = 'return' AND status = 'completed'), 0) >= ?`,
+        [origId, origId, total],
+      ),
+    ];
     // Đợt 4: thu hồi điểm tích / hoàn điểm đã đổi / hoàn lượt voucher
     const priorRet = (
       await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(origId).first<{ t: number }>()
@@ -672,6 +718,12 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   const o = await db.prepare(`SELECT * FROM orders WHERE id = ?`).bind(id).first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   if (o.kind !== "sale" || o.status !== "completed") throw conflict("not_voidable", "Chỉ huỷ được đơn bán đã hoàn tất");
+  // Đơn online/B2B/fresco có luồng huỷ riêng (giữ tồn, công nợ, COD…) — POS void sẽ làm sai kho/tiền
+  if (o.channel !== "pos") throw conflict("wrong_channel", "Đơn kênh này có luồng huỷ riêng, không huỷ bằng POS");
+  const period = vnPeriod(new Date(o.completed_at ?? o.created_at));
+  if (await db.prepare(`SELECT 1 AS x FROM periods WHERE period = ? AND locked_at IS NOT NULL`).bind(period).first()) {
+    throw new AppError(423, "period_locked", "Kỳ đã khoá sổ, không huỷ được đơn của kỳ này");
+  }
   if (o.shift_id) {
     const sh = await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(o.shift_id).first<{ status: string }>();
     if (sh?.status === "closed" && user.role !== "manager" && user.role !== "owner") {
@@ -691,7 +743,17 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   ).results;
   const byProduct = new Map<number, LotAllocation[]>();
   for (const r of rows) byProduct.set(r.product_id, [...(byProduct.get(r.product_id) ?? []), { lotId: r.lot_id, qtyMilli: r.qty_milli, unitCost: r.unit_cost }]);
-  const stmts: D1PreparedStatement[] = [];
+  const stmts: D1PreparedStatement[] = [
+    // Chốt chặn (audit #1): hai lần huỷ đồng thời không được cùng nhập kho / thu hồi điểm
+    assertStmt(
+      db,
+      "order.void",
+      `SELECT o.status = 'completed' AND NOT EXISTS (SELECT 1 FROM orders r WHERE r.original_order_id = o.id AND r.kind = 'return' AND r.status = 'completed')
+         AND NOT EXISTS (SELECT 1 FROM periods p WHERE p.period = ? AND p.locked_at IS NOT NULL)
+         FROM orders o WHERE o.id = ?`,
+      [period, id],
+    ),
+  ];
   for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
   stmts.push(...(await reversalStatements(db, o, o.total, user.id, "huỷ đơn")));
   stmts.push(

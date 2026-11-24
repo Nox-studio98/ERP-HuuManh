@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { AppBindings } from "../env";
 import { auditStmt } from "../lib/audit";
 import { conflict, notFound } from "../lib/errors";
+import { assertStmt } from "./guard";
 
 /** Duyệt phiếu chi chờ duyệt → posted (dùng chung cho /vouchers/:id/approve và /approvals/:id/decide). */
 export async function approveVoucher(c: Context<AppBindings>, voucherId: number, note?: string) {
@@ -11,6 +12,7 @@ export async function approveVoucher(c: Context<AppBindings>, voucherId: number,
   if (!v) throw notFound("voucher_not_found", "Không tìm thấy phiếu");
   if (v.status !== "pending_approval") throw conflict("not_pending", "Phiếu không ở trạng thái chờ duyệt");
   await db.batch([
+    assertStmt(db, "voucher.approve", `SELECT status = 'pending_approval' FROM cash_vouchers WHERE id = ?`, [voucherId]),
     db.prepare(`UPDATE cash_vouchers SET status='posted', approved_by=? WHERE id=? AND status='pending_approval'`).bind(user.id, voucherId),
     db
       .prepare(
