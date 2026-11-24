@@ -74,7 +74,7 @@ Approval handlers Agent A đăng ký: `order.credit_override` (perm b2b.credit_o
 | GET | /debts/payables | debt.view | M5-02 theo NCC tương tự + bills |
 | GET | /debts/aging?side=receivable|payable&asOf= | debt.view | M5-04 bảng tuổi nợ chi tiết theo hoá đơn |
 | GET | /suppliers/:id/bills, GET /bills/:id | debt.view | |
-| POST | /bills/:id/finalize | debt.write | EC-30 nhận hoá đơn NCC: `{supplierRef, total?, reason?}` — đổi total khi chênh giá chốt phải có reason, audit; bỏ is_provisional |
+| POST | /bills/:id/finalize | debt.write | EC-30 nhận hoá đơn NCC: `{supplierRef, total?, vatAmount?, reason?}` — `vatAmount` (VND nguyên, 0..total) là VAT đầu vào ghi vào `supplier_bills.vat_amount` (báo cáo VAT); audit có `vat` trước/sau; đổi total khi chênh giá chốt phải có reason, audit; bỏ is_provisional |
 | POST | /debts/payments | debt.write | M5-03 `{direction:'in'|'out', partnerType, partnerId, fundId, amount, method:'cash'|'transfer', ref?, paidAt?, allocations?:[{invoiceId|billId, amount}], bankTxnId?}` → batch: debt_payments + cash_voucher (in/out, kỳ hiện tại; kỳ khoá → 423) + allocations (cũ nhất trước nếu không chỉ định; không vượt outstanding) + audit. Response `{payment, allocations[], unapplied}` |
 | POST | /debts/payments/:id/allocate | debt.write | gạch phần dư chưa gạch vào hoá đơn cụ thể |
 | POST | /debts/payments/:id/reverse | debt.write | đảo: xoá allocations? **Không** — tạo phiếu đảo M6 + đánh dấu `reversed`; allocations của payment bị loại khỏi tính toán (lọc `status='posted'` khi tính) |
