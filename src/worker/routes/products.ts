@@ -227,6 +227,11 @@ productRoutes.post("/products/:id/merge-into/:targetId", requirePerm("products.w
       db.prepare(`UPDATE stock_doc_lines SET product_id = ?2 WHERE product_id = ?1 AND doc_id IN (SELECT id FROM stock_docs WHERE status IN ('draft','pending_approval'))`).bind(src, tgt),
       db.prepare(`UPDATE quote_lines SET product_id = ?2 WHERE product_id = ?1 AND quote_id IN (SELECT id FROM quotes WHERE status IN ('draft','pending_approval','sent'))`).bind(src, tgt),
       db.prepare(`UPDATE promotion_items SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      // đơn sỉ lặp lưu dòng hàng dạng JSON → đổi productId nguồn sang đích
+      db.prepare(
+        `UPDATE recurring_orders SET lines_json = (SELECT json_group_array(CASE WHEN json_extract(value, '$.productId') = ?1 THEN json_set(value, '$.productId', ?2) ELSE json(value) END) FROM json_each(lines_json))
+          WHERE EXISTS (SELECT 1 FROM json_each(lines_json) WHERE json_extract(value, '$.productId') = ?1)`,
+      ).bind(src, tgt),
       db.prepare(`UPDATE OR IGNORE bundle_components SET bundle_product_id = ?2 WHERE bundle_product_id = ?1`).bind(src, tgt),
       db.prepare(`UPDATE OR IGNORE bundle_components SET component_product_id = ?2 WHERE component_product_id = ?1`).bind(src, tgt),
       db.prepare(`UPDATE OR IGNORE product_matches SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
