@@ -300,8 +300,8 @@ const zoneSchema = z.object({
   name: z.string().trim().min(1).max(100),
   districts: z.array(z.string().trim().min(1).max(100)).min(1).max(100),
   fee: z.number().int().min(0).max(10_000_000),
-  freeOver: z.number().int().min(0).nullish(),
-  minOrder: z.number().int().min(0).default(0),
+  freeOver: z.number().int().min(0).max(10_000_000_000).nullish(),
+  minOrder: z.number().int().min(0).max(10_000_000_000).default(0),
   active: z.boolean().default(true),
 });
 const zoneView = (z: any) => ({ id: z.id, name: z.name, districts: JSON.parse(z.districts_json), fee: z.fee, freeOver: z.free_over, minOrder: z.min_order, active: !!z.active });

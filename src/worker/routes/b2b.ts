@@ -6,7 +6,7 @@ import { requirePerm, can } from "../lib/rbac";
 import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { lineAmount } from "../lib/money";
-import { nextCode } from "../lib/codes";
+import { nextCode, PREFIX } from "../lib/codes";
 import { vnDate } from "../lib/time";
 import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
 import { releaseOrderStmts, consumeForDeliveryStmts } from "../services/reservations";
@@ -14,6 +14,7 @@ import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from
 import { kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { getSettingInt } from "../services/settings";
+import { assertStmt } from "../services/guard";
 import { pageParams } from "../services/http";
 import {
   confirmOrderFlow, createB2bOrder, loadCustomerForOrder, loadOrderDetail, orderLineInsert, priceLines, storeIdOf, isCheckFail, DATE_RE, type LineIn,
@@ -33,11 +34,11 @@ const lineIn = z.object({
   productId: z.number().int().positive(),
   unit: z.string().min(1).max(20),
   qty: z.number().positive().max(1_000_000),
-  unitPrice: z.number().int().min(0).optional(),
+  unitPrice: z.number().int().min(0).max(10_000_000_000).optional(),
 });
 
 async function orderRow(db: D1Database, oid: number) {
-  const o = await db.prepare(`SELECT * FROM orders WHERE id = ? AND channel = 'b2b'`).bind(oid).first<any>();
+  const o = await db.prepare(`SELECT * FROM orders WHERE id = ? AND channel = 'b2b' AND kind = 'sale'`).bind(oid).first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn sỉ");
   return o;
 }
@@ -55,7 +56,7 @@ async function createAndConfirm(c: Ctx, input: Parameters<typeof createB2bOrder>
 b2bRoutes.get("/b2b/orders", requirePerm("b2b.view"), async (c) => {
   const { limit, cursor } = pageParams(c);
   const q = c.req.query();
-  const where = [`o.channel = 'b2b'`];
+  const where = [`o.channel = 'b2b'`, `o.kind = 'sale'`];
   const binds: unknown[] = [];
   if (q.status) (where.push("o.status = ?"), binds.push(q.status));
   if (q.customerId) (where.push("o.customer_id = ?"), binds.push(Number(q.customerId)));
@@ -140,6 +141,7 @@ b2bRoutes.put("/b2b/orders/:id", requirePerm("b2b.write"), async (c) => {
       ...items.map((i) => orderLineInsert(db, o.code, i)),
     );
   }
+  stmts.unshift(assertStmt(db, "b2b.update", `SELECT status = ? FROM orders WHERE id = ?`, [o.status, oid]));
   stmts.push(
     db
       .prepare(`UPDATE orders SET address_id=?, delivery_date=?, note=?, subtotal=?, total=?, status=? WHERE id=?`)
@@ -163,9 +165,11 @@ b2bRoutes.post("/b2b/orders/:id/cancel", requirePerm("b2b.write"), async (c) => 
   const o = await orderRow(db, oid);
   if (!["new", "confirmed", "preparing", "delivery_failed"].includes(o.status)) throw conflict("order_not_cancellable", `Không huỷ được đơn ${o.status}`, { status: o.status });
   await db.batch([
+    // Chốt chặn (audit #7): huỷ đồng thời / huỷ song song với giao hàng — đơn phải còn đúng trạng thái đã đọc
+    assertStmt(db, "b2b.cancel", `SELECT status = ? FROM orders WHERE id = ?`, [o.status, oid]),
     ...(await releaseOrderStmts(db, oid)),
     db.prepare(`UPDATE deliveries SET status='cancelled' WHERE order_id=? AND status IN ('picking','ready')`).bind(oid),
-    db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=?`).bind(c.get("user").id, b.reason, oid),
+    db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=? AND status = ?`).bind(c.get("user").id, b.reason, oid, o.status),
     db.prepare(`UPDATE approvals SET status='rejected', decision_note='Đơn bị huỷ' WHERE type='order.credit_override' AND ref_type='order' AND ref_id=? AND status='pending'`).bind(String(oid)),
     auditStmt(c, { action: "b2b_order.cancel", entity: "b2b_order", entityId: o.code, before: { status: o.status }, after: { status: "cancelled" }, reason: b.reason }),
   ]);
@@ -223,6 +227,7 @@ b2bRoutes.post("/b2b/orders/:id/pick", requirePerm("b2b.deliver"), async (c) => 
   const code = await nextCode(db, "GH");
   const lines = (await db.prepare(`SELECT id FROM order_lines WHERE order_id = ? ORDER BY id`).bind(oid).all<{ id: number }>()).results;
   await db.batch([
+    assertStmt(db, "b2b.pick", `SELECT (SELECT status FROM orders WHERE id = ?) = 'confirmed' AND NOT EXISTS (SELECT 1 FROM deliveries WHERE order_id = ? AND status IN ('picking','ready','shipping'))`, [oid, oid]),
     db.prepare(`INSERT INTO deliveries(code, order_id, address_id, status, picked_by) VALUES (?,?,?,'picking',?)`).bind(code, oid, o.address_id, c.get("user").id),
     ...lines.map((l) => db.prepare(`INSERT INTO delivery_lines(delivery_id, order_line_id) VALUES ((SELECT id FROM deliveries WHERE code = ?), ?)`).bind(code, l.id)),
     db.prepare(`UPDATE orders SET status='preparing' WHERE id = ? AND status='confirmed'`).bind(oid),
@@ -235,7 +240,7 @@ b2bRoutes.post("/b2b/orders/:id/pick", requirePerm("b2b.deliver"), async (c) => 
 
 const scanBody = z.object({
   code: z.string().trim().min(1).max(100),
-  qty: z.number().positive().optional(),
+  qty: z.number().positive().max(1_000_000).optional(),
   unit: z.string().trim().min(1).optional(),
 });
 
@@ -327,6 +332,7 @@ b2bRoutes.post("/deliveries/:id/ready", requirePerm("b2b.deliver"), async (c) =>
   ).results;
   if (diffs.length && !b.reason) throw new AppError(422, "reason_required", "Số soạn lệch so với đơn, cần nhập lý do", { lines: diffs.map((x) => ({ orderLineId: x.order_line_id, pickedMilli: x.picked_milli, orderedMilli: x.qty_milli })) });
   await db.batch([
+    assertStmt(db, "delivery.ready", `SELECT status = 'picking' FROM deliveries WHERE id = ?`, [did]),
     db.prepare(`UPDATE deliveries SET status='ready', note=COALESCE(?, note) WHERE id=? AND status='picking'`).bind(b.reason ?? null, did),
     auditStmt(c, { action: "delivery.ready", entity: "delivery", entityId: d.code, after: { diffLines: diffs.length }, reason: b.reason }),
   ]);
@@ -341,6 +347,7 @@ b2bRoutes.post("/deliveries/:id/ship", requirePerm("b2b.deliver"), async (c) => 
   if (!d) throw notFound("delivery_not_found", "Không tìm thấy phiếu giao");
   if (d.status !== "ready") throw conflict("invalid_status", "Phiếu giao chưa soạn xong", { status: d.status });
   await db.batch([
+    assertStmt(db, "delivery.ship", `SELECT status = 'ready' FROM deliveries WHERE id = ?`, [did]),
     db.prepare(`UPDATE deliveries SET status='shipping', shipper=? WHERE id=? AND status='ready'`).bind(b.shipper ?? null, did),
     db.prepare(`UPDATE orders SET status='shipping' WHERE id=? AND status='preparing'`).bind(d.order_id),
     auditStmt(c, { action: "delivery.ship", entity: "delivery", entityId: d.code, after: { shipper: b.shipper ?? null } }),
@@ -352,8 +359,8 @@ const confirmSchema = z.object({
   receiverName: z.string().trim().min(1).max(100),
   lines: z.array(z.object({
     orderLineId: z.number().int().positive(),
-    deliveredQty: z.number().min(0),
-    rejectedQty: z.number().min(0).optional(),
+    deliveredQty: z.number().min(0).max(1_000_000),
+    rejectedQty: z.number().min(0).max(1_000_000).optional(),
     rejectReason: z.enum(["hong", "sai_quy_cach", "thua", "khac"]).optional(),
   })).min(1),
 });
@@ -386,7 +393,11 @@ b2bRoutes.post("/deliveries/:id/confirm", requirePerm("b2b.deliver"), async (c) 
 
   // Xuất kho theo số thực giao; hàng từ chối / giao thiếu được nhả giữ (EC-26)
   const res = await consumeForDeliveryStmts(db, order.id, new Map(per.map((x) => [x.line.id, x.delivered])), "delivery", did, user.id);
-  const stmts: D1PreparedStatement[] = [...res.stmts];
+  // Chốt chặn (audit #7): hai lần xác nhận giao đồng thời không được cùng xuất kho / lập hoá đơn
+  const stmts: D1PreparedStatement[] = [
+    assertStmt(db, "delivery.confirm", `SELECT d.status IN ('ready','shipping') AND o.status IN ('preparing','shipping') FROM deliveries d JOIN orders o ON o.id = d.order_id WHERE d.id = ?`, [did]),
+    ...res.stmts,
+  ];
   const allocByLine = new Map<number, LotAllocation[]>(res.allocByLine);
   // Giữ thiếu → phân bổ thêm FEFO từ tồn tự do (gộp theo sản phẩm để hai dòng không giữ trùng)
   const shortByProduct = new Map<number, { lineId: number; qty: number }[]>();
@@ -468,8 +479,9 @@ b2bRoutes.post("/deliveries/:id/fail", requirePerm("b2b.deliver"), async (c) => 
   if (!d) throw notFound("delivery_not_found", "Không tìm thấy phiếu giao");
   if (!["picking", "ready", "shipping"].includes(d.status)) throw conflict("invalid_status", "Phiếu giao không thể đánh dấu thất bại", { status: d.status });
   await db.batch([
+    assertStmt(db, "delivery.fail", `SELECT status IN ('picking','ready','shipping') FROM deliveries WHERE id = ?`, [did]),
     ...(await releaseOrderStmts(db, d.order_id)),
-    db.prepare(`UPDATE deliveries SET status='failed', note=? WHERE id=?`).bind(b.reason, did),
+    db.prepare(`UPDATE deliveries SET status='failed', note=? WHERE id=? AND status IN ('picking','ready','shipping')`).bind(b.reason, did),
     db.prepare(`UPDATE orders SET status='delivery_failed' WHERE id=?`).bind(d.order_id),
     auditStmt(c, { action: "delivery.fail", entity: "delivery", entityId: d.code, after: { orderId: d.order_id }, reason: b.reason }),
   ]);
@@ -485,7 +497,7 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
   const b = await parse(c, z.object({
     lines: z.array(z.object({
       orderLineId: z.number().int().positive(),
-      qty: z.number().positive(),
+      qty: z.number().positive().max(1_000_000),
       unit: z.string().min(1),
       restock: z.boolean(),
       reason: z.string().trim().min(2).max(200),
@@ -501,6 +513,9 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
   let restockedCost = 0;
   const lotCapUsed = new Map<number, number>(); // đã dùng trong yêu cầu này
   const moveSpecs: { lotId: number; productId: number; qty: number; unitCost: number }[] = [];
+  // Mỗi dòng trả → 1 dòng của đơn kind='return' (cùng cách POS biểu diễn trả hàng) để /reports/pnl trừ doanh thu & giá vốn
+  const retLines: { l: any; qtyMilli: number; amount: number; cost: number; lots: { lotId: number; qty: number; unitCost: number }[] }[] = [];
+  const claimed = new Map<number, number>();
   for (const rl of b.lines) {
     const l = await db
       .prepare(`SELECT ol.*, p.name AS product_name, p.base_unit FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.id = ? AND ol.order_id = ?`)
@@ -514,7 +529,11 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
     const returned = (await db.prepare(
       `SELECT COALESCE(-SUM(il.qty_milli),0) AS q FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.order_line_id = ? AND i.kind = 'adjustment' AND i.status = 'open'`,
     ).bind(l.id).first<{ q: number }>())!.q;
-    if (qtyMilli > delivered - returned) throw new AppError(422, "over_return", "Số trả vượt số đã giao còn lại", { orderLineId: l.id, returnableMilli: delivered - returned });
+    const inReq = claimed.get(l.id) ?? 0;
+    claimed.set(l.id, inReq + qtyMilli);
+    if (qtyMilli + inReq > delivered - returned) throw new AppError(422, "over_return", "Số trả vượt số đã giao còn lại", { orderLineId: l.id, returnableMilli: delivered - returned });
+    const rline = { l, qtyMilli, amount: lineAmount(l.unit_price, qtyMilli), cost: 0, lots: [] as { lotId: number; qty: number; unitCost: number }[] };
+    retLines.push(rline);
     invLines.push({ orderLineId: l.id, productId: l.product_id, description: `Trả hàng: ${l.product_name} (${rl.reason})`, unit: l.base_unit, qtyMilli: -qtyMilli, unitPrice: l.unit_price, amount: -lineAmount(l.unit_price, qtyMilli) });
     if (rl.restock) {
       // cộng kho đúng lô gốc (order_line_lots), trừ phần đã trả trước đó
@@ -532,13 +551,58 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
         lotCapUsed.set(lot.lot_id, (lotCapUsed.get(lot.lot_id) ?? 0) + take);
         need -= take;
         moveSpecs.push({ lotId: lot.lot_id, productId: l.product_id, qty: take, unitCost: lot.unit_cost });
+        rline.lots.push({ lotId: lot.lot_id, qty: take, unitCost: lot.unit_cost });
+        rline.cost += Math.round((lot.unit_cost * take) / 1000);
         restockedCost += Math.round((lot.unit_cost * take) / 1000);
       }
       if (need > 0) throw new AppError(422, "restock_lot_missing", "Không xác định được lô gốc để cộng kho", { orderLineId: l.id });
+    } else {
+      // không nhập lại kho: giá vốn theo bình quân của dòng gốc → P&L tính vào hao hụt (như POS trả không nhập kho)
+      rline.cost = delivered > 0 ? Math.round((l.cost_amount * qtyMilli) / delivered) : 0;
     }
   }
   const inv = await invoiceStmts(c, { kind: "adjustment", customerId: o.customer_id, orderId: oid, originalInvoiceId: orig.id, dueDate: orig.due_date, lines: invLines, note: b.lines.map((x) => x.reason).join("; ") });
+  // Chốt chặn (audit #14/#2): trả đồng thời không được vượt số đã giao; đơn phải còn 'completed'
+  stmts.push(assertStmt(db, "b2b.return.status", `SELECT status = 'completed' FROM orders WHERE id = ?`, [oid]));
+  for (const [olId, q] of claimed) {
+    stmts.push(
+      assertStmt(
+        db,
+        "b2b.return.qty",
+        `SELECT (SELECT COALESCE(SUM(delivered_milli),0) FROM delivery_lines WHERE order_line_id = ?)
+                - COALESCE((SELECT -SUM(il.qty_milli) FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE il.order_line_id = ? AND i.kind = 'adjustment' AND i.status = 'open'), 0) >= ?`,
+        [olId, olId, q],
+      ),
+    );
+  }
   stmts.push(...inv.stmts);
+  const retCode = await nextCode(db, PREFIX.return);
+  const retTotal = retLines.reduce((s, x) => s + x.amount, 0);
+  const retCost = retLines.reduce((s, x) => s + x.cost, 0);
+  stmts.push(
+    db
+      .prepare(
+        `INSERT INTO orders(code, channel, kind, original_order_id, store_id, customer_id, status, subtotal, total, cost_total, paid_total, note, created_by, completed_at)
+         VALUES (?, 'b2b', 'return', ?, ?, ?, 'completed', ?, ?, ?, 0, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+      )
+      .bind(retCode, oid, o.store_id, o.customer_id, retTotal, retTotal, retCost, `Trả hàng sau HĐ ${inv.code}: ${b.lines.map((x) => x.reason).join("; ")}`.slice(0, 500), user.id),
+  );
+  for (const x of retLines) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, cost_amount, original_line_id)
+           VALUES ((SELECT id FROM orders WHERE code = ?), ?,?,?,?,?,0,?,?,?)`,
+        )
+        .bind(retCode, x.l.product_id, x.l.unit, x.qtyMilli, x.l.unit_price, x.l.price_list_id, x.amount, x.cost, x.l.id),
+    );
+    for (const lot of x.lots)
+      stmts.push(
+        db
+          .prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES ((SELECT MAX(id) FROM order_lines WHERE order_id = (SELECT id FROM orders WHERE code = ?)), ?,?,?)`)
+          .bind(retCode, lot.lotId, lot.qty, lot.unitCost),
+      );
+  }
   for (const m of moveSpecs)
     stmts.push(
       db.prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli + ? WHERE id = ?`).bind(m.qty, m.lotId),
@@ -549,8 +613,7 @@ b2bRoutes.post("/b2b/orders/:id/returns", requirePerm("b2b.write"), async (c) =>
         )
         .bind(m.lotId, m.productId, m.qty, m.unitCost, inv.code, user.id),
     );
-  if (restockedCost) stmts.push(db.prepare(`UPDATE orders SET cost_total = cost_total - ? WHERE id = ?`).bind(restockedCost, oid));
-  stmts.push(auditStmt(c, { action: "b2b_order.return", entity: "b2b_order", entityId: o.code, after: { adjustmentInvoice: inv.code, total: inv.total, lines: b.lines } }));
+  stmts.push(auditStmt(c, { action: "b2b_order.return", entity: "b2b_order", entityId: o.code, after: { adjustmentInvoice: inv.code, returnOrder: retCode, total: inv.total, lines: b.lines } }));
   await db.batch(stmts);
   const row = await db.prepare(`SELECT id, code, kind, original_invoice_id, issue_date, due_date, subtotal, total, einvoice_status FROM invoices WHERE code = ?`).bind(inv.code).first<any>();
   try { await kickJobs(c.env, "invoice", row.id); } catch { /* cron quét lại */ }
@@ -563,7 +626,7 @@ const recurSchema = z.object({
   customerId: z.number().int().positive(),
   addressId: z.number().int().positive(),
   weekdays: z.array(z.number().int().min(1).max(7)).min(1).max(7),
-  lines: z.array(z.object({ productId: z.number().int().positive(), unit: z.string().min(1), qty: z.number().positive() })).min(1).max(100),
+  lines: z.array(z.object({ productId: z.number().int().positive(), unit: z.string().min(1), qty: z.number().positive().max(1_000_000) })).min(1).max(100),
   active: z.boolean().optional(),
 });
 
