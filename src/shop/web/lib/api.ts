@@ -16,9 +16,11 @@ export interface Card {
 export interface ProductDetail extends Card { description: string; images: string[]; groupName: string | null; related: Card[] }
 export interface PostCard { slug: string; title: string; excerpt: string | null; coverUrl: string | null; publishedAt: string | null }
 export interface Home { banners: { id: number; title: string; imageUrl: string | null; linkUrl: string | null }[]; featured: Card[]; groups: { id: number; name: string }[]; posts: PostCard[] }
-export interface QuoteLine { productId: number; name: string; unit: string; qty: number; qtyMilli: number; unitPrice: number; lineTotal: number; available: boolean; preorderMilli: number; sellByWeight: boolean }
+export interface QuoteLine { productId: number; name: string; unit: string; qty: number; qtyMilli: number; unitPrice: number; lineTotal: number; available: boolean; preorderMilli: number; sellByWeight: boolean; discount?: number }
 export interface Issue { productId: number | null; code: string; message: string }
-export interface Quote { lines: QuoteLine[]; subtotal: number; shippingFee: number; zone: { id: number; name: string } | null; total: number; estimated: boolean; issues: Issue[] }
+export interface QuoteDiscount { promotionId: number; amount: number; description: string }
+export interface QuoteVoucher { code: string; applied: boolean; reason?: string }
+export interface Quote { lines: QuoteLine[]; subtotal: number; discount: number; discounts: QuoteDiscount[]; voucher?: QuoteVoucher; shippingFee: number; zone: { id: number; name: string } | null; total: number; estimated: boolean; issues: Issue[] }
 export interface Slot { date: string; id: number; label: string; startTime: string; endTime: string; available: boolean; reason?: string }
 export interface Zone { id: number; name: string; fee: number; freeOver: number | null; minOrder: number }
 export interface Transfer { bankBin: string; accountNo: string; accountName: string; amount: number; content: string; qrPayload: string; expiresAt: string | null }
