@@ -238,10 +238,16 @@ describe("xuất kho theo số thực cân + giao hàng", () => {
     await post("online_staff", o.id, "fail", { reason: "Khách từ chối nhận" });
     const r = await post("online_staff", o.id, "return-to-stock", { lines: [{ orderLineId: o.lineIds[0], qty: 6, restock: true, reason: "Hàng còn tươi" }] });
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "refunded", result: { refund: o.total } });
+    // A-14: online_staff chỉ tạo nghĩa vụ hoàn tiền, quỹ chưa đổi
+    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "paid", refundDue: o.total, result: { refund: 0, refundDue: o.total } });
     expect(await lot(611)).toEqual({ h: 4000, r: 0 });
     expect(await lot(6112)).toEqual({ h: 5000, r: 0 });
-    expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total, -o.total]);
+    expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]);
+    expect((await post("online_staff", o.id, "refund")).status).toBe(403);
+    const rf = await post("accountant", o.id, "refund");
+    expect(rf.status).toBe(200);
+    expect(rf.body).toMatchObject({ paymentStatus: "refunded", refundDue: 0 });
+    expect(rf.body.payments.map((p: any) => p.amount)).toEqual([o.total, -o.total]);
 
     // restock=false → không cộng kho, ghi hao hụt
     await mkProduct(612, 5000, 20000);
@@ -265,7 +271,8 @@ describe("huỷ đơn EC-06 + hết hạn thanh toán", () => {
     expect((await post("online_staff", o.id, "cancel", { reason: "x" })).status).toBe(422);
     const r = await post("online_staff", o.id, "cancel", { reason: "Khách đổi ý" });
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "refunded" });
+    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "paid", refundDue: o.total });
+    expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]); // A-14: chưa ghi quỹ
     expect(await lot(613)).toEqual({ h: 10000, r: 0 });
     expect(r.body.paymentIntents[0].status).toBe("cancelled");
     expect((await db().prepare(`SELECT COUNT(*) n FROM reservations WHERE order_id=? AND status='active'`).bind(o.id).first<any>()).n).toBe(0);
@@ -276,6 +283,7 @@ describe("huỷ đơn EC-06 + hết hạn thanh toán", () => {
     await mkProduct(614, 5000);
     const o = await mk({ status: "cancelled", method: "transfer", pay: "paid", lines: [{ pid: 614, qty: 1 }], reserve: false });
     await db().prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?, 'transfer', ?, 2, 'confirmed')`).bind(o.id, o.total).run();
+    await db().prepare(`UPDATE orders SET refund_due=? WHERE id=?`).bind(o.total, o.id).run();
     const list = await api("manager", "GET", `/api/v1/online-orders?q=${o.code}`);
     expect(list.body.items[0].needsRefund).toBe(true);
     expect((await post("online_staff", o.id, "refund")).status).toBe(403);
