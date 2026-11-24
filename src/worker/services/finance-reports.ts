@@ -13,7 +13,7 @@ export async function voucherCosts(db: D1Database, fromIso: string, toIso: strin
                 SUM(CASE WHEN v.direction='out' THEN v.amount WHEN v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END) AS amount
            FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status='posted' AND v.created_at >= ? AND v.created_at < ?
-            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
+            AND cc.direction = 'out' AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
           GROUP BY v.channel, v.category_id`,
       )
       .bind(fromIso, toIso)
@@ -45,6 +45,8 @@ export async function shrinkage(db: D1Database, fromIso: string, toIso: string) 
  *  - forfeitedDeposits: cọc đặt trước không hoàn → thu khác
  *  - stockCount: chênh lệch kiểm kê/điều chỉnh tồn (move_type='adjust') theo giá vốn lô; giảm = chi phí (+), tăng = giảm chi phí (−). Hao hụt (waste) đã tính riêng.
  *  - voucherIncome: phiếu thu có dòng P&L other_income (vd chênh lệch đối soát thừa), trừ phiếu đảo
+ *  - purchaseVariance: chênh lệch giá mua (B-09) của phần đã bán khi chốt hoá đơn tạm khác giá, tính vào ngày chốt
+ *  - otherReceipts: phiếu thu các khoản mục còn lại có dòng P&L (vd THU_KHAC 'other'), trừ phiếu đảo (B-11); khoản mục transfer/revenue/cogs bị loại
  * return_credit / offset / opening_balance không đi vào P&L. Mốc ngày theo created_at (UTC) đã quy đổi qua fromIso/toIso của ngày VN.
  */
 export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: string) {
@@ -66,21 +68,31 @@ export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: str
     .prepare(`SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000.0),0) AS v FROM stock_moves WHERE move_type='adjust' AND at >= ? AND at < ?`)
     .bind(fromIso, toIso)
     .first<{ v: number }>();
+  // B-11: phiếu thu của khoản mục có dòng P&L (other_income, other...) là thu nhập; phiếu đảo (cùng khoản mục, ngược chiều) trừ lại đúng dòng của phiếu gốc
   const vi = await db
     .prepare(
-      `SELECT COALESCE(SUM(CASE WHEN v.direction='in' AND v.reverses_id IS NULL THEN v.amount WHEN v.direction='out' AND v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END),0) AS s
+      `SELECT COALESCE(SUM(CASE WHEN cc.pnl_line='other_income' THEN CASE WHEN v.direction='in' AND v.reverses_id IS NULL THEN v.amount WHEN v.direction='out' AND v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END ELSE 0 END),0) AS surplus,
+              COALESCE(SUM(CASE WHEN COALESCE(cc.pnl_line,'other')<>'other_income' THEN CASE WHEN v.direction='in' AND v.reverses_id IS NULL THEN v.amount WHEN v.direction='out' AND v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END ELSE 0 END),0) AS other
          FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
-        WHERE v.status='posted' AND cc.pnl_line='other_income' AND v.created_at >= ? AND v.created_at < ?`,
+        WHERE v.status='posted' AND cc.direction='in' AND COALESCE(cc.pnl_line,'other') NOT IN ('revenue','cogs','transfer')
+          AND v.created_at >= ? AND v.created_at < ?`,
     )
+    .bind(fromIso, toIso)
+    .first<{ surplus: number; other: number }>();
+  // B-09: chênh lệch giá mua của lô đã bán khi chốt hoá đơn tạm khác giá (dương = mua đắt hơn tạm tính = chi phí)
+  const pv = await db
+    .prepare(`SELECT COALESCE(SUM(cogs_amount),0) AS s FROM purchase_cost_adjustments WHERE created_at >= ? AND created_at < ?`)
     .bind(fromIso, toIso)
     .first<{ s: number }>();
   return {
+    purchaseVariance: pv!.s,
     badDebt: pick("write_off", "customer"),
     paymentDiscount: pick("discount", "customer"),
     payableIncome: pick("discount", "supplier") + pick("write_off", "supplier"),
     forfeitedDeposits: forfeited!.s,
     stockCount: Math.round(stock!.v),
-    voucherIncome: vi!.s,
+    voucherIncome: vi!.surplus,
+    otherReceipts: vi!.other,
   };
 }
 
@@ -147,6 +159,7 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
   const adj = await pnlAdjustments(db, fromIso, toIso);
   if (adj.badDebt) unallocated.push({ categoryId: null, category: "Xoá nợ khó đòi", amount: adj.badDebt, reason: "not_attributable" });
   if (adj.stockCount) unallocated.push({ categoryId: null, category: "Chênh lệch kiểm kê", amount: adj.stockCount, reason: "not_attributable" });
+  if (adj.purchaseVariance) unallocated.push({ categoryId: null, category: "Chênh lệch giá mua", amount: adj.purchaseVariance, reason: "not_attributable" });
 
   const rows = [...channels.values()].map((c) => ({
     ...c, grossProfit: c.revenue - c.cogs, netProfit: c.revenue - c.cogs - c.directCosts - c.allocatedCosts,
@@ -159,13 +172,13 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
     totalExpenses: sum((r) => r.directCosts + r.allocatedCosts) + unallocatedTotal,
     netProfit: sum((r) => r.grossProfit) - sum((r) => r.directCosts + r.allocatedCosts) - unallocatedTotal,
   };
-  const otherIncomeTotal = adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome;
+  const otherIncomeTotal = adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome + adj.otherReceipts;
   const deductions = adj.paymentDiscount;
   totals.netProfit = totals.netProfit - deductions + otherIncomeTotal;
   return {
     from, to, channels: rows, allocations, unallocated, totals: { ...totals, revenueDeductions: deductions, otherIncome: otherIncomeTotal },
     revenueDeductions: { paymentDiscount: adj.paymentDiscount },
-    otherIncome: { forfeitedDeposits: adj.forfeitedDeposits, payableDiscounts: adj.payableIncome, settlementSurplus: adj.voucherIncome, total: otherIncomeTotal },
+    otherIncome: { forfeitedDeposits: adj.forfeitedDeposits, payableDiscounts: adj.payableIncome, settlementSurplus: adj.voucherIncome, otherReceipts: adj.otherReceipts, total: otherIncomeTotal },
   };
 }
 

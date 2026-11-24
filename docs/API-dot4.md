@@ -65,7 +65,7 @@ Hook cron có sẵn (điền nội dung, KHÔNG sửa `scheduled.ts`): `services
 | GET | /exports/bang-luong.xlsx?period= | payroll.write | dùng `services/xlsx.ts` |
 
 **Công thức (cấu hình qua settings, có test):**
-- monthly: `base_pay = round(base_salary × paid_days / hr.standard_workdays)`, paid_days = ngày có công + phép có lương + lễ nghỉ hưởng lương (tối đa standard_workdays); hourly: `hourly_rate × worked_minutes/60`; shift: `shift_rate × shifts_worked`.
+- monthly: `base_pay = round(base_salary × paid_days / hr.standard_workdays)`, paid_days = công + phép có lương + lễ nghỉ hưởng lương (tối đa standard_workdays). **C-14:** `hr.monthly_pay_mode` = `proportional` (mặc định, [Cần xác nhận]): công mỗi ngày = min(1, phút làm thường / phút ca theo lịch của ngày, mặc định 480), làm tròn 0,1 ngày — đi muộn/về sớm bị trừ theo giờ; `day_present` = kiểu cũ (≥1 phút công = 1 ngày). **C-09:** chỉ ngày lễ `paid_off=1` được cộng công khi không đi làm. **C-15:** phép chỉ tính ngày làm việc theo lịch — bỏ ngày lễ, ngày nghỉ hằng tuần (`hr.weekly_off_days`, vd `7` = Chủ nhật; mặc định rỗng [Cần xác nhận]) và ngày không có ca khi tuần đó NV đã được xếp lịch; áp dụng cho cả `days_x10` của đơn xin nghỉ và bảng công; hourly: `hourly_rate × worked_minutes/60`; shift: `shift_rate × shifts_worked`.
 - overtime_pay = đơn giá giờ (monthly: base_salary / standard_workdays / 8) × giờ tăng ca × hệ số.
 - allowances = Σ employee_allowances active + entries kind allowance; bonus/penalty/adjustment từ payroll_entries (adjustment có source_period); sales_bonus = doanh thu đơn POS hoàn tất do `orders.created_by` = user của NV trong kỳ × `hr.sales_bonus_bp` (M9-11).
 - gross = base + allowances + overtime + bonus + sales_bonus − penalties + adjustments.
