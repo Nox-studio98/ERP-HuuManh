@@ -198,7 +198,7 @@ try {
   const today = await apiGet(s.ctx, "/me/attendance/today");
   assert(today.punches.length === 2 && today.punches.every((p) => p.status === "accepted" && p.method === "gps"), "2 lần chấm GPS hợp lệ");
 
-  step("Chấm công offline → lưu trên máy → gửi lại khi có mạng → chờ duyệt");
+  step("Chấm công offline → lưu trên máy → gửi lại khi có mạng → tính công theo giờ bấm, chờ xem lại");
   await s.ctx.setOffline(true);
   await s.page.getByTestId("punch-btn").click();
   await s.page.getByTestId("punch-info").waitFor();
@@ -207,8 +207,8 @@ try {
   await s.ctx.setOffline(false);
   await s.page.getByText(/Chờ gửi \(1\)/).waitFor({ state: "detached", timeout: 6000 }).catch(async () => { await btn(s.page, "Gửi ngay").click(); });
   await s.page.getByText(/Chờ gửi \(1\)/).waitFor({ state: "detached" });
-  await s.page.getByText("Chờ duyệt").first().waitFor();
-  ok("lần chấm offline hiển thị 'Chờ duyệt'");
+  await s.page.getByText("Đã tính công · chờ xem lại").first().waitFor();
+  ok("lần chấm offline tính công ngay theo giờ bấm, hiển thị 'chờ xem lại' (C-01)");
 
   step("Chủ duyệt lần chấm offline + yêu cầu bổ sung công (hộp Duyệt chấm công)");
   await go(o.page, "/hr/attendance");
@@ -276,12 +276,14 @@ try {
   const pl = o.page.getByTestId("pending-leaves");
   const overCard = pl.locator(".card").filter({ hasText: "Vượt số dư phép" });
   await overCard.waitFor();
+  // C-08: số dư được kiểm lại lúc duyệt → duyệt đơn thường trước, đơn vượt số dư cần lý do ngoại lệ
+  await btn(pl.locator(".card").filter({ hasText: NAME_A }).filter({ hasNotText: "Vượt số dư phép" }).first(), "Duyệt").click();
+  await toastOk(o.page, /Đã duyệt đơn nghỉ/);
   await btn(overCard, "Duyệt ngoại lệ…").click();
   await dlg(o.page).getByText(/vượt số dư phép năm còn lại/).waitFor();
+  await dlg(o.page).getByLabel("Lý do ngoại lệ (bắt buộc)").fill("Nghỉ chăm người nhà, chủ đồng ý");
   await btn(dlg(o.page), "Duyệt ngoại lệ").click();
   await toastOk(o.page, /Đã duyệt ngoại lệ/);
-  await btn(pl.locator(".card").filter({ hasText: NAME_A }).first(), "Duyệt").click();
-  await toastOk(o.page, /Đã duyệt đơn nghỉ/);
   await o.page.getByRole("tab", { name: /Tăng ca/ }).click();
   await btn(o.page.getByTestId("pending-ot").locator(".card").filter({ hasText: NAME_A }).first(), "Duyệt").click();
   await toastOk(o.page, /Đã duyệt tăng ca/);

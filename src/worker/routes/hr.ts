@@ -630,8 +630,8 @@ hrRoutes.get("/me/attendance/today", requirePerm("hr.self"), async (c) => {
   const [shifts, punches, last, store, settings] = await Promise.all([
     db.prepare(`SELECT sa.id, sa.work_date, sa.start_at, sa.end_at, sa.status, st.name shift_name FROM shift_assignments sa JOIN shift_templates st ON st.id = sa.shift_template_id
                  WHERE sa.employee_id=? AND sa.status='scheduled' AND (sa.work_date=? OR (sa.work_date=? AND sa.end_at > ?)) ORDER BY sa.start_at`).bind(me.id, today, addDays(today, -1), now).all<any>(),
-    db.prepare(`SELECT kind, server_at, method, status FROM attendance_punches WHERE employee_id=? AND server_at >= ? AND server_at < ? ORDER BY server_at, id`).bind(me.id, day.from, day.to).all<any>(),
-    db.prepare(`SELECT kind, server_at FROM attendance_punches WHERE employee_id=? AND status != 'rejected' ORDER BY server_at DESC, id DESC LIMIT 1`).bind(me.id).first<{ kind: string; server_at: string }>(),
+    db.prepare(`SELECT kind, server_at, COALESCE(effective_at, server_at) AS effective_at, review_flag, method, status FROM attendance_punches WHERE employee_id=? AND COALESCE(effective_at, server_at) >= ? AND COALESCE(effective_at, server_at) < ? ORDER BY COALESCE(effective_at, server_at), id`).bind(me.id, day.from, day.to).all<any>(),
+    db.prepare(`SELECT kind, COALESCE(effective_at, server_at) AS server_at FROM attendance_punches WHERE employee_id=? AND status != 'rejected' ORDER BY COALESCE(effective_at, server_at) DESC, id DESC LIMIT 1`).bind(me.id).first<{ kind: string; server_at: string }>(),
     storeOf(db, me.store_id),
     hrSettings(db),
   ]);
@@ -643,7 +643,7 @@ hrRoutes.get("/me/attendance/today", requirePerm("hr.self"), async (c) => {
   return c.json({
     employee: { id: me.id, fullName: me.full_name, locationExempt: bool(me.location_exempt) },
     shifts: shifts.results.map((s) => ({ id: s.id, workDate: s.work_date, shiftName: s.shift_name, startAt: s.start_at, endAt: s.end_at, status: s.status })),
-    punches: punches.results.map((p) => ({ kind: p.kind, serverAt: p.server_at, method: p.method, status: p.status })),
+    punches: punches.results.map((p) => ({ kind: p.kind, serverAt: p.server_at, effectiveAt: p.effective_at, reviewFlag: !!p.review_flag, method: p.method, status: p.status })),
     canPunch,
     methods,
     store: { lat: store?.lat ?? null, lng: store?.lng ?? null, geofenceM: store?.geofence_m ?? 100 },
