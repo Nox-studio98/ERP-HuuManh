@@ -15,22 +15,42 @@ Nền tảng: Cloudflare Workers, D1 (SQLite), R2, Queues, Cron. Giao diện và
 5. `docs/audit/README.md`: lỗi nghiệp vụ còn tồn sau audit.
 6. Hợp đồng API trong `docs/API*.md`. Tài liệu bảo mật trong `docs/SECOPS.md`.
 
-## Plugin và skill nên cài (Claude Code)
+## Plugin và skill
 
-Cài trong claude.ai → Settings → Plugins (Anthropic Directory). Với Claude Code CLI thì dùng lệnh `/plugin`.
+### Đã dùng trong phiên phát triển gốc (đối chiếu cấu hình thực tế ngày 24/11/2026)
+
+**Plugin cài thêm: chỉ có một.**
+
+| Plugin | Nguồn | Skill có trong plugin |
+|---|---|---|
+| **Cloudflare** (bắt buộc) | claude.ai → Settings → Plugins → Anthropic Directory; mã nguồn `github.com/cloudflare/skills` | `wrangler`, `workers-best-practices`, `workers-development`, `workers-profiling`, `cloudflare`, `cloudflare-app-bootstrap`, `cf-cli`, `frameworks-on-cloudflare`, `durable-objects`, `agents-sdk`, `cloudflare-email-service`, `turnstile-spin`, `web-perf`, `cloudflare-one`, `cloudflare-one-migrations`, `sandbox-*`, `basin`, `k2`, `flagship`, `artifacts`, `gateway-workers`, `nextjs-on-cloudflare`; kèm Cloudflare MCP server |
+
+Trong dự án, các skill dùng thực tế: `wrangler`, `workers-best-practices`, `workers-development`. Sẽ cần khi go-live: `cloudflare-email-service` (email thật), `turnstile-spin` (Turnstile thật), `web-perf`.
+
+**Skill mặc định của tài khoản claude.ai** (tự đồng bộ, không cần cài):
+- File: `docx`, `xlsx`, `pptx`, `pdf`, `docs`.
+- Khác: `deep-research`, `skill-creator`, `google-workspace`, `chrome-browser`, `built-in-browser`, `computer-use`, `morning`, `import-memory`.
+- Trong dự án đã dùng `docx` để đọc tài liệu nghiệp vụ gốc (`.docx`).
+
+**Skill có sẵn trong Claude Code** (không cần cài):
+- `/code-review` và `/security-review`: rà trước khi mở PR.
+- `simplify`, `run`, `init`, `loop`, `claude-api`, `dataviz`.
+- `artifact-design`, `artifact-diagramming`, `artifact-capabilities`.
+- `update-config`, `fewer-permission-prompts`, `session-start-hook`.
+
+### Nên cài thêm (chưa cài ở phiên gốc)
+
+Cài trong claude.ai → Settings → Plugins → Anthropic Directory. Với Claude Code CLI thì dùng `/plugin`.
 
 | Plugin | Dùng khi | Skill chính |
 |---|---|---|
-| **Cloudflare** (Cloudflare, Anthropic Directory) | Mọi việc với Workers, D1, R2, Queues, wrangler, deploy | `wrangler`, `workers-best-practices`, `workers-development`, `cloudflare-email-service` (email thật), `turnstile-spin` (Turnstile thật), `web-perf` |
-| **UI Design Review** (UXKIN) | Đợt hoàn thiện giao diện PC đang dở: rà màn hình trên điện thoại và máy tính, liệt kê việc cần sửa | `ui-review`, `ui-polish`, `ui-compare` |
-| **Design** (Anthropic), tuỳ chọn | Rà khả năng tiếp cận (accessibility), câu chữ UI | `accessibility-review`, `ux-copy`, `design-critique` |
+| **UI Design Review** (UXKIN) | Đợt hoàn thiện giao diện PC đang dở (`docs/WIP-UX-PC.md`) | `ui-review`, `ui-polish`, `ui-compare` |
+| **Design** (Anthropic), tuỳ chọn | Rà khả năng tiếp cận, câu chữ trên giao diện | `accessibility-review`, `ux-copy`, `design-critique` |
+| **design-skills** (Carlos Cuellar), tuỳ chọn | Tham khảo phương pháp UX: critique, design system, interaction | `design-critique`, `design-systems`, `interaction-design` |
 
-Skill có sẵn trong Claude Code, không cần cài:
-- `/code-review`: rà diff trước khi mở PR.
-- `/security-review`: bắt buộc khi đụng tới auth, quyền, tiền, webhook hoặc upload.
-- `run`: chạy app để xem thay đổi thật.
+Lưu ý: các skill "astryx", "stitch", "stageshow" được nhắc ở đầu dự án **không có** trong danh mục plugin. Phần UX/UI đã làm bằng design system riêng của dự án (`src/web/components`, `docs/UI-KIT.md`).
 
-Phần Cloudflare MCP chỉ cần nếu muốn thao tác tài nguyên Cloudflare trực tiếp. Deploy chạy qua GitHub Actions bằng token trong GitHub Secrets, không cần MCP.
+Cloudflare MCP chỉ cần nếu muốn thao tác tài nguyên Cloudflare trực tiếp. Deploy chạy qua GitHub Actions bằng token trong GitHub Secrets.
 
 ## Lệnh thường dùng
 
