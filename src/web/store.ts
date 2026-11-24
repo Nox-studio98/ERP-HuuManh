@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { api, post, setUnauthorizedHandler } from "./api";
 
-export type User = { id: number; username: string; fullName: string; role: string; storeId?: number; permissions: string[] };
+export type User = { id: number; username: string; fullName: string; role: string; storeId?: number; storeName?: string | null; permissions: string[] };
 type Auth = { status: "loading" | "in" | "out"; user: User | null; mustChange: boolean };
 let state: Auth = { status: "loading", user: null, mustChange: false };
 const subs = new Set<() => void>();

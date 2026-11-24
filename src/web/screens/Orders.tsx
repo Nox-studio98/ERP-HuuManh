@@ -1,39 +1,93 @@
 import { useState } from "react";
 import { ApiError, get, items, post } from "../api";
-import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Select, Spinner, TextArea, useAsync } from "../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, type DateRange } from "../components/list";
 import { Receipt, lineName } from "../components/Receipt";
 import { toast } from "../components/toast";
-import { CHANNELS, METHODS, ORDER_STATUS, fmtTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
+import { CHANNELS, METHODS, ORDER_STATUS, fmtDateTime, fmtTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
+import { navigate, setQuery } from "../router";
 import { useUnitMap } from "../units";
 import { useCan } from "../store";
 
 const tone = (s: string) => (s === "completed" ? "ok" : s === "cancelled" || s === "returned" ? "danger" : "info") as any;
+const STATUS_OPTS = [...Object.entries(ORDER_STATUS).filter(([k]) => k !== "draft").map(([v, label]) => ({ v, label })), { v: "returns", label: "Phiếu trả hàng" }];
+const sp = () => new URLSearchParams(location.search);
 
 export default function Orders() {
-  const [day, setDay] = useState(todayVN());
-  const [sel, setSel] = useState<number | null>(null);
-  const list = useAsync(() => get("/orders", { day, limit: 100 }).then((r) => items<any>(r)), [day]);
-  const total = (list.data ?? []).filter((o) => o.status !== "cancelled").reduce((s, o) => s + (o.kind === "return" ? -o.total : o.total), 0);
+  const can = useCan();
+  const [range, setRange] = useState<DateRange>(() => { const q = sp(); return q.get("q") || q.get("open") ? rangeOf("month") : rangeOf("today"); });
+  const [channel, setChannel] = useState(""), [status, setStatus] = useState(""), [cashier, setCashier] = useState(""), [method, setMethod] = useState("");
+  const [q, setQ] = useState(() => sp().get("q") ?? "");
+  const [sel, setSel] = useState<number | null>(() => Number(sp().get("open")) || null);
+  const cashiers = useAsync(() => get("/orders/cashiers").then((r) => items<{ id: number; name: string }>(r)), []);
+  const query = { from: range.from, to: range.to, channel, cashierId: cashier, method, q, ...(status === "returns" ? { kind: "return" } : { status }), limit: 50 };
+  const list = usePagedList<any>("/orders", query, [range.from, range.to, channel, status, cashier, method, q]);
+  const sum = list.extra?.summary;
+  const dirty = !!(channel || status || cashier || method || q);
+  const reset = () => { setChannel(""); setStatus(""); setCashier(""); setMethod(""); setQ(""); setQuery({ q: undefined }); };
+  const open = (id: number | null) => { setSel(id); setQuery({ open: id ? String(id) : undefined }); };
+  const rangeLabel = range.from === range.to ? fmtDay(range.from) : `${fmtDay(range.from)} – ${fmtDay(range.to)}`;
+  const signed = (o: any) => (o.kind === "return" ? -o.total : o.total);
+  const empty = (
+    <EmptyState
+      title={dirty ? "Không có đơn nào khớp bộ lọc" : range.preset === "today" ? "Hôm nay chưa có đơn hàng nào" : "Không có đơn nào trong khoảng này"}
+      hint={dirty ? "Thử bỏ bớt bộ lọc hoặc đổi khoảng thời gian." : "Đơn bán tại quầy, online và đơn sỉ sẽ hiện ở đây."}
+      action={
+        <div className="row wrap" style={{ justifyContent: "center" }}>
+          {dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}
+          {can("pos.sell") && <Button onClick={() => navigate("/pos")}>Bán hàng</Button>}
+          {!(range.preset === "yesterday") && <Button variant="ghost" onClick={() => setRange(rangeOf("yesterday"))}>Xem hôm qua</Button>}
+        </div>
+      }
+    />
+  );
   return (
     <div className="stack">
-      <div className="page-head">
-        <div style={{ maxWidth: 200 }}><Input label="Ngày" type="date" value={day} onChange={(e) => setDay(e.target.value)} max={todayVN()} /></div>
-        <div className="muted">{list.data?.length ?? 0} đơn · <b className="money">{money(total)}</b></div>
-      </div>
-      {list.loading ? <Spinner /> : (
-        <DataTable rows={list.data ?? []} rowKey={(o) => o.id} onRowClick={(o) => setSel(o.id)} empty="Không có đơn nào trong ngày"
-          cols={[
-            { key: "code", label: "Mã đơn", title: true, render: (o) => <b>{o.code}</b> },
-            { key: "t", label: "Giờ", render: (o) => fmtTime(o.createdAt) },
-            { key: "ch", label: "Kênh", render: (o) => CHANNELS[o.channel] ?? o.channel },
-            { key: "st", label: "Trạng thái", render: (o) => <Badge tone={tone(o.status)}>{o.kind === "return" ? "Trả hàng" : ORDER_STATUS[o.status] ?? o.status}</Badge> },
-            { key: "tt", label: "Tổng", right: true, render: (o) => <span className="money">{money(o.total)}</span> },
-          ]} />
-      )}
-      {sel != null && <OrderDetail id={sel} onClose={() => setSel(null)} onChanged={list.reload} />}
+      <PageHeader subtitle={<>{rangeLabel}{sum ? <> · {sum.rowsTotal} phiếu</> : null}</>}
+        actions={<ExportButton filename={`don-hang-${range.from}_${range.to}`} rows={list.rows} columns={[
+          { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => CHANNELS[o.channel] ?? o.channel },
+          { label: "Loại", value: (o) => (o.kind === "return" ? "Trả hàng" : "Bán") }, { label: "Trạng thái", value: (o) => ORDER_STATUS[o.status] ?? o.status },
+          { label: "Khách hàng", value: (o) => o.customerName }, { label: "SĐT", value: (o) => o.customerPhone }, { label: "Thu ngân", value: (o) => o.cashierName },
+          { label: "Thanh toán", value: (o) => (o.methods ?? []).map((m: string) => METHODS[m] ?? m).join(" + ") }, { label: "Giảm giá", value: (o) => o.discount }, { label: "Tổng", value: signed },
+        ]} />} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[channel, status, cashier, method].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Kênh" value={channel} onChange={setChannel} options={Object.entries(CHANNELS).map(([v, label]) => ({ v, label }))} />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={STATUS_OPTS} />
+        <FilterSelect label="Thu ngân" value={cashier} onChange={setCashier} options={(cashiers.data ?? []).map((u) => ({ v: String(u.id), label: u.name }))} />
+        <FilterSelect label="Thanh toán" value={method} onChange={setMethod} options={Object.entries(METHODS).map(([v, label]) => ({ v, label }))} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} />
+        <SearchInput value={q} onSearch={(v) => { setQ(v); setQuery({ q: v || undefined }); }} placeholder="Mã đơn, SĐT, tên khách…" label="Tìm đơn hàng" />
+      </FilterBar>
+      <KpiRow items={[
+        { label: "Số đơn", value: sum ? sum.orderCount : "—", sub: sum ? `${sum.saleCount} đã hoàn tất` : undefined },
+        { label: "Doanh thu", value: sum ? money(sum.revenue) : "—", sub: sum && sum.returnTotal ? `đã trừ trả ${money(sum.returnTotal)}` : "đơn hoàn tất", tone: "ok" },
+        { label: "Trả / huỷ", value: sum ? sum.returnCount + sum.cancelledCount : "—", sub: sum ? `${sum.returnCount} trả · ${sum.cancelledCount} huỷ` : undefined, tone: sum && sum.returnCount + sum.cancelledCount > 0 ? "warn" : undefined },
+        { label: "Giá trị TB / đơn", value: sum ? money(sum.avgOrder) : "—" },
+      ]} />
+      <SplitLayout open={sel != null} panel={sel != null ? <OrderDetail id={sel} onClose={() => open(null)} onChanged={list.reload} /> : null}>
+        {list.error ? <Banner tone="danger">Không tải được danh sách đơn. <Button size="sm" variant="ghost" onClick={list.reload}>Tải lại</Button></Banner>
+          : list.loading ? <Spinner /> : (
+            <DataTable rows={list.rows} rowKey={(o) => o.id} onRowClick={(o) => open(o.id)} selectedKey={sel} emptyState={empty}
+              hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+              footer={`Đang hiển thị ${list.rows.length}${sum ? ` / ${sum.rowsTotal}` : ""} phiếu`}
+              cols={[
+                { key: "code", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="nw">{o.code}</b> },
+                { key: "t", label: "Thời gian", sort: (o) => o.createdAt, render: (o) => (range.from === range.to ? fmtTime(o.createdAt) : `${fmtDayShort(o.createdAt)} ${fmtTime(o.createdAt)}`) },
+                { key: "ch", label: "Kênh", sort: (o) => CHANNELS[o.channel] ?? o.channel, render: (o) => CHANNELS[o.channel] ?? o.channel },
+                { key: "cu", label: "Khách", sort: (o) => o.customerName ?? "", render: (o) => o.customerName ? <span>{o.customerName}{o.customerPhone && <div className="small muted">{o.customerPhone}</div>}</span> : <span className="muted">Khách lẻ</span> },
+                { key: "ca", label: "Thu ngân", hideBelow: 1280, sort: (o) => o.cashierName ?? "", render: (o) => o.cashierName ?? "—" },
+                { key: "pm", label: "Thanh toán", hideBelow: 1440, render: (o) => (o.methods?.length ? o.methods.map((m: string) => METHODS[m] ?? m).join(" + ") : "—") },
+                { key: "st", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={tone(o.status)}>{o.kind === "return" ? "Trả hàng" : ORDER_STATUS[o.status] ?? o.status}</Badge> },
+                { key: "tt", label: "Tổng", num: true, sort: signed, render: (o) => <span className="money">{o.kind === "return" ? "-" : ""}{money(o.total)}</span> },
+              ]} />
+          )}
+      </SplitLayout>
     </div>
   );
 }
+const fmtDay = (d: string) => `${d.slice(8)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+const fmtDayShort = (iso: string) => new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", day: "2-digit", month: "2-digit" }).format(new Date(iso));
 
 function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
   const can = useCan();
@@ -42,7 +96,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
   const [mode, setMode] = useState<"view" | "return" | "void" | "receipt">("view");
   const d = o.data && pmap ? withShown(o.data, pmap) : o.data;
   return (
-    <Sheet open onClose={onClose} wide title={d ? `Đơn ${d.code}` : "Đơn hàng"}>
+    <DetailPanel onClose={onClose} title={d ? `Đơn ${d.code}` : "Đơn hàng"}>
       {o.loading || !d || !pmap ? <Spinner /> : mode === "receipt" ? (
         <div className="stack"><Receipt order={d} /><Button variant="ghost" onClick={() => setMode("view")}>← Quay lại</Button></div>
       ) : mode === "return" ? (
@@ -71,7 +125,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
           </div>
         </div>
       )}
-    </Sheet>
+    </DetailPanel>
   );
 }
 

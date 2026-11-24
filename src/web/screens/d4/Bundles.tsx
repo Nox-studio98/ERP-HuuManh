@@ -11,7 +11,6 @@ export default function Bundles() {
   const [tab, setTab] = useState<"basket" | "assemble" | "pre">("basket");
   return (
     <div className="stack d4">
-      <div className="page-head"><h1 style={{ margin: 0 }}>Giỏ quà & đặt trước</h1></div>
       <Segmented value={tab} onChange={setTab} options={[{ v: "basket", label: "Thành phần" }, { v: "assemble", label: "Đóng giỏ" }, { v: "pre", label: "Đặt trước" }]} />
       {tab === "basket" && <Components canWrite={can("products.write")} />}
       {tab === "assemble" && <Assembly canWrite={can("inventory.write")} />}

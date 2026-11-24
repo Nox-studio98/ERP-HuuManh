@@ -513,36 +513,95 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
 
 // ===================== Danh sách / chi tiết / hoá đơn =====================
 
+const DAY_RE_ORD = /^\d{4}-\d{2}-\d{2}$/;
+const validDay = (v: string, name: string) => {
+  if (!DAY_RE_ORD.test(v) || Number.isNaN(Date.parse(v + "T00:00:00Z"))) throw new AppError(422, "validation_error", `${name} phải có dạng YYYY-MM-DD`);
+  return v;
+};
+
 posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
   const q = c.req.query();
+  const role = c.get("user").role;
+  const pii = can(role, "customers.view_pii");
   const conds: string[] = [];
   const params: unknown[] = [];
+  // Lọc theo ngày VN: `day` (một ngày, giữ tương thích) hoặc khoảng from..to (gồm cả hai đầu)
   if (q.day) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(q.day)) throw new AppError(422, "validation_error", "day phải có dạng YYYY-MM-DD");
-    const r = vnDayRangeUtc(q.day);
+    const r = vnDayRangeUtc(validDay(q.day, "day"));
     conds.push(`o.created_at >= ? AND o.created_at < ?`);
     params.push(r.from, r.to);
+  } else if (q.from || q.to) {
+    const from = validDay(q.from ?? q.to!, "from"), to = validDay(q.to ?? q.from!, "to");
+    if (to < from) throw new AppError(422, "validation_error", "to phải sau hoặc bằng from");
+    if ((Date.parse(to) - Date.parse(from)) / 86400_000 > 366) throw new AppError(422, "validation_error", "Khoảng ngày tối đa 366 ngày");
+    conds.push(`o.created_at >= ? AND o.created_at < ?`);
+    params.push(vnDayRangeUtc(from).from, vnDayRangeUtc(to).to);
   }
   if (q.channel) { conds.push(`o.channel = ?`); params.push(q.channel); }
   if (q.status) { conds.push(`o.status = ?`); params.push(q.status); } else conds.push(`o.status <> 'draft'`);
   if (q.shiftId) { conds.push(`o.shift_id = ?`); params.push(Number(q.shiftId)); }
   if (q.kind) { conds.push(`o.kind = ?`); params.push(q.kind); }
-  if (q.q) { conds.push(`o.code LIKE ?`); params.push(`%${q.q}%`); }
-  if (q.cursor) { conds.push(`o.id < ?`); params.push(Number(q.cursor)); }
+  if (q.cashierId) { conds.push(`o.created_by = ?`); params.push(Number(q.cashierId)); }
+  if (q.method) { conds.push(`EXISTS (SELECT 1 FROM payments pm WHERE pm.order_id = o.id AND pm.method = ? AND pm.status = 'confirmed')`); params.push(q.method); }
+  const term = q.q?.trim();
+  if (term) {
+    const like = `%${term.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
+    // SĐT chỉ được tìm khi người dùng có quyền xem PII (tránh dò số điện thoại qua kết quả tìm kiếm)
+    const parts = [`o.code LIKE ? ESCAPE '\\'`, `cu.name LIKE ? ESCAPE '\\'`, `o.receiver_name LIKE ? ESCAPE '\\'`];
+    const ps: unknown[] = [like, like, like];
+    if (pii) { parts.push(`cu.phone LIKE ? ESCAPE '\\'`, `o.receiver_phone LIKE ? ESCAPE '\\'`); ps.push(like, like); }
+    conds.push(`(${parts.join(" OR ")})`);
+    params.push(...ps);
+  }
+  const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+  const join = `FROM orders o LEFT JOIN users u ON u.id = o.created_by LEFT JOIN customers cu ON cu.id = o.customer_id`;
   const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+  const cursorCond = q.cursor ? `${where ? where + " AND" : "WHERE"} o.id < ?` : where;
   const rows = (
     await c.env.DB
       .prepare(
         `SELECT o.id, o.code, o.channel, o.kind, o.status, o.total, o.discount, o.paid_total, o.shift_id, o.customer_id, o.original_order_id,
-                o.created_at, o.completed_at, u.full_name AS cashier_name
-           FROM orders o LEFT JOIN users u ON u.id = o.created_by
-          ${conds.length ? "WHERE " + conds.join(" AND ") : ""} ORDER BY o.id DESC LIMIT ?`,
+                o.created_at, o.completed_at, o.created_by AS cashier_id, u.full_name AS cashier_name,
+                COALESCE(cu.name, o.receiver_name) AS customer_name, COALESCE(cu.phone, o.receiver_phone) AS customer_phone,
+                (SELECT GROUP_CONCAT(DISTINCT pm.method) FROM payments pm WHERE pm.order_id = o.id AND pm.status = 'confirmed') AS methods
+           ${join} ${cursorCond} ORDER BY o.id DESC LIMIT ?`,
       )
-      .bind(...params, limit + 1)
+      .bind(...params, ...(q.cursor ? [Number(q.cursor)] : []), limit + 1)
       .all<any>()
   ).results;
-  const items = rows.slice(0, limit);
-  return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
+  const items = rows.slice(0, limit).map((r) => ({
+    ...r,
+    customer_phone: maskPhone(r.customer_phone, role),
+    methods: r.methods ? String(r.methods).split(",") : [],
+  }));
+  // Tổng hợp toàn bộ kết quả khớp bộ lọc (không phụ thuộc phân trang)
+  const s = await c.env.DB
+    .prepare(
+      `SELECT COUNT(*) AS rows_total,
+              COALESCE(SUM(CASE WHEN o.kind='sale' AND o.status <> 'cancelled' THEN 1 ELSE 0 END),0) AS order_count,
+              COALESCE(SUM(CASE WHEN o.kind='sale' AND o.status = 'completed' THEN 1 ELSE 0 END),0) AS sale_count,
+              COALESCE(SUM(CASE WHEN o.kind='sale' AND o.status = 'completed' THEN o.total ELSE 0 END),0) AS sale_total,
+              COALESCE(SUM(CASE WHEN o.kind='return' AND o.status = 'completed' THEN 1 ELSE 0 END),0) AS return_count,
+              COALESCE(SUM(CASE WHEN o.kind='return' AND o.status = 'completed' THEN o.total ELSE 0 END),0) AS return_total,
+              COALESCE(SUM(CASE WHEN o.status = 'cancelled' THEN 1 ELSE 0 END),0) AS cancelled_count
+         ${join} ${where}`,
+    )
+    .bind(...params)
+    .first<any>();
+  const summary = {
+    rowsTotal: s.rows_total, orderCount: s.order_count, saleCount: s.sale_count, saleTotal: s.sale_total,
+    returnCount: s.return_count, returnTotal: s.return_total, cancelledCount: s.cancelled_count,
+    revenue: s.sale_total - s.return_total, avgOrder: s.sale_count ? Math.round(s.sale_total / s.sale_count) : 0,
+  };
+  return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null, summary });
+});
+
+/** Danh sách người đã tạo đơn (cho bộ lọc "Thu ngân") */
+posRoutes.get("/orders/cashiers", requirePerm("orders.view"), async (c) => {
+  const { results } = await c.env.DB
+    .prepare(`SELECT u.id, u.full_name AS name FROM users u WHERE u.id IN (SELECT DISTINCT created_by FROM orders WHERE created_by IS NOT NULL) ORDER BY u.full_name`)
+    .all<any>();
+  return c.json({ items: results });
 });
 
 posRoutes.get("/orders/:id", requirePerm("orders.view"), async (c) => c.json(await getOrderFull(c, Number(c.req.param("id")))));
