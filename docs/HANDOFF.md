@@ -151,7 +151,10 @@ Không có tài nguyên nào khác trong account bị thay đổi.
 - Dữ liệu dev local (`.wrangler/state`) dùng chung cho cả hai Worker; các kịch bản E2E tạo dữ liệu thật trong DB local.
 - Chạy kiểm thử: `npx vitest run` · `npx tsc --noEmit` · E2E cần `wrangler dev` ERP (:8787) và shop (:8788): `node e2e/smoke.mjs`, `e2e/b2b.mjs`, `e2e/online.mjs`, `e2e/shop.mjs`.
 
-## 7. Bản demo trên `*.workers.dev` (gửi khách xem)
+## 7. Bản demo (gửi khách xem)
+
+- **Tên miền demo**: ERP `https://huumanh.noxelis.co`, website bán hàng `https://huumanhfruit.noxelis.co` (Workers Custom Domains trong zone `noxelis.co`, wrangler tự tạo DNS + chứng chỉ khi deploy). Vẫn truy cập được qua `*.workers.dev`.
+- Token deploy cần thêm quyền trên **zone `noxelis.co`**: *Zone:Read, DNS:Edit, Workers Routes:Edit* (ngoài các quyền account ở mục 4).
 
 - Môi trường `demo` trong `wrangler.jsonc` / `wrangler.shop.jsonc`: Worker `huu-manh-erp-demo` (ERP) và `huu-manh-shop-demo` (website), dùng D1 `huu-manh-erp` + R2 `huu-manh-erp-files`, **không dùng Queues** (chạy được trên gói Workers miễn phí; cron `*/5` tự xử lý job).
 - Deploy: thêm `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` vào GitHub Secrets rồi đẩy tag `demo-*` (vd `demo-2026-11-24`) → job `deploy-demo` (migrations → font PDF lên R2 → deploy ERP → deploy website).
