@@ -1,5 +1,5 @@
 // Ảnh chụp UX đợt 2B (Bán hàng, Kho, Hàng hoá, … Tài khoản khách). Chạy sau smoke.mjs + b2b.mjs (cần có dữ liệu):
-//   BASE=http://localhost:8802 [ONLY=pos,orders] node e2e/ux2b-shots.mjs
+//   BASE=http://localhost:8802 [ONLY=pos,orders] [SIZES=1440,390] [OUT=<thư mục>] node e2e/ux2b-shots.mjs
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,7 +8,7 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const BASE = process.env.BASE ?? "http://localhost:8802";
 const ONLY = process.env.ONLY ? process.env.ONLY.split(",") : null;
 const SIZES = process.env.SIZES ? process.env.SIZES.split(",") : ["1920", "1440", "390"];
-const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "screenshots");
+const DIR = process.env.OUT ?? join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "screenshots");
 mkdirSync(DIR, { recursive: true });
 const common = { serviceWorkers: "block", locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" };
 const sizes = {

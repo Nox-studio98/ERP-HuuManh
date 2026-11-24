@@ -589,6 +589,7 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 @media (max-width: 767px) {
   .ph-actions:has(> :nth-child(3)) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .ph-actions:has(> :nth-child(3)) > * { width: 100%; }
+  .ph-actions:has(> :nth-child(3)) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 /* Bán hàng: lưới sản phẩm cách ô tìm kiếm */
 .pos-products .pgrid { margin-top: var(--s-1); }

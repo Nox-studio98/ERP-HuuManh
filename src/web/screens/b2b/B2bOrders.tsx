@@ -52,7 +52,7 @@ function OrderList() {
         <label className="field"><span className="lbl">Ngày giao</span><input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} style={{ minHeight: 40 }} /></label>
       </>}>
         <DateRangeFilter value={range} onChange={setRange} presets={["today", "7d", "month", "lastMonth", "custom"]} />
-        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên khách…" label="Tìm đơn sỉ" />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, khách…" label="Tìm đơn sỉ" />
       </FilterBar>
       <KpiRow items={[
         { label: "Số đơn", value: sum ? sum.count : "—", sub: sum ? `${by("cancelled")} đã huỷ` : undefined },
