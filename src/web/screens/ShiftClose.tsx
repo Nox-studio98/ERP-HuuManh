@@ -26,7 +26,7 @@ export default function ShiftClose() {
     setBusy(true);
     try {
       const r = await post(`/shifts/${s.id}/close`, { countedCash: counted, ...(reason ? { diffReason: reason } : {}) }, { silent: true });
-      toast("Đã chốt ca", "ok"); setReport(r);
+      toast("Đã chốt ca", "ok"); setReport(r); window.dispatchEvent(new Event("hm:shift"));
     } catch (e) {
       if (e instanceof ApiError) {
         // Server tự tính tiền dự kiến; nếu lệch mà chưa có lý do → 422 diff_reason_required kèm expectedCash.

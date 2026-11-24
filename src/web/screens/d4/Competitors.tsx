@@ -17,7 +17,7 @@ export default function Competitors() {
   return (
     <div className="stack d4">
       <PageHeader subtitle="Theo dõi giá đối thủ, ghép sản phẩm và gợi ý điều chỉnh giá bán" />
-      <Segmented wrap className="tabs-d" value={tab} onChange={setTab} options={[
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[
         { v: "cmp", label: "So sánh giá" }, { v: "match", label: "Ghép sản phẩm" }, { v: "src", label: "Nguồn & thu thập" }, { v: "manual", label: "Nhập giá" },
         { v: "alert", label: `Cảnh báo${alerts.data ? ` (${alerts.data})` : ""}` }, { v: "sug", label: "Gợi ý giá" }]} />
       {tab === "cmp" && <Comparison />}

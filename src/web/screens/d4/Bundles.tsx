@@ -76,7 +76,7 @@ function Components({ canWrite }: { canWrite: boolean }) {
               const p = cat.byId.get(c.productId);
               return (
                 <div className="li" key={c.productId}>
-                  <div className="t"><b>{p?.name ?? "SP #" + c.productId}</b><span className="small muted">Tồn {qtyText(p?.availableMilli, p?.baseUnit)} · vốn ~{money(p?.avgCost)}/{p ? unitLabel(p.baseUnit) : ""}</span></div>
+                  <div className="t"><b>{p?.name ?? "SP #" + c.productId}</b><span className="small muted">Tồn {qtyText(p?.availableMilli, p?.baseUnit)}{p?.avgCost ? <> · vốn ~{money(p.avgCost)}/{unitLabel(p.baseUnit)}</> : " · chưa có giá vốn"}</span></div>
                   {canWrite ? <input className="input num" style={{ width: 80 }} aria-label={`Số lượng ${p?.name}`} inputMode="decimal" value={c.qty} onChange={(e) => { setDirty(true); setCmps((x) => x.map((y, j) => (j === i ? { ...y, qty: Number(e.target.value.replace(",", ".")) || 0 } : y))); }} /> : <b>{c.qty}</b>}
                   <span className="muted">{p ? unitLabel(p.baseUnit) : ""}</span>
                   {canWrite && <Button size="sm" variant="ghost" aria-label={`Bỏ ${p?.name}`} onClick={() => { setDirty(true); setCmps((x) => x.filter((_, j) => j !== i)); }}>✕</Button>}

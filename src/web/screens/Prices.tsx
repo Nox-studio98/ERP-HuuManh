@@ -102,7 +102,7 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
         <div style={{ minWidth: 200 }}><Select label="Bảng giá" value={lid} onChange={(e) => setListId(e.target.value)}>{(lists.data ?? []).filter((l) => l.active !== false).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select></div>
         <div style={{ minWidth: 200 }}><Input label="Hiệu lực từ" type="datetime-local" value={eff} onChange={(e) => setEff(e.target.value)} /></div>
         <div className="grow" style={{ minWidth: 200, maxWidth: 320 }}><Input label="Tìm hàng" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên, SKU, mã vạch…" /></div>
-        <div className="muted small" style={{ alignSelf: "center" }}>{changed.length ? `${changed.length} mức giá chưa áp dụng` : "Nhập giá mới ở cột bên phải"}</div>
+        <div className="muted small" style={{ alignSelf: "center" }}>{changed.length ? `${changed.length} mức giá chưa áp dụng` : "Nhập giá mới vào ô \"Giá mới\""}</div>
       </div>
       {res?.belowCost?.length > 0 && <Banner>Cảnh báo: {res.belowCost.length} mặt hàng có giá mới thấp hơn giá vốn bình quân. {res.status === "pending_approval" ? "Đang chờ duyệt." : ""}</Banner>}
       {res?.status === "pending_approval" && <Banner tone="info">Thay đổi giá cần quản lý duyệt trước khi có hiệu lực.</Banner>}

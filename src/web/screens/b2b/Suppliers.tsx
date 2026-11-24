@@ -105,12 +105,11 @@ function SupplierPanel({ s, onClose, onEdit }: { s: any; onClose: () => void; on
         </div>
         <div className="muted small">{s.code} · Hạn trả {s.paymentTermsDays ?? 0} ngày{s.taxCode ? ` · MST ${s.taxCode}` : ""}{s.phone ? ` · ${s.phone}` : ""}{s.address ? ` · ${s.address}` : ""}</div>
         {canDebt && (b.loading ? <Spinner /> : <DataTable rows={b.data ?? []} rowKey={(x) => x.id} empty="Chưa có hoá đơn mua — hoá đơn sinh khi nhập hàng có nhà cung cấp" cols={[
-          { key: "c", label: "Mã", title: true, render: (x) => <span><b>{x.code}</b> {x.isProvisional ? <Badge tone="warn">Tạm tính</Badge> : null}</span> },
-          { key: "r", label: "Số HĐ NCC", render: (x) => x.supplierRef || "—" },
+          { key: "c", label: "Mã", title: true, render: (x) => <span><b>{x.code}</b>{x.isProvisional ? <div className="row" style={{ gap: 6, marginTop: 4 }}><Badge tone="warn">Tạm tính</Badge>{x.status === "open" && can("debt.write") ? <Button size="sm" onClick={(e) => { e.stopPropagation(); setFin(x); }}>Chốt hoá đơn</Button> : null}</div> : null}</span> },
+          { key: "r", label: "Số HĐ NCC", hideBelow: 1280, render: (x) => x.supplierRef || "—" },
           { key: "d", label: "Hạn", render: (x) => ymd(x.dueDate) },
-          { key: "t", label: "Tổng", right: true, render: (x) => <span className="money">{money(x.total)}</span> },
+          { key: "t", label: "Tổng", right: true, hideBelow: 1280, render: (x) => <span className="money">{money(x.total)}</span> },
           { key: "o", label: "Còn nợ", right: true, render: (x) => <span className="money">{money(x.outstanding)}</span> },
-          { key: "a", label: "", render: (x) => (x.isProvisional && x.status === "open" && can("debt.write") ? <Button size="sm" onClick={() => setFin(x)}>Chốt hoá đơn</Button> : null) },
         ]} />)}
       </div>
       {fin && <FinalizeSheet bill={fin} onClose={() => setFin(null)} onDone={() => { setFin(null); b.reload(); }} />}

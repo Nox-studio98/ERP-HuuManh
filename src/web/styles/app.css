@@ -575,3 +575,39 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 @media (max-width: 1599px) { .finance-recent .hb-1440 { display: none; } }
 /* Hai ô ngày trong thanh lọc không tràn khung trên điện thoại */
 @media (max-width: 767px) { .daterange-inputs { display: flex; align-items: center; gap: var(--s-2); } .daterange-inputs .input { flex: 1 1 0; min-width: 0; width: auto; } }
+/* ===== UX 2B — sửa sau rà ảnh ===== */
+/* Thẻ KPI dạng nút (có onClick) căn nội dung từ trên xuống, cùng đường cơ sở với thẻ thường */
+.kpi.click { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; }
+/* Số thẻ KPI lẻ trên điện thoại: thẻ cuối chiếm trọn hàng */
+@media (max-width: 767px) { .kpi-row > .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; } }
+/* Thanh trên (điện thoại): tiêu đề không bị chia đôi chỗ với khoảng đệm, không xuống dòng */
+@media (max-width: 1023px) {
+  .topbar .tb-spacer { display: none; }
+  .topbar h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+/* Nhóm nút thao tác ở đầu trang: từ 3 nút trở lên thì xếp lưới 2 cột trên điện thoại */
+@media (max-width: 767px) {
+  .ph-actions:has(> :nth-child(3)) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .ph-actions:has(> :nth-child(3)) > * { width: 100%; }
+}
+/* Bán hàng: lưới sản phẩm cách ô tìm kiếm */
+.pos-products .pgrid { margin-top: var(--s-1); }
+/* Kho > Cảnh báo: trạng thái trống gọn trong thẻ nhỏ */
+.alert-grid .empty { padding: var(--s-3) var(--s-2); }
+.alert-grid .empty svg { display: none; }
+/* Ô chọn sản phẩm online: các ô cùng hàng cao bằng nhau */
+.cards-grid.sm { align-items: stretch; }
+.cards-grid.sm > .dt-card { height: 100%; display: flex; align-items: center; }
+.cards-grid.sm > .dt-card > * { width: 100%; }
+/* Thanh lọc có ô ngày giao: thu gọn để vẫn nằm một hàng ở 1440px */
+@media (min-width: 768px) {
+  .filterbar .field input[type="date"] { width: 150px; min-width: 0; }
+  .filterbar:has(.field input[type="date"]) .filter-select { flex-basis: 140px; }
+  .filterbar:has(.field input[type="date"]) .searchbox { flex-basis: 170px; }
+}
+/* Danh sách có khung chi tiết: ô trạng thái chỉ hiện nhãn chính (chi tiết xem ở khung bên phải) */
+.split.open .st-badges { flex-wrap: nowrap; }
+.split.open .st-badges > :nth-child(n+2) { display: none; }
+/* hideBelow: 1600 (thêm mới) — ẩn cột khi màn hình < 1600px hoặc khi đang mở khung chi tiết */
+@media (max-width: 1599px) { .hb-1600 { display: none; } }
+.split.open .hb-1600 { display: none; }
