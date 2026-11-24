@@ -3,6 +3,7 @@ import { deleteCookie } from "hono/cookie";
 import { z } from "zod";
 import { verifyPassword } from "../../../worker/lib/crypto";
 import { AppError, conflict, notFound } from "../../../worker/lib/errors";
+import { loyaltyConfig } from "../../../worker/services/loyalty-points";
 import { sysAuditStmt } from "../../../worker/services/sysaudit";
 import type { ShopBindings } from "../env";
 import { findZone } from "../lib/delivery";
@@ -17,7 +18,16 @@ meRoutes.use("/me/addresses", requireAccount);
 meRoutes.use("/me/addresses/*", requireAccount);
 meRoutes.use("/me/push-subscriptions", requireAccount);
 
-meRoutes.get("/me", (c) => c.json(meShape(c.get("account")!)));
+meRoutes.get("/me", async (c) => {
+  const a = c.get("account")!;
+  const base = meShape(a);
+  // Điểm thành viên: chỉ tài khoản bán lẻ, khi chương trình tích điểm đang bật
+  if (a.kind !== "retail") return c.json(base);
+  const cfg = await loyaltyConfig(c.env.DB);
+  if (!cfg.enabled) return c.json(base);
+  const cu = await c.env.DB.prepare(`SELECT points FROM customers WHERE id = ?`).bind(a.customerId).first<{ points: number }>();
+  return c.json({ ...base, points: cu?.points ?? 0, pointValueVnd: cfg.pointValueVnd });
+});
 
 meRoutes.put("/me", async (c) => {
   const a = c.get("account")!;

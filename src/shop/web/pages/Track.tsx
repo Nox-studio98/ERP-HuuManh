@@ -209,10 +209,13 @@ export function OrderPanel({ o, token, phone4, onChange, placed, me: meMode, onC
         </ul>
         <dl className="totals">
           <div><dt>Tạm tính</dt><dd>{money(o.subtotal)}</dd></div>
-          {o.discount > 0 && <div><dt>Giảm giá</dt><dd>-{money(o.discount)}</dd></div>}
+          {o.discount - (o.pointsAmount ?? 0) > 0 && <div><dt>Giảm giá</dt><dd>-{money(o.discount - (o.pointsAmount ?? 0))}</dd></div>}
+          {(o.pointsRedeemed ?? 0) > 0 && <div data-testid="points-row"><dt>Dùng {num(o.pointsRedeemed!)} điểm</dt><dd>-{money(o.pointsAmount ?? 0)}</dd></div>}
           <div><dt>Phí giao hàng</dt><dd>{o.shippingFee ? money(o.shippingFee) : "Miễn phí"}</dd></div>
           <div className="grand"><dt>{o.estimated ? "Tổng tạm tính" : "Tổng cộng"}</dt><dd>{money(o.total)}</dd></div>
         </dl>
+        {(o.pointsEarned ?? 0) > 0 && <p className="hint" data-testid="points-earned" style={{ color: "var(--brand-deep)", fontWeight: 600 }}>Bạn đã được cộng {num(o.pointsEarned!)} điểm thành viên từ đơn này.</p>}
+        {(o.pointsEarnable ?? 0) > 0 && <p className="hint" data-testid="points-earnable">Hoàn tất đơn này bạn sẽ nhận khoảng {num(o.pointsEarnable!)} điểm thành viên.</p>}
         {o.estimated && <p className="weight-note"><Icon n="info" size={16} /> Giá tạm tính, chốt theo cân thực tế.</p>}
       </section>
 

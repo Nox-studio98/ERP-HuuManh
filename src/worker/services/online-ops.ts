@@ -14,6 +14,7 @@ import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type On
 import { assertStmt } from "./guard";
 import { guardStmts, notifyJob, refundPlan, runOrderBatch } from "./online-payments";
 import { unitFactor } from "./http";
+import { earnFor, pointsStmts } from "./loyalty-points";
 
 type Ctx = Context<AppBindings>;
 
@@ -212,6 +213,11 @@ export async function deliverOrder(c: Ctx, id: number) {
   } else {
     t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công" });
     stmts.push(...t);
+  }
+  // Tích điểm khi đơn website hoàn tất: theo số tiền khách thực trả, không tính phí giao (cùng luật với POS)
+  if (o.shop_account_id && o.customer_id) {
+    const earn = await earnFor(db, Math.max(0, o.total - (o.shipping_fee ?? 0)), o.customer_id);
+    stmts.push(...pointsStmts(db, { sql: "?", bind: id }, o.customer_id, "earn", earn, "Tích điểm đơn hàng online", c.get("user").id));
   }
   stmts.push(notifyJob(db, id, { status: "completed" }), auditStmt(c, { action: "online_order.deliver", entity: "order", entityId: id, before: { status: o.status }, after: { status: "completed", total: o.total, cod: o.payment_method === "cod" } }));
   await runOrderBatch(db, id, o.status, stmts);

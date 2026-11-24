@@ -5,9 +5,9 @@ import { nextCode } from "../../../worker/lib/codes";
 import { newTrackingToken } from "../../../worker/services/online-orders";
 import { planReservations, type ReservationPlan } from "../../../worker/services/reservations";
 import { kickJobs } from "../../../worker/services/outbox";
-import { applyStock, computeTotals, priceCart, promoForCart, publicRemaining } from "../lib/cart";
+import { applyStock, computeTotals, priceCart, promoForCart, publicRemaining, redeemCustomerId } from "../lib/cart";
 import { promoStatements } from "../../../worker/services/promo-checkout";
-import { isVoucherExhausted } from "../../../worker/services/loyalty-points";
+import { isPointsInsufficient, isVoucherExhausted } from "../../../worker/services/loyalty-points";
 import { DATE_RE, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { orderView } from "../lib/orderview";
 import { optionalAuth } from "../lib/session";
@@ -44,6 +44,7 @@ const CheckoutSchema = z.object({
   acceptPreorder: z.boolean().optional(),
   email: z.string().trim().email().max(200).optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4
+  redeemPoints: z.number().int().positive().max(100_000_000).optional(), // đổi điểm thành viên (chỉ tài khoản bán lẻ đăng nhập)
 });
 
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
@@ -142,8 +143,9 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   if (totals.subtotal < zone.minOrder) throw new AppError(422, "min_order", `Đơn tối thiểu ${zone.minOrder.toLocaleString("vi-VN")}đ`, { minOrder: zone.minOrder, subtotal: totals.subtotal });
 
   // --- khuyến mãi / voucher (Đợt 4): giảm tính trên tiền hàng, phí giao giữ nguyên ---
-  const promo = await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true, phone);
-  const finalTotal = totals.total - promo.promoTotal;
+  const redeemCid = redeemCustomerId(account, b.redeemPoints);
+  const promo = await promoForCart(db, lines, totals.subtotal, redeemCid, b.voucherCode, true, phone, b.redeemPoints ?? 0);
+  const finalTotal = totals.total - promo.promoTotal - promo.pointsAmount;
 
   // --- thanh toán ---
   const methods = (await setting(db, "payment.methods", "cod,transfer")).split(",").map((x) => x.trim());
@@ -210,7 +212,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
         )
         .bind(
           code, b.clientUuid, storeId, account?.customerId ?? null, guestCustomerCode, status, isPreorder ? 1 : 0,
-          totals.subtotal, promo.promoTotal, totals.shippingFee, finalTotal, b.note ?? null,
+          totals.subtotal, promo.promoTotal + promo.pointsAmount, totals.shippingFee, finalTotal, b.note ?? null,
           account?.id ?? null, token, addr.receiverName, phone, shipAddress, zone.id, b.slotDate, b.slotId,
           b.paymentMethod, payStatus, finalTotal,
         ),
@@ -260,12 +262,13 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
         const r = await replay();
         if (r) return r;
       }
+      if (isPointsInsufficient(e)) throw conflict("points_insufficient", "Số dư điểm không đủ (có thể vừa được dùng ở đơn khác)");
       if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
       if (/state_changed/.test(String((e as Error)?.message ?? ""))) {
         // Chốt chặn trong batch bật: xác định nguyên nhân để báo đúng lỗi
         if ((await slotProblem(db, slot, b.slotDate)) === "full") throw conflict("slot_full", "Khung giờ đã đầy, vui lòng chọn khung khác");
         if (!account && (await openOrdersByPhone(db, phone)) >= maxOpen) throw httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
-        await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true, phone); // ném lỗi voucher cụ thể nếu có
+        await promoForCart(db, lines, totals.subtotal, redeemCid, b.voucherCode, true, phone, b.redeemPoints ?? 0); // ném lỗi voucher cụ thể nếu có
       }
       if (isCheckFail(e)) {
         if (attempt === 0) continue; // tồn vừa đổi: tính lại một lần
