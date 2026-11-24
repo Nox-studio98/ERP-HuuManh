@@ -24,6 +24,7 @@ export interface SettingDef {
   options?: { value: string; label: string }[]; // enum / multi
   maxLen?: number;
   sensitive?: boolean;
+  allowEmpty?: boolean; // intlist: cho phép để trống
 }
 
 const o = (...p: [string, string][]) => p.map(([value, label]) => ({ value, label }));
@@ -75,6 +76,8 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "deposit.min_bp", group: "Tích điểm & khuyến mãi", label: "Đặt cọc tối thiểu cho đơn đặt trước", help: "Áp dụng cho giỏ quà và đơn đặt trước.", type: "bp", min: 0, max: 10000 },
 
   // ===== Nhân sự & lương =====
+  { key: "hr.monthly_pay_mode", group: "Nhân sự & lương", label: "Cách tính lương tháng", help: "Theo giờ làm thực tế: ngày công = phút làm / phút ca (tối đa 1, làm tròn 0,1 ngày), đi muộn/về sớm bị trừ. Kiểu cũ: có công trong ngày là đủ 1 ngày.", type: "enum", options: o(["proportional", "Theo giờ làm thực tế"], ["day_present", "Có công là đủ ngày (kiểu cũ)"]) },
+  { key: "hr.weekly_off_days", group: "Nhân sự & lương", label: "Ngày nghỉ hằng tuần", help: "Không tính vào số ngày phép. 1 = Thứ Hai … 7 = Chủ nhật, ví dụ 7 hoặc 6,7. Để trống = không loại ngày nào.", type: "intlist", min: 1, max: 7, allowEmpty: true },
   { key: "hr.standard_workdays", group: "Nhân sự & lương", label: "Ngày công chuẩn mỗi tháng", help: "Dùng tính lương tháng.", type: "int", unit: "ngày", min: 1, max: 31 },
   { key: "hr.late_grace_minutes", group: "Nhân sự & lương", label: "Ân hạn đi muộn", help: "Đi muộn quá số phút này mới tính là muộn.", type: "int", unit: "phút", min: 0, max: 120 },
   { key: "hr.rounding_minutes", group: "Nhân sự & lương", label: "Làm tròn phút tăng ca xuống bội số", help: "Ví dụ 15: 50 phút tính thành 45 phút.", type: "int", unit: "phút", min: 1, max: 60 },
@@ -147,6 +150,7 @@ export function validateSetting(def: SettingDef, raw: unknown): { value: string 
       return { value: [...new Set(parts)].join(",") };
     }
     case "intlist": {
+      if (def.allowEmpty && s.trim() === "") return { value: "" };
       const parts = s.split(",").map((x) => x.trim());
       if (!parts.length || parts.some((p) => !/^\d{1,5}$/.test(p))) return { error: "Nhập các số nguyên cách nhau dấu phẩy, ví dụ 30,60,90" };
       const ns = parts.map(Number);
