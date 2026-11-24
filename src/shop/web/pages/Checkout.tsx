@@ -19,7 +19,7 @@ interface PriceChange { productId: number; oldPrice: number; newPrice: number }
 export function CheckoutPage() {
   usePageMeta("Thanh toán");
   const cart = useCart();
-  const { me, ready } = useAuth();
+  const { me, ready, refresh } = useAuth();
   const ts = useTurnstile();
 
   const [addrs, setAddrs] = useState<Address[]>([]);
@@ -73,7 +73,14 @@ export function CheckoutPage() {
   }, [dl.slots, slotKey]);
 
   const vc = useVoucher();
-  const { quote, loading: ql } = useQuote(cart, { district: saved ? undefined : district, addressId: saved?.id ?? null, slotDate: slotKey?.date, slotId: slotKey?.id, voucherCode: vc.code || undefined });
+  const [redeem, setRedeem] = useState(0);
+  const canRedeem = !!me && me.kind === "retail" && me.points != null;
+  const { quote, loading: ql, error: qerr } = useQuote(cart, { district: saved ? undefined : district, addressId: saved?.id ?? null, slotDate: slotKey?.date, slotId: slotKey?.id, voucherCode: vc.code || undefined, redeemPoints: canRedeem && redeem > 0 ? redeem : undefined });
+  const pointsMax = quote?.pointsMax ?? me?.points ?? 0;
+  const redeemEff = canRedeem ? Math.min(redeem, pointsMax) : 0;
+  // Giỏ/mã đổi làm trần điểm giảm: kéo số điểm dùng xuống; báo giá bị từ chối vì điểm → bỏ đổi điểm
+  useEffect(() => { if (redeem > pointsMax && quote?.pointsMax != null) setRedeem(pointsMax); }, [redeem, pointsMax, quote?.pointsMax]);
+  useEffect(() => { if (redeem > 0 && qerr && (qerr.code === "redeem_too_high" || qerr.code === "points_insufficient")) setRedeem(0); }, [qerr, redeem]);
   const preLines = quote?.lines.filter((l) => l.preorderMilli > 0) ?? [];
   const needAccept = preLines.length > 0;
   const subtotal = quote?.subtotal ?? cartSubtotalEst(cart);
@@ -127,6 +134,7 @@ export function CheckoutPage() {
       slotDate: slotKey!.date, slotId: slotKey!.id, paymentMethod: pay, note: f.note.trim() || undefined,
       acceptPreorder: needAccept ? accept : undefined, email: !me && f.email.trim() ? f.email.trim() : undefined,
       voucherCode: vc.code && quote?.voucher?.applied ? vc.code : undefined,
+      redeemPoints: redeemEff > 0 ? redeemEff : undefined,
     };
     try {
       const o = await api<OrderView>("/checkout", { body, turnstile: me ? null : ts.token });
@@ -135,6 +143,7 @@ export function CheckoutPage() {
       cartActions.clear();
       voucherStore.set("");
       uid.current = null;
+      if (me) void refresh(); // số dư điểm đã đổi
       navigate(`/track/${o.trackingToken}?placed=1`);
     } catch (err) {
       const a = err as ApiError;
@@ -145,6 +154,7 @@ export function CheckoutPage() {
         if (a.code === "price_changed") setPriceChange(a.details?.lines ?? []);
         else if (a.code === "insufficient_stock") setStockProblem(a.details?.productId ? { productId: a.details.productId, availableMilli: a.details.availableMilli ?? 0 } : null);
         else if (a.code === "voucher_exhausted") { vc.set(""); setFormErr("Mã giảm giá vừa hết lượt sử dụng — đã bỏ mã khỏi đơn, bạn kiểm tra lại tổng tiền rồi đặt lại nhé."); }
+        else if (a.code === "points_insufficient" || a.code === "redeem_too_high") { setRedeem(0); setFormErr("Số điểm dùng không còn hợp lệ — đã bỏ phần dùng điểm, bạn kiểm tra lại tổng tiền rồi đặt lại nhé."); void refresh(); }
         else if (a.code === "voucher_invalid") { vc.set(""); setFormErr(`Mã giảm giá không áp dụng được: ${voucherReason(a.details?.reason)}. Đã bỏ mã khỏi đơn.`); }
         else if (a.code === "slot_full" || a.code === "slot_cutoff") { setSlotKey(null); setSlotTick((t) => t + 1); setFormErr(a.message); }
         else setFormErr(a.message);
@@ -300,9 +310,22 @@ export function CheckoutPage() {
             })}
           </ul>
           <VoucherBox code={vc.code} onChange={vc.set} quote={quote} loading={ql} idSuffix="-co" />
+          {canRedeem && (me!.points ?? 0) > 0 && (
+            <div className="field" data-testid="points-box">
+              <label htmlFor="redeem-pts">Dùng điểm thành viên</label>
+              <p className="hint">Bạn có {num(me!.points ?? 0)} điểm{me!.pointValueVnd ? ` (1 điểm = ${money(me!.pointValueVnd)})` : ""}. Tối đa dùng được {num(pointsMax)} điểm cho đơn này.</p>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input id="redeem-pts" type="number" min={0} max={pointsMax} step={1} inputMode="numeric" value={redeemEff || ""} placeholder="0" style={{ width: 120 }}
+                  onChange={(e) => setRedeem(Math.max(0, Math.min(pointsMax, Math.floor(Number(e.target.value) || 0))))} />
+                <input type="range" aria-label="Chọn số điểm dùng" min={0} max={Math.max(pointsMax, 0)} value={redeemEff} onChange={(e) => setRedeem(Number(e.target.value))} disabled={pointsMax <= 0} style={{ flex: 1, minWidth: 0 }} />
+                <button type="button" className="btn ghost sm" disabled={pointsMax <= 0} onClick={() => setRedeem(pointsMax)}>Tối đa</button>
+              </div>
+            </div>
+          )}
           <dl className="totals" aria-live="polite">
             <div><dt>Tạm tính</dt><dd>{money(subtotal)}</dd></div>
             <DiscountRows quote={quote} />
+            {(quote?.pointsRedeemed ?? 0) > 0 && <div data-testid="points-row"><dt>Dùng {num(quote!.pointsRedeemed!)} điểm</dt><dd style={{ color: "var(--brand-deep)" }}>-{money(quote!.pointsAmount ?? 0)}</dd></div>}
             <div><dt>Phí giao hàng{quote?.zone ? ` (${quote.zone.name})` : ""}</dt><dd data-testid="ship-fee">{!district ? "—" : quote?.zone ? (quote.shippingFee === 0 ? "Miễn phí" : money(quote.shippingFee)) : ql ? "…" : "—"}</dd></div>
             <div className="grand"><dt>Tổng cộng</dt><dd data-testid="grand-total">{money(quote?.total ?? subtotal)}</dd></div>
           </dl>

@@ -284,11 +284,18 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
   const q = c.req.query();
   const conds: string[] = [];
   const params: unknown[] = [];
-  if (q.partnerType) { conds.push(`partner_type = ?`); params.push(q.partnerType); }
-  if (q.partnerId) { conds.push(`partner_id = ?`); params.push(Number(q.partnerId)); }
-  if (q.cursor) { conds.push(`id < ?`); params.push(Number(q.cursor)); }
+  if (q.partnerType === "customer" || q.partnerType === "supplier") { conds.push(`p.partner_type = ?`); params.push(q.partnerType); }
+  if (q.partnerId) { conds.push(`p.partner_id = ?`); params.push(Number(q.partnerId)); }
+  if (q.direction === "in" || q.direction === "out") { conds.push(`p.direction = ?`); params.push(q.direction); }
+  if (q.status === "posted" || q.status === "reversed") { conds.push(`p.status = ?`); params.push(q.status); }
+  if (q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from)) { conds.push(`substr(p.paid_at,1,10) >= ?`); params.push(q.from); }
+  if (q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to)) { conds.push(`substr(p.paid_at,1,10) <= ?`); params.push(q.to); }
+  if (q.cursor) { conds.push(`p.id < ?`); params.push(Number(q.cursor)); }
   const limit = lim(c);
-  const rows = (await c.env.DB.prepare(`SELECT * FROM debt_payments ${conds.length ? "WHERE " + conds.join(" AND ") : ""} ORDER BY id DESC LIMIT ?`).bind(...params, limit + 1).all<any>()).results;
+  const rows = (await c.env.DB.prepare(
+    `SELECT p.*, CASE p.partner_type WHEN 'customer' THEN (SELECT name FROM customers WHERE id = p.partner_id) ELSE (SELECT name FROM suppliers WHERE id = p.partner_id) END AS partner_name
+     FROM debt_payments p ${conds.length ? "WHERE " + conds.join(" AND ") : ""} ORDER BY p.id DESC LIMIT ?`,
+  ).bind(...params, limit + 1).all<any>()).results;
   const items = rows.slice(0, limit).map(camel);
   return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
 });

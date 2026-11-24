@@ -19,21 +19,63 @@ const getRaw = (p: string, q?: any) => get(p, q, { raw: true });
 
 export default function Debts() {
   const can = useCan();
-  const [tab, setTab] = useState<"recv" | "pay" | "remind" | "adj" | "open">("recv");
+  const [tab, setTab] = useState<"recv" | "pay" | "pays" | "remind" | "adj" | "open">("recv");
   const pre = qparam("statement");
   const [stmt, setStmt] = useState<{ pt: PT; id: number; name?: string } | null>(pre && /^(customer|supplier):\d+$/.test(pre) ? { pt: pre.split(":")[0] as PT, id: Number(pre.split(":")[1]) } : null);
   const [pay, setPay] = useState<{ pt: PT } | null>(null);
   return (
     <div className="stack">
-      <Segmented wrap value={tab} onChange={setTab} options={[{ v: "recv", label: "Phải thu" }, { v: "pay", label: "Phải trả" }, { v: "remind", label: "Nhắc nợ" }, { v: "adj", label: "Điều chỉnh" }, { v: "open", label: "Đầu kỳ" }]} />
+      <Segmented wrap value={tab} onChange={setTab} options={[{ v: "recv", label: "Phải thu" }, { v: "pay", label: "Phải trả" }, { v: "pays", label: "Phiếu thu/chi" }, { v: "remind", label: "Nhắc nợ" }, { v: "adj", label: "Điều chỉnh" }, { v: "open", label: "Đầu kỳ" }]} />
       {tab === "recv" && <Aging side="receivable" onOpen={(r) => setStmt({ pt: "customer", id: r.customerId, name: r.customerName })} />}
       {tab === "pay" && <Aging side="payable" onOpen={(r) => setStmt({ pt: "supplier", id: r.supplierId, name: r.supplierName })} />}
+      {tab === "pays" && <AllPayments />}
       {tab === "remind" && <Reminders />}
       {tab === "adj" && <Adjustments />}
       {tab === "open" && <Opening />}
-      {can("debt.write") && tab !== "remind" && tab !== "open" && tab !== "adj" && <div><Button variant="soft" onClick={() => setPay({ pt: tab === "pay" ? "supplier" : "customer" })}>{tab === "pay" ? "+ Trả tiền NCC" : "+ Thu tiền khách"}</Button></div>}
+      {can("debt.write") && tab !== "remind" && tab !== "pays" && tab !== "open" && tab !== "adj" && <div><Button variant="soft" onClick={() => setPay({ pt: tab === "pay" ? "supplier" : "customer" })}>{tab === "pay" ? "+ Trả tiền NCC" : "+ Thu tiền khách"}</Button></div>}
       {stmt && <PartnerSheet pt={stmt.pt} id={stmt.id} name={stmt.name} onClose={() => { setStmt(null); if (pre) history.replaceState({}, "", "/debts"); }} />}
       {pay && <PickPartnerPay pt={pay.pt} onClose={() => setPay(null)} />}
+    </div>
+  );
+}
+
+function AllPayments() {
+  const can = useCan();
+  const [dir, setDir] = useState(""), [kind, setKind] = useState<"" | PT>(""), [from, setFrom] = useState(""), [to, setTo] = useState(""), [status, setStatus] = useState("");
+  const [partner, setPartner] = useState<{ id: number; name: string } | null>(null);
+  const [rev, setRev] = useState<any>(null);
+  const l = useAsync(() => get("/debts/payments", { direction: dir, partnerType: kind, partnerId: partner?.id, from, to, status, limit: 100 }).then((r) => items<any>(r)), [dir, kind, partner?.id, from, to, status]);
+  const rows = l.data ?? [];
+  const sum = rows.filter((p) => p.status === "posted").reduce((a, p) => ({ in: a.in + (p.direction === "in" ? p.amount : 0), out: a.out + (p.direction === "out" ? p.amount : 0) }), { in: 0, out: 0 });
+  return (
+    <div className="stack" data-testid="all-payments">
+      <div className="grid3">
+        <Select label="Loại phiếu" value={dir} onChange={(e) => setDir(e.target.value)}><option value="">Thu và chi</option><option value="in">Phiếu thu (khách trả)</option><option value="out">Phiếu chi (trả NCC)</option></Select>
+        <Select label="Đối tác" value={kind} onChange={(e) => { setKind(e.target.value as any); setPartner(null); }}><option value="">Tất cả</option><option value="customer">Khách hàng</option><option value="supplier">Nhà cung cấp</option></Select>
+        <Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option><option value="posted">Đã ghi</option><option value="reversed">Đã đảo</option></Select>
+        <Input label="Từ ngày" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <Input label="Đến ngày" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+      </div>
+      {kind && (kind === "customer" ? <CustomerSelect value={partner as any} onChange={setPartner} label="Lọc theo khách" /> : <SupplierSelect value={partner} onChange={setPartner} />)}
+      <div className="kpis">
+        <div className="kpi"><div className="l">Tổng thu (đã ghi)</div><div className="v">{money(sum.in)}</div></div>
+        <div className="kpi"><div className="l">Tổng chi (đã ghi)</div><div className="v">{money(sum.out)}</div></div>
+      </div>
+      {l.loading ? <Spinner /> : (
+        <DataTable rows={rows} rowKey={(p) => p.id} empty="Không có phiếu phù hợp" cols={[
+          { key: "c", label: "Mã", title: true, render: (p) => <b>{p.code}</b> },
+          { key: "d", label: "Ngày", render: (p) => fmtDateTime(p.paidAt) },
+          { key: "k", label: "Loại", render: (p) => <Badge tone={p.direction === "in" ? "ok" : "info"}>{p.direction === "in" ? "Thu" : "Chi"}</Badge> },
+          { key: "n", label: "Đối tác", render: (p) => p.partnerName ?? `#${p.partnerId}` },
+          { key: "m", label: "Hình thức", hideMobile: true, render: (p) => METHODS[p.method] ?? p.method },
+          { key: "s", label: "Trạng thái", render: (p) => (p.status === "posted" ? <Badge tone="ok">Đã ghi</Badge> : <Badge tone="danger">Đã đảo</Badge>) },
+          { key: "a", label: "Số tiền", right: true, render: (p) => <span className="money">{money(p.amount)}</span> },
+          { key: "r", label: "", render: (p) => (can("debt.write") && p.status === "posted" ? <Button size="sm" variant="ghost" onClick={() => setRev(p)}>Đảo phiếu</Button> : null) },
+        ]} />
+      )}
+      {rev && <ReasonSheet title={`Đảo phiếu ${rev.code}`} confirm={`Đảo phiếu ${money(rev.amount)}`} danger onClose={() => setRev(null)} onSubmit={async (reason) => { await post(`/debts/payments/${rev.id}/reverse`, { reason }); toast("Đã đảo phiếu — tạo phiếu đảo ở kỳ hiện tại", "ok"); setRev(null); l.reload(); }}>
+        <Banner>Phiếu cũ không bị sửa. Các khoản đã gạch bởi phiếu này được trả về còn nợ.</Banner>
+      </ReasonSheet>}
     </div>
   );
 }

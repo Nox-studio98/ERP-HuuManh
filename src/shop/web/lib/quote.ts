@@ -5,11 +5,11 @@ import { baseQtyMilli, type CartItem } from "./store";
 export interface QuoteState { quote: Quote | null; loading: boolean; error: ApiError | null }
 
 /** Báo giá server (debounce). Giá/phí luôn do server tính. */
-export function useQuote(items: CartItem[], opts: { district?: string; addressId?: number | null; slotDate?: string; slotId?: number; voucherCode?: string }): QuoteState & { reload(): void } {
+export function useQuote(items: CartItem[], opts: { district?: string; addressId?: number | null; slotDate?: string; slotId?: number; voucherCode?: string; redeemPoints?: number }): QuoteState & { reload(): void } {
   const [st, setSt] = useState<QuoteState>({ quote: null, loading: items.length > 0, error: null });
   const [tick, setTick] = useState(0);
   const seq = useRef(0);
-  const key = JSON.stringify([items.map((i) => [i.productId, i.unit, i.qtyMilli]), opts.district, opts.addressId, opts.slotDate, opts.slotId, opts.voucherCode, tick]);
+  const key = JSON.stringify([items.map((i) => [i.productId, i.unit, i.qtyMilli]), opts.district, opts.addressId, opts.slotDate, opts.slotId, opts.voucherCode, opts.redeemPoints, tick]);
   useEffect(() => {
     if (!items.length) { setSt({ quote: null, loading: false, error: null }); return; }
     const my = ++seq.current;
@@ -21,6 +21,7 @@ export function useQuote(items: CartItem[], opts: { district?: string; addressId
         else if (opts.district) body.district = opts.district;
         if (opts.slotDate && opts.slotId) { body.slotDate = opts.slotDate; body.slotId = opts.slotId; }
         if (opts.voucherCode) body.voucherCode = opts.voucherCode;
+        if (opts.redeemPoints) body.redeemPoints = opts.redeemPoints;
         const q = await api<Quote>("/cart/quote", { body });
         if (my === seq.current) setSt({ quote: q, loading: false, error: null });
       } catch (e) {
