@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { get, items, post, put, del } from "../../api";
 import { Badge, Banner, Button, Card, Input, Segmented, Select, Sheet, Spinner, useAsync } from "../../components/ui";
+import { KpiRow, PageHeader } from "../../components/list";
 import { toast } from "../../components/toast";
 import { todayVN } from "../../format";
 import { useCan } from "../../store";
@@ -13,7 +14,8 @@ export default function Schedule() {
   const w = can("hr.schedule");
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "week", label: "Lịch tuần" }, ...(w ? [{ v: "swaps" as Tab, label: "Đổi ca" }] : []), { v: "templates", label: "Mẫu ca" }]} />
+      <PageHeader subtitle={tab === "week" ? "Xếp ca theo tuần cho từng nhân viên" : tab === "swaps" ? "Yêu cầu đổi ca giữa nhân viên" : "Các mẫu ca làm việc"} />
+      <Segmented fit value={tab} onChange={setTab} options={[{ v: "week", label: "Lịch tuần" }, ...(w ? [{ v: "swaps" as Tab, label: "Đổi ca" }] : []), { v: "templates", label: "Mẫu ca" }]} />
       {tab === "week" && <Week write={w} />}
       {tab === "swaps" && <Swaps />}
       {tab === "templates" && <Templates write={w} />}
@@ -65,6 +67,12 @@ function Week({ write }: { write: boolean }) {
         </div>
         {write && <Button size="sm" variant="soft" loading={busy} onClick={copyPrev}>Sao chép tuần trước</Button>}
       </div>
+      <KpiRow items={[
+        { label: "Ca trong tuần", value: (sch.data ?? []).length },
+        { label: "Nhân viên có ca", value: new Set((sch.data ?? []).map((x) => x.employeeId)).size, sub: `/ ${(emps.data ?? []).length} nhân viên`, tone: "ok" },
+        { label: "Ngày chưa xếp ca", value: days.filter((d) => !(sch.data ?? []).some((x) => x.workDate === d)).length, tone: days.some((d) => !(sch.data ?? []).some((x) => x.workDate === d)) ? "warn" : undefined },
+        { label: "Mẫu ca đang dùng", value: activeTpls.length },
+      ]} />
       {write && <div className="hint">Chạm vào ô trống để chọn nhiều ô, rồi chọn ca và bấm “Gán ca”. Chạm vào ca để huỷ.</div>}
       {write && sel.size > 0 && (
         <div className="card stack" style={{ position: "sticky", top: 8, zIndex: 5, gap: 8, padding: 12 }} data-testid="assign-bar">
@@ -73,24 +81,24 @@ function Week({ write }: { write: boolean }) {
         </div>
       )}
       {(emps.data ?? []).length === 0 ? <Banner tone="info">Chưa có nhân viên đang làm.</Banner> : (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 560 }} data-testid="week-grid">
+        <div className="grid-scroll sch-scroll">
+          <table className="sch-table" data-testid="week-grid">
             <thead>
               <tr>
-                <th style={{ position: "sticky", left: 0, background: "var(--surface)", textAlign: "left", padding: 8, minWidth: 96, maxWidth: 96, zIndex: 1 }}>Nhân viên</th>
-                {days.map((d) => <th key={d} style={{ padding: 6, fontSize: ".8rem", background: d === today ? "var(--accent-soft)" : undefined }}>{WD_SHORT[days.indexOf(d)]}<div className="muted">{dm(d)}</div></th>)}
+                <th className="sticky-col">Nhân viên</th>
+                {days.map((d) => <th key={d} className={d === today ? "today" : ""}>{WD_SHORT[days.indexOf(d)]}<div className="muted">{dm(d)}</div></th>)}
               </tr>
             </thead>
             <tbody>
               {emps.data!.map((e) => (
                 <tr key={e.id}>
-                  <th style={{ position: "sticky", left: 0, background: "var(--surface)", textAlign: "left", padding: "8px 6px", fontWeight: 600, fontSize: ".78rem", lineHeight: 1.2, borderTop: "1px solid var(--border)", zIndex: 1, maxWidth: 96, overflow: "hidden", overflowWrap: "anywhere" }} title={e.fullName}>{e.fullName}</th>
+                  <th className="sticky-col sch-name" title={e.fullName}>{e.fullName}</th>
                   {days.map((d) => {
                     const k = cellKey(e.id, d), list = map.get(k) ?? [], on = sel.has(k);
                     return (
-                      <td key={d} data-cell={k} onClick={() => write && toggle(k)} style={{ borderTop: "1px solid var(--border)", borderLeft: "1px solid var(--border)", padding: 3, verticalAlign: "top", minWidth: 64, height: 54, cursor: write ? "pointer" : undefined, background: on ? "var(--accent-soft)" : undefined, outline: on ? "2px solid var(--accent)" : undefined, outlineOffset: -2 }}>
+                      <td key={d} data-cell={k} className={"sch-cell" + (on ? " on" : "") + (d === today ? " today" : "")} onClick={() => write && toggle(k)} style={{ cursor: write ? "pointer" : undefined }}>
                         {list.map((s) => (
-                          <button key={s.id} className="badge info" data-chip={s.id} style={{ border: 0, cursor: write ? "pointer" : "default", display: "block", width: "100%", marginBottom: 2, textAlign: "left", fontSize: ".72rem", padding: "2px 6px" }}
+                          <button key={s.id} className="badge info sch-chip" data-chip={s.id} style={{ cursor: write ? "pointer" : "default" }}
                             onClick={(ev) => { ev.stopPropagation(); if (write) setChip(s); }}>
                             {s.shiftName}<br />{vnTime(s.startAt)}
                           </button>

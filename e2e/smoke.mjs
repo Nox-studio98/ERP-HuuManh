@@ -322,7 +322,7 @@ try {
   await o.page.locator(".card", { hasText: "Chi phí" }).first().waitFor();
   await shot(o.page, "bao-cao-m.png");
   for (const by of ["channel", "group"]) {
-    await o.page.getByLabel("Nhóm theo").selectOption(by);
+    await o.page.getByRole("tab", { name: by === "channel" ? "Theo kênh" : "Theo nhóm hàng" }).click();
     await o.page.locator(".dt-card").first().waitFor();
   }
   ok("nhóm theo ngày / kênh / nhóm hàng đều có dòng");

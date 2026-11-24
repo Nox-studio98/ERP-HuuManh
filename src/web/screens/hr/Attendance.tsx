@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, items, post } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, DecInput, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, rangeOf, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { fmtDateTime, todayVN } from "../../format";
 import { navigate } from "../../router";
@@ -19,11 +20,17 @@ export default function Attendance() {
   const lab = (t: string, n?: number) => (n ? `${t} (${n})` : t);
   return (
     <div className="stack">
+      <PageHeader subtitle="Duyệt chấm công, bổ sung công, nghỉ phép, tăng ca và thiết bị" actions={<Button variant="soft" size="sm" onClick={() => navigate("/hr/qr")}>Mở màn hình QR cửa hàng</Button>} />
+      <KpiRow items={[
+        { label: "Chấm công cần xem", value: c?.punches ?? "—", tone: c?.punches ? "warn" : undefined, onClick: () => setTab("punches") },
+        { label: "Bổ sung công", value: c?.corr ?? "—", tone: c?.corr ? "warn" : undefined, onClick: () => setTab("corr") },
+        { label: "Nghỉ phép chờ duyệt", value: c?.leave ?? "—", tone: c?.leave ? "warn" : undefined, onClick: () => setTab("leave") },
+        { label: "Tăng ca / thiết bị", value: c ? `${c.ot} / ${c.dev}` : "—", tone: c && (c.ot || c.dev) ? "warn" : undefined, onClick: () => setTab(c?.ot ? "ot" : "dev") },
+      ]} />
       <div className="row wrap between">
-        <Segmented wrap value={tab} onChange={setTab} options={[
+        <Segmented fit wrap value={tab} onChange={setTab} options={[
           { v: "punches", label: lab("Chấm công chờ duyệt", c?.punches) }, { v: "corr", label: lab("Bổ sung công", c?.corr) }, { v: "leave", label: lab("Nghỉ phép", c?.leave) },
           { v: "ot", label: lab("Tăng ca", c?.ot) }, { v: "dev", label: lab("Thiết bị", c?.dev) }, { v: "log", label: "Nhật ký" }]} />
-        <Button variant="soft" size="sm" onClick={() => navigate("/hr/qr")}>Mở màn hình QR cửa hàng</Button>
       </div>
       {tab === "punches" && <Punches onChange={counts.reload} />}
       {tab === "corr" && <Corrections onChange={counts.reload} />}
@@ -46,7 +53,7 @@ function Decide({ onDecide, approveLabel = "Duyệt", disabled }: { onDecide: (d
     </>
   );
 }
-const Empty = ({ t }: { t: string }) => <Card><div className="muted">{t}</div></Card>;
+const Empty = ({ t }: { t: string }) => <Card className="grid-full"><div className="muted">{t}</div></Card>;
 
 function Punches({ onChange }: { onChange: () => void }) {
   // chờ duyệt (giờ máy không hợp lý) + chấm offline đã tính công ngay nhưng cần xem lại (reviewFlag)
@@ -58,6 +65,7 @@ function Punches({ onChange }: { onChange: () => void }) {
   return (
     <div className="stack" data-testid="pending-punches">
       <div className="hint">Chấm công offline (mất mạng) được tính công theo giờ máy nhân viên nếu hợp lý và hiện ở đây để quản lý xem lại; bạn có thể xác nhận hoặc từ chối (từ chối sẽ không tính công).</div>
+      <div className="card-grid">
       {!(l.data ?? []).length && <Empty t="Không có lần chấm công nào cần xem lại." />}
       {l.data!.map((p) => (
         <Card key={p.id}>
@@ -69,6 +77,7 @@ function Punches({ onChange }: { onChange: () => void }) {
           </div>
         </Card>
       ))}
+      </div>
     </div>
   );
 }
@@ -78,6 +87,7 @@ function Corrections({ onChange }: { onChange: () => void }) {
   if (l.loading) return <Spinner />;
   return (
     <div className="stack" data-testid="pending-corrections">
+      <div className="card-grid">
       {!(l.data ?? []).length && <Empty t="Không có yêu cầu bổ sung công nào chờ duyệt." />}
       {l.data!.map((r) => {
         const incomplete = !r.kind || !r.requestedAt;
@@ -93,6 +103,7 @@ function Corrections({ onChange }: { onChange: () => void }) {
           </Card>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -107,6 +118,7 @@ function Leaves({ onChange }: { onChange: () => void }) {
   const done = (t: string) => { toast(t, "ok"); l.reload(); onChange(); };
   return (
     <div className="stack" data-testid="pending-leaves">
+      <div className="card-grid">
       {!(l.data ?? []).length && <Empty t="Không có đơn nghỉ nào chờ duyệt." />}
       {l.data!.map((r) => (
         <Card key={r.id}>
@@ -123,6 +135,7 @@ function Leaves({ onChange }: { onChange: () => void }) {
           </div>
         </Card>
       ))}
+      </div>
       {over && (
         <Confirm title="Duyệt vượt số dư phép" confirmLabel="Duyệt ngoại lệ" busy={busy} disabled={exReason.trim().length < 3} onClose={() => setOver(null)}
           onConfirm={async () => { setBusy(true); try { await post(`/leave-requests/${over.id}/decide`, { decision: "approved", allowOverBalance: true, exceptionReason: exReason.trim() }); setOver(null); done("Đã duyệt ngoại lệ"); } catch { /* toast */ } finally { setBusy(false); } }}>
@@ -142,6 +155,7 @@ function Overtime({ onChange }: { onChange: () => void }) {
   return (
     <div className="stack" data-testid="pending-ot">
       <div className="row between"><div className="hint">Chỉ phần tăng ca đã duyệt mới được tính lương.</div><Button size="sm" variant="soft" onClick={() => setAdd(true)}>+ Ghi nhận tăng ca</Button></div>
+      <div className="card-grid">
       {!(l.data ?? []).length && <Empty t="Không có yêu cầu tăng ca nào chờ duyệt." />}
       {l.data!.map((r) => (
         <Card key={r.id}>
@@ -152,6 +166,7 @@ function Overtime({ onChange }: { onChange: () => void }) {
           </div>
         </Card>
       ))}
+      </div>
       {add && <OtForm emps={emps.data ?? []} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); toast("Đã ghi nhận tăng ca", "ok"); }} />}
     </div>
   );
@@ -179,6 +194,7 @@ function Devices({ onChange }: { onChange: () => void }) {
   return (
     <div className="stack" data-testid="pending-devices">
       <div className="hint">Mỗi nhân viên chỉ chấm công trên một điện thoại đã đăng ký. Duyệt thiết bị mới sẽ thu hồi thiết bị cũ.</div>
+      <div className="card-grid">
       {!(l.data ?? []).length && <Empty t="Không có yêu cầu đổi thiết bị nào." />}
       {l.data!.map((r) => (
         <Card key={r.id}>
@@ -189,30 +205,35 @@ function Devices({ onChange }: { onChange: () => void }) {
           </div>
         </Card>
       ))}
+      </div>
     </div>
   );
 }
 
 function Log() {
-  const [f, setF] = useState({ employeeId: "", from: todayVN(-6), to: todayVN(), status: "" });
+  const [range, setRange] = useState<DateRange>(() => rangeOf("7d"));
+  const [emp, setEmp] = useState(""), [status, setStatus] = useState("");
   const emps = useAsync(() => get("/employees", { limit: 200 }).then((r) => items<any>(r)), []);
-  const l = useAsync(() => get("/attendance/punches", { employeeId: f.employeeId, from: f.from, to: f.to, status: f.status, limit: 200 }).then((r) => items<any>(r)), [f.employeeId, f.from, f.to, f.status]);
+  const l = useAsync(() => get("/attendance/punches", { employeeId: emp, from: range.from, to: range.to, status, limit: 200 }).then((r) => items<any>(r)), [emp, range.from, range.to, status]);
+  const rows = l.data ?? [];
   return (
     <div className="stack">
-      <div className="grid2">
-        <Select label="Nhân viên" value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })}><option value="">Tất cả</option>{(emps.data ?? []).map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}</Select>
-        <Select label="Trạng thái" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">Tất cả</option>{Object.entries(PUNCH_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-        <Input label="Từ ngày" type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} />
-        <Input label="Đến ngày" type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} />
-      </div>
+      <FilterBar dirty={!!(emp || status)} onReset={() => { setEmp(""); setStatus(""); }} activeCount={[emp, status].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Nhân viên" value={emp} onChange={setEmp} options={(emps.data ?? []).map((e) => ({ v: String(e.id), label: e.fullName }))} />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(PUNCH_STATUS).map(([v, label]) => ({ v, label }))} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["today", "yesterday", "7d", "month", "lastMonth", "custom"]} />
+        <span style={{ marginLeft: "auto" }}><ExportButton filename={`cham-cong-${range.from}_${range.to}`} rows={rows} columns={[{ label: "Giờ máy chủ", value: (r: any) => fmtDateTime(r.serverAt) }, { label: "Nhân viên", value: (r: any) => r.employeeName }, { label: "Loại", value: (r: any) => KIND[r.kind] }, { label: "Cách chấm", value: (r: any) => PUNCH_METHOD[r.method] ?? r.method }, { label: "Khoảng cách (m)", value: (r: any) => r.distanceM }, { label: "Trạng thái", value: (r: any) => PUNCH_STATUS[r.status] ?? r.status }, { label: "Ghi chú", value: (r: any) => r.note }]} /></span>
+      </FilterBar>
       {l.loading ? <Spinner /> : (
-        <DataTable<any> rows={l.data ?? []} rowKey={(r) => r.id} empty="Không có lần chấm công trong bộ lọc"
+        <DataTable<any> rows={rows} rowKey={(r) => r.id} pageSize={50} footer={`${rows.length} lần chấm công`}
+          emptyState={<EmptyState title="Không có lần chấm công trong bộ lọc" action={<Button variant="ghost" onClick={() => setRange(rangeOf("month"))}>Xem tháng này</Button>} />}
           cols={[
-            { key: "t", label: "Giờ máy chủ", render: (r) => fmtDateTime(r.serverAt) },
-            { key: "e", label: "Nhân viên", title: true, render: (r) => <b>{r.employeeName}</b> },
+            { key: "t", label: "Giờ máy chủ", sort: (r) => r.serverAt, render: (r) => <span className="nw">{fmtDateTime(r.serverAt)}</span> },
+            { key: "e", label: "Nhân viên", title: true, sort: (r) => r.employeeName, render: (r) => <b>{r.employeeName}</b> },
             { key: "k", label: "Loại", render: (r) => KIND[r.kind] },
             { key: "m", label: "Cách chấm", render: (r) => PUNCH_METHOD[r.method] ?? r.method },
-            { key: "d", label: "Khoảng cách", hideMobile: true, render: (r) => (r.distanceM != null ? `${r.distanceM} m` : "—") },
+            { key: "d", label: "Khoảng cách", hideMobile: true, num: true, sort: (r) => r.distanceM, render: (r) => (r.distanceM != null ? `${r.distanceM} m` : "—") },
             { key: "s", label: "Trạng thái", render: (r) => <Badge tone={r.status === "accepted" ? "ok" : r.status === "pending" ? "warn" : "danger"}>{PUNCH_STATUS[r.status] ?? r.status}</Badge> },
             { key: "n", label: "Ghi chú", hideMobile: true, render: (r) => r.note ?? "" },
           ]} />

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { money, todayVN } from "../../format";
 import { useCan } from "../../store";
@@ -12,7 +13,8 @@ export default function Bank() {
   const opts = [...(can("debt.view") ? [{ v: "bank" as const, label: "Giao dịch ngân hàng" }] : []), ...(can("finance.write") ? [{ v: "settle" as const, label: "Đối soát COD / sàn" }] : [])];
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={opts} />
+      <PageHeader subtitle={tab === "bank" ? "Nhập sao kê ngân hàng và khớp giao dịch với khách / nhà cung cấp" : "Đối soát tiền COD và sàn thương mại điện tử"} />
+      <Segmented fit value={tab} onChange={setTab} options={opts} />
       {tab === "bank" ? <BankTxns /> : <Settlements />}
     </div>
   );
@@ -24,7 +26,8 @@ function BankTxns() {
   const funds = useAsync(() => get("/funds", undefined, { silent: true }).then((r) => items<any>(r).filter((f) => f.type === "bank" && f.active)), []);
   const [fundId, setFundId] = useState(""), [csv, setCsv] = useState(""), [busy, setBusy] = useState(false), [res, setRes] = useState<any>(null);
   const [status, setStatus] = useState("unmatched");
-  const list = useAsync(() => get("/bank-transactions", { status, limit: 100 }).then((r) => items<any>(r)), [status]);
+  const [range, setRange] = useState<DateRange>(() => ({ ...rangeOf("month"), preset: "month" })), [q, setQ] = useState(""), [useRange, setUseRange] = useState(false);
+  const list = useAsync(() => get("/bank-transactions", { status, limit: 200 }).then((r) => items<any>(r)), [status]);
   const [match, setMatch] = useState<any>(null);
   const file = useRef<HTMLInputElement>(null);
   const fid = fundId || String(funds.data?.[0]?.id ?? "");
@@ -33,33 +36,53 @@ function BankTxns() {
     setBusy(true); setRes(null);
     try { const r = await post("/bank-transactions/import", { fundId: Number(fid), csv }); setRes(r); toast(`Nhập ${r.imported} giao dịch, tự khớp ${r.matched}`, "ok"); list.reload(); } catch {} finally { setBusy(false); }
   };
+  const term = q.trim().toLowerCase();
+  const all = list.data ?? [];
+  const rows = all.filter((x) => (!useRange || (String(x.txnDate).slice(0, 10) >= range.from && String(x.txnDate).slice(0, 10) <= range.to)) && (!term || `${x.description ?? ""} ${x.bankRef ?? ""}`.toLowerCase().includes(term)));
+  const inSum = rows.filter((x) => x.amount > 0).reduce((a, x) => a + x.amount, 0), outSum = rows.filter((x) => x.amount < 0).reduce((a, x) => a + x.amount, 0);
+  const dirty = !!(q || useRange);
+  const [importOpen, setImportOpen] = useState(false);
+  const importCard = can("debt.write") && (
+    <Card title="Nhập sao kê ngân hàng (CSV)">
+      <div className="stack">
+        <div className="hint">Cột: <code>date, amount, description, ref</code>. Tiền vào dương, tiền ra âm. Giao dịch trùng (quỹ + ref) bị bỏ qua; nội dung chứa mã khách <b>KH-xxxx</b> hoặc số hoá đơn sẽ tự khớp.</div>
+        <Select label="Tài khoản ngân hàng" value={fid} onChange={(e) => setFundId(e.target.value)}>{(funds.data ?? []).map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select>
+        <TextArea label="Dán nội dung CSV" value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} placeholder={SAMPLE} style={{ fontFamily: "ui-monospace, monospace" } as any} />
+        <div className="row wrap">
+          <input ref={file} type="file" accept=".csv,text/csv,text/plain" hidden aria-label="Chọn tệp CSV" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setCsv(await f.text()); e.target.value = ""; }} />
+          <Button variant="ghost" onClick={() => file.current?.click()}>Chọn tệp CSV…</Button>
+          <Button loading={busy} disabled={!csv.trim() || !fid} onClick={imp}>Nhập giao dịch</Button>
+        </div>
+        {res && <Banner tone="info">Đã nhập {res.imported} · tự khớp {res.matched} · chưa khớp {res.unmatched} · trùng {res.duplicates} · lỗi dòng {res.invalid}.</Banner>}
+      </div>
+    </Card>
+  );
+  void importOpen; void setImportOpen;
   return (
     <div className="stack">
-      {can("debt.write") && (
-        <Card title="Nhập sao kê ngân hàng (CSV)">
-          <div className="stack">
-            <div className="hint">Cột: <code>date, amount, description, ref</code>. Tiền vào dương, tiền ra âm. Giao dịch trùng (quỹ + ref) bị bỏ qua; nội dung chứa mã khách <b>KH-xxxx</b> hoặc số hoá đơn sẽ tự khớp.</div>
-            <Select label="Tài khoản ngân hàng" value={fid} onChange={(e) => setFundId(e.target.value)}>{(funds.data ?? []).map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select>
-            <TextArea label="Dán nội dung CSV" value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} placeholder={SAMPLE} style={{ fontFamily: "ui-monospace, monospace" } as any} />
-            <div className="row wrap">
-              <input ref={file} type="file" accept=".csv,text/csv,text/plain" hidden aria-label="Chọn tệp CSV" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setCsv(await f.text()); e.target.value = ""; }} />
-              <Button variant="ghost" onClick={() => file.current?.click()}>Chọn tệp CSV…</Button>
-              <Button loading={busy} disabled={!csv.trim() || !fid} onClick={imp}>Nhập giao dịch</Button>
-            </div>
-            {res && <Banner tone="info">Đã nhập {res.imported} · tự khớp {res.matched} · chưa khớp {res.unmatched} · trùng {res.duplicates} · lỗi dòng {res.invalid}.</Banner>}
-          </div>
-        </Card>
-      )}
-      <Select label="Hiển thị" value={status} onChange={(e) => setStatus(e.target.value)}>{Object.entries(ST).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-      {list.loading ? <Spinner /> : (
-        <DataTable rows={list.data ?? []} rowKey={(x) => x.id} onRowClick={(x) => x.status === "unmatched" && can("debt.write") && setMatch(x)} empty={status === "unmatched" ? "Không có giao dịch chưa khớp" : "Không có giao dịch"} cols={[
-          { key: "d", label: "Ngày", title: true, render: (x) => <b>{ymd(x.txnDate)}</b> },
-          { key: "n", label: "Nội dung", render: (x) => x.description || "—" },
-          { key: "r", label: "Mã GD", hideMobile: true, render: (x) => <span className="num small">{x.bankRef}</span> },
-          { key: "s", label: "Trạng thái", render: (x) => <Badge tone={x.status === "matched" ? "ok" : x.status === "unmatched" ? "warn" : undefined}>{ST[x.status] ?? x.status}</Badge> },
-          { key: "a", label: "Số tiền", right: true, render: (x) => <b className="money" style={{ color: x.amount > 0 ? "var(--accent)" : "var(--danger)" }}>{x.amount > 0 ? "+" : ""}{money(x.amount)}</b> },
-        ]} />
-      )}
+      <KpiRow items={[{ label: "Giao dịch hiển thị", value: rows.length, sub: ST[status] }, { label: "Tiền vào", value: money(inSum), tone: "ok" }, { label: "Tiền ra", value: money(-outSum), tone: outSum ? "danger" : undefined }, { label: "Số dư các quỹ ngân hàng", value: (funds.data ?? []).length ? money((funds.data ?? []).reduce((a: number, f: any) => a + (f.balance ?? 0), 0)) : "—" }]} />
+      <div className="two-col wide-left">
+        <div className="stack">
+          <FilterBar dirty={dirty} onReset={() => { setQ(""); setUseRange(false); }} advanced={<FilterSelect label="Hiển thị" value={status === "unmatched" ? "" : status} onChange={(v) => setStatus(v || "unmatched")} allLabel="Chưa khớp" options={[{ v: "matched", label: "Đã khớp" }, { v: "ignored", label: "Bỏ qua" }]} />}>
+            <SearchInput value={q} onSearch={setQ} placeholder="Nội dung, mã giao dịch…" label="Tìm giao dịch" />
+            <label className="row" style={{ minHeight: 40 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={useRange} onChange={(e) => setUseRange(e.target.checked)} /> Lọc theo ngày</label>
+            {useRange && <DateRangeFilter value={range} onChange={setRange} presets={["month", "lastMonth", "7d", "custom"]} />}
+            <span style={{ marginLeft: "auto" }}><ExportButton filename={`giao-dich-ngan-hang-${status}`} rows={rows} columns={[{ label: "Ngày", value: (x) => x.txnDate }, { label: "Nội dung", value: (x) => x.description }, { label: "Mã GD", value: (x) => x.bankRef }, { label: "Trạng thái", value: (x) => ST[x.status] ?? x.status }, { label: "Số tiền", value: (x) => x.amount }]} /></span>
+          </FilterBar>
+          {list.loading ? <Spinner /> : (
+            <DataTable rows={rows} rowKey={(x) => x.id} onRowClick={(x) => x.status === "unmatched" && can("debt.write") && setMatch(x)} selectedKey={match?.id} pageSize={50} defaultSort={{ key: "d", dir: "desc" }}
+              emptyState={<EmptyState title={status === "unmatched" && !dirty ? "Không có giao dịch chưa khớp" : "Không có giao dịch phù hợp"} hint={status === "unmatched" && !dirty ? "Nhập sao kê CSV để đối chiếu giao dịch với công nợ." : undefined} action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={() => { setQ(""); setUseRange(false); }}>Xoá lọc</Button>}{status !== "matched" && <Button variant="ghost" onClick={() => setStatus("matched")}>Xem đã khớp</Button>}</div>} />}
+              cols={[
+                { key: "d", label: "Ngày", title: true, sort: (x) => x.txnDate, render: (x) => <b className="nw">{ymd(x.txnDate)}</b> },
+                { key: "n", label: "Nội dung", render: (x) => x.description || "—" },
+                { key: "r", label: "Mã GD", hideMobile: true, hideBelow: 1280, render: (x) => <span className="num small">{x.bankRef}</span> },
+                { key: "s", label: "Trạng thái", render: (x) => <Badge tone={x.status === "matched" ? "ok" : x.status === "unmatched" ? "warn" : undefined}>{ST[x.status] ?? x.status}</Badge> },
+                { key: "a", label: "Số tiền", num: true, sort: (x) => x.amount, render: (x) => <b className="money" style={{ color: x.amount > 0 ? "var(--accent)" : "var(--danger)" }}>{x.amount > 0 ? "+" : ""}{money(x.amount)}</b> },
+              ]} />
+          )}
+        </div>
+        {importCard}
+      </div>
       {match && <MatchSheet txn={match} onClose={() => setMatch(null)} onDone={() => { setMatch(null); list.reload(); }} />}
     </div>
   );

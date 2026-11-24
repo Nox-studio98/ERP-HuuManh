@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ApiError, get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DetailPanel, ExportButton, FilterBar, KpiRow, PageHeader, SearchInput, SplitLayout } from "../../components/list";
 import { toast } from "../../components/toast";
 import { useCan } from "../../store";
 import { navigate } from "../../router";
@@ -17,36 +18,47 @@ export default function Timesheets() {
   const [adj, setAdj] = useState(false);
   const ts = l.data;
   const closed = ts?.status === "closed";
+  const [q, setQ] = useState("");
+  const all: any[] = ts?.employees ?? [];
+  const rows = all.filter((r) => !q.trim() || r.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const sum = (f: (r: any) => number) => all.reduce((a, r) => a + f(r), 0);
   return (
     <div className="stack">
-      <div className="row wrap between">
-        <div className="row">
+      <PageHeader subtitle={<>{periodLabel(period)}. Giờ công = tổng (ra − vào) trừ giờ nghỉ giữa ca; thiếu giờ ra không bị đoán.</>} actions={<>
+        <ExportButton filename={`bang-cong-${period}`} rows={rows} columns={[{ label: "Nhân viên", value: (r: any) => r.name }, { label: "Giờ làm (phút)", value: (r: any) => r.totals.workedMinutes }, { label: "Ngày công", value: (r: any) => r.totals.workDays }, { label: "Đi trễ (phút)", value: (r: any) => r.totals.lateMinutes }, { label: "Về sớm (phút)", value: (r: any) => r.totals.earlyLeaveMinutes }, { label: "Tăng ca (phút)", value: (r: any) => r.totals.overtimeMinutes }, { label: "Phép (ngày)", value: (r: any) => r.totals.paidLeaveX10 / 10 }, { label: "Thiếu công (ngày)", value: (r: any) => r.totals.missingDays }]} />
+        {closed && manage && <Button size="sm" variant="soft" onClick={() => setAdj(true)}>Điều chỉnh công</Button>}
+        {ts && !closed && manage && <Button size="sm" onClick={() => setClosing(true)} data-testid="close-period">Chốt bảng công</Button>}</>} />
+      <FilterBar>
+        <div className="row wrap">
           <Button size="sm" variant="ghost" aria-label="Tháng trước" onClick={() => setPeriod(shiftPeriod(period, -1))}>‹</Button>
           <input type="month" className="input" style={{ width: 210 }} aria-label="Kỳ công" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} />
           <Button size="sm" variant="ghost" aria-label="Tháng sau" onClick={() => setPeriod(shiftPeriod(period, 1))}>›</Button>
           {ts && <Badge tone={closed ? "ok" : "warn"}>{closed ? "Đã chốt" : "Đang mở (tính trực tiếp)"}</Badge>}
         </div>
-        <div className="row">
-          {closed && manage && <Button size="sm" variant="soft" onClick={() => setAdj(true)}>Điều chỉnh công</Button>}
-          {ts && !closed && manage && <Button size="sm" onClick={() => setClosing(true)} data-testid="close-period">Chốt bảng công</Button>}
-        </div>
-      </div>
-      <div className="small muted">{periodLabel(period)}. Giờ công = tổng (ra − vào) trừ giờ nghỉ giữa ca; thiếu giờ ra không bị đoán.</div>
-      {l.loading ? <Spinner /> : !ts || !ts.employees.length ? <EmptyState title="Chưa có dữ liệu công kỳ này" hint="Nhân viên cần có ca hoặc lần chấm công trong tháng." /> : (
-        <DataTable<any> rows={ts.employees} rowKey={(r) => r.employeeId} onRowClick={setEmp} rowClass={(r) => (r.totals.missingDays ? "bad" : "")}
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên nhân viên…" label="Tìm nhân viên" />
+      </FilterBar>
+      {ts && all.length > 0 && <KpiRow items={[
+        { label: "Nhân viên", value: all.length },
+        { label: "Tổng giờ làm", value: hm(sum((r) => r.totals.workedMinutes)), sub: `${sum((r) => r.totals.workDays)} ngày công` },
+        { label: "Tăng ca", value: hm(sum((r) => r.totals.overtimeMinutes)) },
+        { label: "Ngày thiếu công", value: sum((r) => r.totals.missingDays), tone: sum((r) => r.totals.missingDays) ? "danger" : "ok", sub: `Đi trễ ${sum((r) => r.totals.lateMinutes)} phút` },
+      ]} />}
+      {l.loading ? <Spinner /> : !ts || !ts.employees.length ? <EmptyState title="Chưa có dữ liệu công kỳ này" hint="Nhân viên cần có ca hoặc lần chấm công trong tháng." action={<div className="row wrap" style={{ justifyContent: "center" }}><Button variant="soft" onClick={() => setPeriod(shiftPeriod(period, -1))}>Xem tháng trước</Button><Button variant="ghost" onClick={() => navigate("/hr/schedule")}>Xếp lịch ca</Button></div>} /> : (
+        <SplitLayout open={!!emp} panel={emp ? <DayDrill e={emp} onClose={() => setEmp(null)} /> : null}>
+        <DataTable<any> rows={rows} rowKey={(r) => r.employeeId} onRowClick={setEmp} selectedKey={emp?.employeeId} rowClass={(r) => (r.totals.missingDays ? "bad" : "")}
           cols={[
-            { key: "n", label: "Nhân viên", title: true, render: (r) => <b>{r.name}</b> },
-            { key: "w", label: "Giờ làm", right: true, render: (r) => hm(r.totals.workedMinutes) },
-            { key: "d", label: "Ngày công", right: true, render: (r) => r.totals.workDays },
-            { key: "l", label: "Đi trễ (phút)", right: true, render: (r) => r.totals.lateMinutes },
-            { key: "e", label: "Về sớm (phút)", right: true, hideMobile: true, render: (r) => r.totals.earlyLeaveMinutes },
-            { key: "o", label: "Tăng ca", right: true, render: (r) => hm(r.totals.overtimeMinutes) },
-            { key: "p", label: "Phép (ngày)", right: true, hideMobile: true, render: (r) => days10(r.totals.paidLeaveX10) },
-            { key: "m", label: "Thiếu công", right: true, render: (r) => (r.totals.missingDays ? <Badge tone="danger">{r.totals.missingDays} ngày</Badge> : "0") },
+            { key: "n", label: "Nhân viên", title: true, sort: (r) => r.name, render: (r) => <b>{r.name}</b> },
+            { key: "w", label: "Giờ làm", num: true, sort: (r) => r.totals.workedMinutes, render: (r) => hm(r.totals.workedMinutes) },
+            { key: "d", label: "Ngày công", num: true, sort: (r) => r.totals.workDays, render: (r) => r.totals.workDays },
+            { key: "l", label: "Đi trễ (phút)", num: true, sort: (r) => r.totals.lateMinutes, render: (r) => r.totals.lateMinutes },
+            { key: "e", label: "Về sớm (phút)", num: true, hideMobile: true, hideBelow: 1280, sort: (r) => r.totals.earlyLeaveMinutes, render: (r) => r.totals.earlyLeaveMinutes },
+            { key: "o", label: "Tăng ca", num: true, sort: (r) => r.totals.overtimeMinutes, render: (r) => hm(r.totals.overtimeMinutes) },
+            { key: "p", label: "Phép (ngày)", num: true, hideMobile: true, hideBelow: 1280, sort: (r) => r.totals.paidLeaveX10, render: (r) => days10(r.totals.paidLeaveX10) },
+            { key: "m", label: "Thiếu công", num: true, sort: (r) => r.totals.missingDays, render: (r) => (r.totals.missingDays ? <Badge tone="danger">{r.totals.missingDays} ngày</Badge> : "0") },
           ]} />
+        </SplitLayout>
       )}
       {closed && <Adjustments period={period} />}
-      {emp && <DayDrill e={emp} onClose={() => setEmp(null)} />}
       {closing && <Close period={period} onClose={() => setClosing(false)} onDone={() => { setClosing(false); l.reload(); }} />}
       {adj && ts && <AdjForm period={period} emps={ts.employees} onClose={() => setAdj(false)} />}
     </div>
@@ -56,7 +68,7 @@ export default function Timesheets() {
 function DayDrill({ e, onClose }: { e: any; onClose: () => void }) {
   const rows = e.days.filter((d: any) => d.scheduledMinutes || d.workedMinutes || d.missingPunch || d.leaveCode || d.holiday);
   return (
-    <Sheet open wide onClose={onClose} title={`Công của ${e.name}`}>
+    <DetailPanel onClose={onClose} title={`Công của ${e.name}`}>
       <DataTable<any> rows={rows} rowKey={(d) => d.workDate} empty="Không có ngày công" rowClass={(d) => (d.missingPunch ? "bad" : "")}
         cols={[
           { key: "d", label: "Ngày", title: true, render: (d) => <b>{WD_SHORT[wdOf(d.workDate)]} {dm(d.workDate)}</b> },
@@ -68,7 +80,7 @@ function DayDrill({ e, onClose }: { e: any; onClose: () => void }) {
           { key: "n", label: "Ghi chú", render: (d) => <span className="row wrap" style={{ gap: 4 }}>{d.missingPunch && <Badge tone="danger">Thiếu giờ ra</Badge>}{d.leaveCode && <Badge tone="info">Nghỉ {d.leaveCode}</Badge>}{d.holiday && <Badge>Lễ</Badge>}</span> },
         ]} />
       <div className="small muted" style={{ marginTop: 8 }}>Tổng: {hm(e.totals.workedMinutes)} làm · {e.totals.shiftsWorked} ca · {e.totals.missingDays} ngày thiếu công.</div>
-    </Sheet>
+    </DetailPanel>
   );
 }
 

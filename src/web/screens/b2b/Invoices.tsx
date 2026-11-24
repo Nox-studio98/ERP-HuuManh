@@ -1,33 +1,58 @@
 import { useState } from "react";
 import { get, items, post } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, Segmented, Sheet, Spinner, useAsync } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, EmptyState, Spinner, useAsync } from "../../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { downloadHref, money, qtyText } from "../../format";
 import { useCan } from "../../store";
 import { EINVOICE, INVOICE_KIND, Lnk, einvTone, qparam, ymd } from "./kit";
 
 export default function Invoices() {
-  const [f, setF] = useState<"all" | "open" | "overdue">("all");
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [f, setF] = useState<"" | "open" | "overdue">(""), [cust, setCust] = useState(""), [q, setQ] = useState(() => qparam("q") ?? "");
   const [sel, setSel] = useState<number | null>(qparam("id") ? Number(qparam("id")) : null);
-  const l = useAsync(() => get("/invoices", { status: f === "open" ? "open" : undefined, overdue: f === "overdue" ? 1 : undefined, limit: 100 }).then((r) => items<any>(r)), [f]);
-  const rows = l.data ?? [];
-  const out = rows.reduce((s, x) => s + (x.outstanding ?? 0), 0);
+  const customers = useAsync(() => get("/customers", { type: "b2b", limit: 100 }, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]), []);
+  const list = usePagedList<any>("/invoices", { status: f === "open" ? "open" : undefined, overdue: f === "overdue" ? 1 : undefined, customerId: cust, q, from: range.from, to: range.to, limit: 50 }, [f, cust, q, range.from, range.to]);
+  const rows = list.rows, sum = list.extra?.summary;
+  const dirty = !!(f || cust || q);
+  const reset = () => { setF(""); setCust(""); setQ(""); };
+  const close = () => { setSel(null); if (qparam("id")) history.replaceState({}, "", "/invoices"); };
   return (
     <div className="stack">
-      <Segmented value={f} onChange={setF} options={[{ v: "all", label: "Tất cả" }, { v: "open", label: "Còn nợ" }, { v: "overdue", label: "Quá hạn" }]} />
-      <div className="muted">{rows.length} hoá đơn · còn nợ <b className="money">{money(out)}</b></div>
-      {l.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(x) => x.id} onRowClick={(x) => setSel(x.id)} empty="Không có hoá đơn" cols={[
-          { key: "c", label: "Số HĐ", title: true, render: (x) => <b>{x.code}</b> },
-          { key: "k", label: "Khách", render: (x) => x.customerName ?? "—" },
-          { key: "i", label: "Ngày", hideMobile: true, render: (x) => ymd(x.issueDate) },
-          { key: "d", label: "Hạn", render: (x) => <span>{ymd(x.dueDate)}{x.overdueDays > 0 && <Badge tone="warn">trễ {x.overdueDays} ngày</Badge>}</span> },
-          { key: "e", label: "HĐĐT", render: (x) => <Badge tone={einvTone(x.einvoiceStatus)}>{EINVOICE[x.einvoiceStatus] ?? x.einvoiceStatus}</Badge> },
-          { key: "t", label: "Tổng", right: true, render: (x) => <span className="money" style={{ color: x.total < 0 ? "var(--danger)" : undefined }}>{money(x.total)}</span> },
-          { key: "o", label: "Còn nợ", right: true, render: (x) => <span className="money" style={{ color: x.overdueDays > 0 ? "var(--warn)" : undefined }}>{x.kind === "adjustment" ? "—" : money(x.outstanding)}</span> },
-        ]} />
+      <PageHeader subtitle={<>{range.from === range.to ? ymd(range.from) : `${ymd(range.from)} – ${ymd(range.to)}`}{sum ? <> · {sum.count} hoá đơn</> : null}</>}
+        actions={<ExportButton filename={`hoa-don-${range.from}_${range.to}`} rows={rows} columns={[
+          { label: "Số HĐ", value: (x) => x.code }, { label: "Khách", value: (x) => x.customerName }, { label: "Ngày", value: (x) => x.issueDate }, { label: "Hạn", value: (x) => x.dueDate },
+          { label: "HĐĐT", value: (x) => EINVOICE[x.einvoiceStatus] ?? x.einvoiceStatus }, { label: "Số HĐĐT", value: (x) => x.einvoiceNo }, { label: "Tổng", value: (x) => x.total }, { label: "Còn nợ", value: (x) => (x.kind === "adjustment" ? "" : x.outstanding) },
+        ]} />} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[f, cust].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Thanh toán" value={f} onChange={(v) => setF(v as any)} options={[{ v: "open", label: "Còn nợ" }, { v: "overdue", label: "Quá hạn" }]} />
+        <FilterSelect label="Khách hàng" value={cust} onChange={setCust} options={(customers.data ?? []).map((c: any) => ({ v: String(c.id), label: c.name }))} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["month", "lastMonth", "7d", "custom"]} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Số HĐ, khách, số HĐĐT…" label="Tìm hoá đơn" />
+      </FilterBar>
+      <KpiRow items={[
+        { label: "Số hoá đơn", value: sum?.count ?? "—" },
+        { label: "Tổng giá trị", value: sum ? money(sum.total) : "—" },
+        { label: "Còn nợ", value: sum ? money(sum.outstanding) : "—", tone: sum?.outstanding ? "warn" : undefined, onClick: () => setF(f === "open" ? "" : "open") },
+        { label: "Quá hạn", value: sum ? money(sum.overdue) : "—", tone: sum?.overdue ? "danger" : undefined, onClick: () => setF(f === "overdue" ? "" : "overdue") },
+      ]} />
+      {list.loading ? <Spinner /> : (
+        <SplitLayout open={sel != null} panel={sel != null ? <InvoiceDetail id={sel} onClose={close} onChanged={list.reload} /> : null}>
+          <DataTable rows={rows} rowKey={(x) => x.id} onRowClick={(x) => setSel(x.id)} selectedKey={sel} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+            footer={sum ? `Hiển thị ${rows.length}/${sum.count} hoá đơn` : undefined}
+            emptyState={<EmptyState title={dirty ? "Không có hoá đơn nào khớp bộ lọc" : "Chưa có hoá đơn trong khoảng này"} hint="Hoá đơn được tạo khi giao đơn sỉ." action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{range.preset !== "lastMonth" && <Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button>}<Lnk to="/b2b-orders" className="btn ghost">Đơn sỉ</Lnk></div>} />}
+            cols={[
+              { key: "c", label: "Số HĐ", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
+              { key: "k", label: "Khách", sort: (x) => x.customerName, render: (x) => x.customerName ?? "—" },
+              { key: "i", label: "Ngày", hideMobile: true, sort: (x) => x.issueDate, render: (x) => ymd(x.issueDate) },
+              { key: "d", label: "Hạn", sort: (x) => x.dueDate, render: (x) => <span className="nw">{ymd(x.dueDate)}{x.overdueDays > 0 && <> <Badge tone="warn">trễ {x.overdueDays} ngày</Badge></>}</span> },
+              { key: "e", label: "HĐĐT", hideBelow: 1440, render: (x) => <Badge tone={einvTone(x.einvoiceStatus)}>{EINVOICE[x.einvoiceStatus] ?? x.einvoiceStatus}</Badge> },
+              { key: "t", label: "Tổng", num: true, sort: (x) => x.total, render: (x) => <span className="money" style={{ color: x.total < 0 ? "var(--danger)" : undefined }}>{money(x.total)}</span> },
+              { key: "o", label: "Còn nợ", num: true, sort: (x) => (x.kind === "adjustment" ? 0 : x.outstanding), render: (x) => <span className="money" style={{ color: x.overdueDays > 0 ? "var(--warn)" : undefined }}>{x.kind === "adjustment" ? "—" : money(x.outstanding)}</span> },
+            ]} />
+        </SplitLayout>
       )}
-      {sel != null && <InvoiceDetail id={sel} onClose={() => { setSel(null); if (qparam("id")) history.replaceState({}, "", "/invoices"); }} onChanged={l.reload} />}
     </div>
   );
 }
@@ -42,7 +67,7 @@ function InvoiceDetail({ id, onClose, onChanged }: { id: number; onClose: () => 
     try { await post(`/invoices/${id}/einvoice`); toast("Đã xếp hàng phát hành hoá đơn điện tử", "ok"); d.reload(); onChanged(); } catch {} finally { setBusy(false); }
   };
   return (
-    <Sheet open wide onClose={onClose} title={i ? `Hoá đơn ${i.code}` : "Hoá đơn"}>
+    <DetailPanel onClose={onClose} title={i ? `Hoá đơn ${i.code}` : "Hoá đơn"}>
       {d.loading || !i ? <Spinner /> : (
         <div className="stack">
           <div className="row wrap"><Badge>{INVOICE_KIND[i.kind] ?? i.kind}</Badge>{i.status !== "open" && <Badge tone="danger">Đã huỷ</Badge>}<span className="muted small">{i.customerName} · phát hành {ymd(i.issueDate)} · hạn {ymd(i.dueDate)}</span></div>
@@ -85,6 +110,6 @@ function InvoiceDetail({ id, onClose, onChanged }: { id: number; onClose: () => 
           </div>
         </div>
       )}
-    </Sheet>
+    </DetailPanel>
   );
 }
