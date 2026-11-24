@@ -21,6 +21,14 @@ export interface Env {
   SHOP_BASE_URL?: string; // var: origin website (vd https://huumanh.vn) để dựng link tra cứu trong email
   // Đợt 4
   ATTENDANCE_QR_SECRET?: string; // secret HMAC sinh mã QR chấm công xoay vòng (M9-13)
+  // Audit: Workers Rate Limiting (wrangler "ratelimits"). Bỏ qua khi APP_ENV = 'dev' (test/local).
+  RL_AUTH?: RateLimiter; // đăng nhập / đặt lại mật khẩu: chặt
+  RATE_LIMITER?: RateLimiter; // API chung
+}
+
+/** Binding Workers Rate Limiting (rút gọn) */
+export interface RateLimiter {
+  limit(opts: { key: string }): Promise<{ success: boolean }>;
 }
 
 export type Role = "owner" | "manager" | "cashier" | "warehouse" | "accountant" | "online_staff" | "staff";

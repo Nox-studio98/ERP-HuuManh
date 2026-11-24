@@ -7,6 +7,7 @@ import { sysAudit } from "./services/sysaudit";
 import { hrAttendanceAlerts } from "./services/hr-cron";
 import { runDueCompetitorCrawls } from "./services/competitor-cron";
 import { generateRecurringOrders } from "./services/recurring-cron";
+import { cleanupGuardsStmt } from "./services/guard";
 
 /** Chạy một bước cron độc lập: lỗi một bước không chặn bước khác. */
 async function step(name: string, fn: () => Promise<unknown>) {
@@ -29,6 +30,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
   const now = new Date().toISOString();
   if (event.cron === "*/30 * * * *") {
     await step("sessions", () => env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL`).bind(now).run());
+    await step("guards", () => cleanupGuardsStmt(env.DB).run());
     await step("hr_alerts", () => hrAttendanceAlerts(env)); // Đợt 4 — M9-23
     await step("competitor_crawl", () => runDueCompetitorCrawls(env)); // Đợt 4 — M7
     return;
