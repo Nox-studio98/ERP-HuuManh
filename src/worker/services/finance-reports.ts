@@ -13,7 +13,7 @@ export async function voucherCosts(db: D1Database, fromIso: string, toIso: strin
                 SUM(CASE WHEN v.direction='out' THEN v.amount WHEN v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END) AS amount
            FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status='posted' AND v.created_at >= ? AND v.created_at < ?
-            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue')
+            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer')
           GROUP BY v.channel, v.category_id`,
       )
       .bind(fromIso, toIso)
