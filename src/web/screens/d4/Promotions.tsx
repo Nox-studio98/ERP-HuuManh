@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PageHeader } from "../../components/list";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Field, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, when } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -18,7 +19,7 @@ export default function Promotions() {
   const [tab, setTab] = useState<"promo" | "voucher" | "preview" | "loyalty">("promo");
   return (
     <div className="stack d4">
-      <div className="page-head"><h1 style={{ margin: 0 }}>Khuyến mãi & tích điểm</h1></div>
+      <PageHeader subtitle="Khuyến mãi, mã giảm giá và tích điểm khách hàng" />
       <Segmented value={tab} onChange={setTab} options={[{ v: "promo", label: "Khuyến mãi" }, { v: "voucher", label: "Voucher" }, { v: "preview", label: "Tính thử" }, { v: "loyalty", label: "Tích điểm" }]} />
       {tab === "promo" && <PromoList canWrite={can("promotions.write")} />}
       {tab === "voucher" && <Vouchers canWrite={can("promotions.write")} />}

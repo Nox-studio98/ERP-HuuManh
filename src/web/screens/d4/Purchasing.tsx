@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { PageHeader } from "../../components/list";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, EmptyState, Input, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -51,7 +52,7 @@ export default function Purchasing() {
   const low = (sug.data ?? []).filter((r) => r.daysCover != null && r.daysCover < r.leadTimeDays).length;
   return (
     <div className="stack d4">
-      <div className="page-head"><h1 style={{ margin: 0 }}>Gợi ý đặt hàng</h1><Button size="sm" variant="soft" onClick={() => setPick(true)}>NCC theo sản phẩm</Button></div>
+      <PageHeader actions={<Button size="sm" variant="soft" onClick={() => setPick(true)}>NCC theo sản phẩm</Button>} />
       <div className="tiles"><Tile label="Mặt hàng cần đặt" value={needCount} /><Tile label="Sắp hết trước khi hàng về" value={low} tone={low ? "danger" : undefined} /><Tile label="Đang chọn" value={sel.size} /><Tile label="Nhà cung cấp" value={groups.length} /></div>
       <div className="grid2">
         <Select label="Nhà cung cấp" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}><option value="">Tất cả</option>{(sup.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>

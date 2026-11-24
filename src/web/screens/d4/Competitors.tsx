@@ -15,7 +15,6 @@ export default function Competitors() {
   const alerts = useAsync(() => get("/price-alerts", { acked: 0 }, { silent: true }).then((r) => items<any>(r).length).catch(() => 0), [tab]);
   return (
     <div className="stack d4">
-      <div className="page-head"><h1 style={{ margin: 0 }}>Giá đối thủ</h1></div>
       <Segmented wrap value={tab} onChange={setTab} options={[
         { v: "cmp", label: "So sánh giá" }, { v: "match", label: "Ghép sản phẩm" }, { v: "src", label: "Nguồn & thu thập" }, { v: "manual", label: "Nhập giá" },
         { v: "alert", label: `Cảnh báo${alerts.data ? ` (${alerts.data})` : ""}` }, { v: "sug", label: "Gợi ý giá" }]} />

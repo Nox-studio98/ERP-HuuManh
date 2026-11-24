@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 import { fmtDateTime, parseDec } from "../format";
 
 export function Button({ variant = "primary", size, block, loading, className = "", children, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "soft" | "ghost" | "danger"; size?: "sm" | "lg"; block?: boolean; loading?: boolean }) {
@@ -129,25 +129,69 @@ export function Segmented<T extends string>({ value, onChange, options, wrap }: 
   );
 }
 
-export type Col<T> = { key: string; label: string; render: (r: T) => ReactNode; right?: boolean; hideMobile?: boolean; hideDesktop?: boolean; title?: boolean };
-export function DataTable<T>({ cols, rows, rowKey, onRowClick, empty, rowClass }: { cols: Col<T>[]; rows: T[]; rowKey: (r: T) => string | number; onRowClick?: (r: T) => void; empty?: string; rowClass?: (r: T) => string }) {
-  if (!rows.length) return <EmptyState title={empty ?? "Chưa có dữ liệu"} />;
+export type Col<T> = {
+  key: string; label: string; render: (r: T) => ReactNode;
+  /** căn phải (số tiền, số lượng) */ right?: boolean; num?: boolean;
+  hideMobile?: boolean; hideDesktop?: boolean; title?: boolean;
+  /** giá trị dùng để sắp xếp phía client; có thì tiêu đề cột bấm để sắp xếp */ sort?: (r: T) => string | number | null | undefined;
+  /** ẩn cột khi màn hình hẹp hơn (px): 1024 | 1280 | 1440 */ hideBelow?: 1024 | 1280 | 1440;
+};
+export type SortState = { key: string; dir: "asc" | "desc" } | null;
+const cmp = (a: unknown, b: unknown) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), "vi", { numeric: true }));
+
+export function DataTable<T>({ cols, rows, rowKey, onRowClick, empty, rowClass, emptyState, defaultSort, selectedKey, hasMore, loadingMore, onLoadMore, pageSize, footer }: {
+  cols: Col<T>[]; rows: T[]; rowKey: (r: T) => string | number; onRowClick?: (r: T) => void; empty?: string; rowClass?: (r: T) => string;
+  /** thay cho EmptyState mặc định (vd. có nút hành động) */ emptyState?: ReactNode;
+  defaultSort?: SortState;
+  /** dòng đang mở ở panel chi tiết (tô nền) */ selectedKey?: string | number | null;
+  /** phân trang theo con trỏ: có thêm dữ liệu trên máy chủ → hiện nút "Tải thêm" */ hasMore?: boolean; loadingMore?: boolean; onLoadMore?: () => void;
+  /** phân trang phía client: hiện từng đợt N dòng */ pageSize?: number;
+  footer?: ReactNode;
+}) {
+  const [sort, setSort] = useState<SortState>(defaultSort ?? null);
+  const [shown, setShown] = useState(pageSize ?? Infinity);
+  useEffect(() => { setShown(pageSize ?? Infinity); }, [pageSize, rows.length === 0]); // eslint-disable-line
+  const sorted = useMemo(() => {
+    const c = sort ? cols.find((x) => x.key === sort.key) : undefined;
+    if (!c?.sort) return rows;
+    const f = c.sort, m = sort!.dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => m * cmp(f(a), f(b)));
+  }, [rows, sort, cols]);
+  if (!rows.length) return <>{emptyState ?? <EmptyState title={empty ?? "Chưa có dữ liệu"} />}</>;
+  const view = sorted.slice(0, shown);
   const title = cols.find((c) => c.title) ?? cols[0];
+  const toggle = (c: Col<T>) => setSort((s) => (s?.key !== c.key ? { key: c.key, dir: c.right || c.num ? "desc" : "asc" } : s.dir === "asc" ? { key: c.key, dir: "desc" } : s.dir === "desc" && !defaultSort ? null : { key: c.key, dir: "asc" }));
+  const rest = sorted.length - view.length;
+  const more = rest > 0 || hasMore;
+  const cls = (c: Col<T>) => (c.right || c.num ? "right" : "") + (c.num ? " num" : "") + (c.hideBelow ? " hb-" + c.hideBelow : "");
   return (
     <>
-      <table className="dt-table">
-        <thead><tr>{cols.filter((c) => !c.hideDesktop).map((c) => <th key={c.key} className={c.right ? "right" : ""}>{c.label}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={rowKey(r)} className={(onRowClick ? "click " : "") + (rowClass?.(r) ?? "")} onClick={() => onRowClick?.(r)} tabIndex={onRowClick ? 0 : undefined}
-              onKeyDown={(e) => { if (onRowClick && e.key === "Enter") onRowClick(r); }}>
-              {cols.filter((c) => !c.hideDesktop).map((c) => <td key={c.key} className={c.right ? "right" : ""}>{c.render(r)}</td>)}
+      <div className="dt-wrap">
+        <table className="dt-table">
+          <thead>
+            <tr>
+              {cols.filter((c) => !c.hideDesktop).map((c) => {
+                const active = sort?.key === c.key;
+                return (
+                  <th key={c.key} className={cls(c)} aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}>
+                    {c.sort ? <button type="button" className="th-sort" onClick={() => toggle(c)}>{c.label}<span aria-hidden="true" className={"arrow" + (active ? " on" : "")}>{active ? (sort!.dir === "asc" ? "▲" : "▼") : "↕"}</span></button> : c.label}
+                  </th>
+                );
+              })}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {view.map((r) => (
+              <tr key={rowKey(r)} className={(onRowClick ? "click " : "") + (selectedKey != null && selectedKey === rowKey(r) ? "sel " : "") + (rowClass?.(r) ?? "")} onClick={() => onRowClick?.(r)} tabIndex={onRowClick ? 0 : undefined}
+                onKeyDown={(e) => { if (onRowClick && e.key === "Enter") onRowClick(r); }}>
+                {cols.filter((c) => !c.hideDesktop).map((c) => <td key={c.key} className={cls(c)}>{c.render(r)}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="dt-cards">
-        {rows.map((r) => {
+        {view.map((r) => {
           const inner = (
             <>
               <div className="ttl">{title.render(r)}</div>
@@ -159,6 +203,12 @@ export function DataTable<T>({ cols, rows, rowKey, onRowClick, empty, rowClass }
             : <div key={rowKey(r)} className="dt-card" style={rowClass?.(r) === "bad" ? { background: "var(--warn-soft)" } : undefined}>{inner}</div>;
         })}
       </div>
+      {(more || footer) && (
+        <div className="dt-foot">
+          <span className="muted small">{footer}</span>
+          {more && <Button variant="ghost" size="sm" loading={loadingMore} onClick={() => (rest > 0 ? setShown((n) => n + (pageSize ?? 50)) : onLoadMore?.())}>Tải thêm</Button>}
+        </div>
+      )}
     </>
   );
 }

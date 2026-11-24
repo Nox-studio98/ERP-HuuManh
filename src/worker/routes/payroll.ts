@@ -465,7 +465,7 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
 // ---------------------------------------------------------------- phiếu lương cá nhân
 async function myEmployee(c: Ctx) {
   const e = await c.env.DB.prepare(`SELECT id, code, full_name, position FROM employees WHERE user_id = ?`).bind(c.get("user").id).first<any>();
-  if (!e) throw notFound("employee_not_found", "Tài khoản chưa gắn với hồ sơ nhân viên");
+  if (!e) throw notFound("employee_not_linked", "Tài khoản chưa gắn với hồ sơ nhân viên");
   return e;
 }
 payrollRoutes.get("/me/payslips", requirePerm("hr.self"), async (c) => {

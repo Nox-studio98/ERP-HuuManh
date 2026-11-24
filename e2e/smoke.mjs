@@ -271,7 +271,7 @@ try {
   assert(parseVnd(await c.page.locator(".kpi", { hasText: "Dự kiến trong két" }).locator(".v").innerText()) === expectedCash, `UI lấy tiền dự kiến từ lỗi backend = ${vnd(expectedCash)}`);
   await c.page.getByLabel(/Lý do chênh lệch/).fill("Thiếu tiền lẻ");
   await c.page.getByRole("button", { name: "Chốt ca", exact: true }).click();
-  await c.page.getByRole("heading", { name: "Tổng kết cuối ca" }).waitFor();
+  await c.page.getByText("Tổng kết cuối ca", { exact: true }).waitFor();
   const sum = await c.page.locator("main").innerText();
   assert(sum.includes(vnd(expectedCash)) && /Chênh lệch/.test(sum), "tổng kết hiển thị dự kiến + chênh lệch");
   const kRev = parseVnd(await c.page.locator(".kpi", { hasText: "Doanh thu" }).locator(".v").innerText());
@@ -379,7 +379,7 @@ try {
   await go(d.page, "/shift-close");
   await d.page.getByLabel(/Tiền mặt kiểm đếm/).fill(String(total2));
   await d.page.getByRole("button", { name: "Chốt ca", exact: true }).click();
-  await d.page.getByRole("heading", { name: "Tổng kết cuối ca" }).waitFor();
+  await d.page.getByText("Tổng kết cuối ca", { exact: true }).waitFor();
   ok("chốt ca không chênh lệch (không cần lý do) thành công");
 
   // ============ 11. Hộp duyệt, Kho cảnh báo, truy vết lô ============

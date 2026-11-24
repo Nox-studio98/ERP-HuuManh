@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageHeader } from "../components/list";
 import { ApiError, get, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, MoneyInput, Spinner, TextArea, useAsync } from "../components/ui";
 import { CHANNELS, METHODS, fmtTime, money, qtyText } from "../format";
@@ -59,7 +60,7 @@ function Summary({ r }: { r: any }) {
   const diff = sh.diffCash;
   return (
     <div className="stack">
-      <div className="page-head"><h1>Tổng kết cuối ca</h1><Button onClick={() => navigate("/pos")}>Xong</Button></div>
+      <PageHeader subtitle="Tổng kết cuối ca" actions={<Button onClick={() => navigate("/pos")}>Xong</Button>} />
       <div className="kpis">
         <div className="kpi"><div className="l">Dự kiến</div><div className="v">{money(sh.expectedCash)}</div></div>
         <div className="kpi"><div className="l">Kiểm đếm</div><div className="v">{money(sh.countedCash)}</div></div>
