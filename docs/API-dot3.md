@@ -63,7 +63,9 @@ Base `/api`. Đơn vị giá hiển thị = đơn vị chính sản phẩm (`bas
 | POST | /online-orders/:id/deliver | orders.online.manage | shipping → completed; COD → payments method cod vào quỹ `cod_clearing` (đối soát bằng settlements Đợt 2); notify |
 | POST | /online-orders/:id/fail | orders.online.manage | EC-07 shipping → delivery_failed `{reason}` |
 | POST | /online-orders/:id/redeliver | orders.online.manage | delivery_failed → confirmed `{slotDate, slotId}` (hàng vẫn ở shipper/kho: ghi chú) |
-| POST | /online-orders/:id/return-to-stock | orders.online.manage | delivery_failed|completed → returned `{lines:[{orderLineId, qty, unit, restock, reason}]}` cộng lại đúng lô (kiểm độ tươi: restock=false → hao hụt); hoàn tiền nếu đã trả |
+| POST | /online-orders/:id/return-to-stock | orders.online.manage | `{lines:[{orderLineId, qty, unit, restock, reason}]}`. **delivery_failed** → `returned` (chưa có doanh thu) cộng lại đúng lô, restock=false → hao hụt, hoàn tiền. **completed** (A-05, đợt fix 1b) → đơn gốc GIỮ `completed`; tạo phiếu trả `orders.kind='return'` (`original_order_id`, ngày hôm nay, trừ doanh thu/giá vốn ở ngày trả qua `returnsTotal`), nhập lại đúng lô (restock) hoặc tính hao hụt (không restock), hoàn tiền vào `payments` âm của đơn gốc, đảo điểm tích/điểm đổi/voucher đúng một lần theo luỹ kế. Hỗ trợ trả từng phần (`lines` rỗng = trả hết phần còn lại); trả hết mọi dòng → phiếu cuối gồm cả phí giao. Response `result:{refund, returnOrder, returnTotal, fullyReturned}`; 409 `return_exceeds_sold`/`nothing_to_return`; kỳ hôm nay khoá → 423 |
+| POST | /online-orders/:id/refund-diff | finance.write | A-02: đơn trả trước cân nhẹ hơn (`diffStatus='pending'`, `diffAmount<0`) → hoàn phần dư (payments âm cùng phương thức/quỹ gốc), `diffStatus='settled'` |
+| POST | /online-orders/:id/waive-diff | finance.approve | A-02: miễn khoản chênh lệch `{reason}` (bắt buộc, audit `online_order.diff_waive`), `diffStatus='waived'` |
 | POST | /online-orders/:id/cancel | orders.online.manage | `{reason}` EC-06 nhả giữ; nếu đã soạn: hàng về kho đúng lô; phí giao theo `online.cancel_fee_policy` |
 | POST | /online-orders/:id/mark-paid | finance.write | EC-05 xác nhận tiền về thủ công (kèm bankTxnId) → `payments` + intent succeeded + awaiting_payment→new |
 | — | khớp sao kê | — | mở rộng nhập sao kê (Đợt 2) để tự khớp nội dung chứa mã đơn `DH...` với payment_intents pending đúng số tiền |
@@ -78,3 +80,10 @@ Base `/api`. Đơn vị giá hiển thị = đơn vị chính sản phẩm (`bas
 **Thông báo (jobs.ts)**: `notify.order_status` (email + push cho khách theo CUSTOMER_LABEL; nội dung không chứa dữ liệu nhạy cảm ngoài mã đơn và link tra cứu), `notify.staff_new_order` (push cho NV có orders.online.manage), `notify.email` (xác minh/đặt lại mật khẩu). Email provider theo `notify.email_provider`: `fake` (ghi audit) | `cloudflare` (binding `EMAIL` send_email). Web Push: VAPID (`VAPID_PUBLIC_KEY` var, `VAPID_PRIVATE_KEY` secret, JWK), mã hoá aes128gcm (RFC 8291) bằng WebCrypto; endpoint trả 404/410 → xoá subscription.
 
 **Cron** (thêm vào `0 1 * * *` hoặc `*/5`): huỷ đơn `awaiting_payment` quá `online.hold_minutes_transfer` (nhả tồn, notify) — `*/5`.
+
+
+## Đợt fix 1b — chênh lệch cân đơn trả trước (A-02) và trả hàng sau giao (A-05)
+
+- `POST /online-orders/:id/pack`: với đơn `transfer`/`gateway` đã `paid`, `diffAmount = total_mới − paid_total`; `diffStatus` = `pending` (≠ 0) hoặc `none`. Response thêm `diffAmount`. Dương = **"Thu thêm"** (cho phép ship; `deliver` ghi phiếu `payments` method `cod` quỹ `cod_clearing` đúng phần chênh, `paid_total += chênh`, `diffStatus='settled'`); âm = **"Hoàn lại"** (`deliver` bị chặn 409 `diff_unsettled` tới khi `refund-diff` hoặc `waive-diff`).
+- `GET /online-orders` (item) thêm `diffAmount` (chỉ khi pending), `diffStatus`. `GET /online-orders/:id` thêm `diffAmount`, `diffStatus`, `diffNote`, `diffKind` (`collect`|`refund`|null), `returns[]`, `returnedTotal`, `fullyReturned`.
+- Shop `GET /api/me/orders/:code` / `GET /api/orders/track/:token`: thêm `diffAmount`, `diffKind` (`collect`|`refund`), `returnedTotal`.

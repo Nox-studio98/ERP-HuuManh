@@ -5,6 +5,7 @@ import { requirePerm, can } from "../lib/rbac";
 import { AppError, notFound } from "../lib/errors";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { salesSummary } from "../services/salesreport";
+import { pnlAdjustments } from "../services/finance-reports";
 
 export const reportRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -58,7 +59,7 @@ async function pnl(c: Ctx) {
                 SUM(CASE WHEN v.direction='out' THEN v.amount WHEN v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END) AS amount
            FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status='posted' AND v.created_at >= ? AND v.created_at < ?
-            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer')
+            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
           GROUP BY line`,
       )
       .bind(...p)
@@ -75,6 +76,17 @@ async function pnl(c: Ctx) {
   for (const e of exp) expenses[e.line] = (expenses[e.line] ?? 0) + (e.amount ?? 0);
   const shrink = Math.round(waste!.v) + cost!.discarded;
   if (shrink) expenses.shrinkage = (expenses.shrinkage ?? 0) + shrink;
+  // A-04/B-06/B-13: xoá nợ, chiết khấu thanh toán, cọc không hoàn, chênh lệch kiểm kê, chênh lệch đối soát thừa
+  const adj = await pnlAdjustments(db, fromIso, toIso);
+  if (adj.badDebt) expenses.badDebt = (expenses.badDebt ?? 0) + adj.badDebt;
+  if (adj.stockCount) expenses.stockCount = (expenses.stockCount ?? 0) + adj.stockCount;
+  const otherIncome = {
+    forfeitedDeposits: adj.forfeitedDeposits,
+    payableDiscounts: adj.payableIncome,
+    settlementSurplus: adj.voucherIncome,
+    total: adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome,
+  };
+  const revenueDeductions = { paymentDiscount: adj.paymentDiscount };
   const revenue = rev!.sales - rev!.returns;
   const cogs = cost!.cogs;
   const grossProfit = revenue - cogs;
@@ -111,11 +123,14 @@ async function pnl(c: Ctx) {
     grossProfit,
     expenses,
     totalExpenses,
-    netProfit: grossProfit - totalExpenses,
+    revenueDeductions,
+    otherIncome,
+    netProfit: grossProfit - revenueDeductions.paymentDiscount - totalExpenses + otherIncome.total,
     ...(breakdown ? { groupBy, breakdown } : {}),
   };
 }
 
+const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê" };
 reportRoutes.get("/reports/pnl", requirePerm("reports.view"), async (c) => c.json(await pnl(c)));
 
 async function inventoryReport(c: Ctx) {
@@ -194,7 +209,9 @@ reportRoutes.get("/reports/export/:file", requirePerm("reports.view"), async (c)
     const r = await pnl(c);
     csv = toCsv(["Chỉ tiêu", "Số tiền (VND)"], [
       ["Doanh thu bán", r.salesTotal], ["Trả hàng", r.returnsTotal], ["Doanh thu thuần", r.revenue], ["Giá vốn", r.cogs], ["Lãi gộp", r.grossProfit],
-      ...Object.entries(r.expenses).map(([k, v]) => [`Chi phí - ${k}`, v]), ["Tổng chi phí", r.totalExpenses], ["Lợi nhuận", r.netProfit],
+      ["Chiết khấu thanh toán", r.revenueDeductions.paymentDiscount],
+      ...Object.entries(r.expenses).map(([k, v]) => [`Chi phí - ${EXP_NAMES[k] ?? k}`, v]), ["Tổng chi phí", r.totalExpenses],
+      ["Cọc không hoàn", r.otherIncome.forfeitedDeposits], ["Chiết khấu/xoá nợ nhà cung cấp", r.otherIncome.payableDiscounts], ["Chênh lệch đối soát thừa", r.otherIncome.settlementSurplus], ["Lợi nhuận", r.netProfit],
     ]);
   } else if (name === "inventory") {
     const r = await inventoryReport(c);

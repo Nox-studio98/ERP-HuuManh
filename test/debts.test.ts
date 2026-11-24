@@ -201,10 +201,13 @@ describe("settlements", () => {
     const ok = await api("accountant", "POST", `${V}/settlements`, { ...body, diffReason: "Sàn giữ lại 10k phí hoàn" });
     expect(ok.status).toBe(201);
     expect(ok.body).toMatchObject({ expectedAmount: 1_000_000, receivedAmount: 940_000, feeAmount: 50_000, diffAmount: -10_000, status: "draft" });
+    await db().prepare(`INSERT OR IGNORE INTO funds(id, store_id, code, name, type) VALUES (95,1,'SAN-T','Chờ đối soát sàn','marketplace_clearing')`).run();
     const c = await api("accountant", "POST", `${V}/settlements/${ok.body.id}/confirm`);
     expect(c.status).toBe(200);
     expect(c.body.status).toBe("confirmed");
-    expect(c.body.vouchers.map((v: any) => [v.direction, v.amount]).sort()).toEqual([["in", 940_000], ["out", 50_000]]);
+    // A-03/B-13: quỹ thật chỉ nhận 940.000 (không có phiếu phí); quỹ chờ ra 1.000.000 gồm chuyển 940.000 + phí 50.000 + thiếu 10.000
+    expect(c.body.vouchers.filter((v: any) => v.fundId === 2).map((v: any) => [v.direction, v.amount])).toEqual([["in", 940_000]]);
+    expect(c.body.vouchers.filter((v: any) => v.fundId === 95).reduce((s: number, v: any) => s + (v.direction === "out" ? v.amount : -v.amount), 0)).toBe(1_000_000);
     expect((await api("accountant", "POST", `${V}/settlements/${ok.body.id}/confirm`)).status).toBe(409);
     expect((await api("accountant", "POST", `${V}/settlements`, { ...body, diffReason: "x" })).status).toBe(409);
     const zero = await api("accountant", "POST", `${V}/settlements`, { ...body, externalRef: "DOISOAT-02", lines: [{ externalOrderId: "B1", expectedAmount: 100_000, receivedAmount: 95_000, feeAmount: 5_000 }] });

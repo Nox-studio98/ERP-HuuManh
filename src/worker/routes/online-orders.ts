@@ -11,7 +11,7 @@ import { CUSTOMER_LABEL, type OnlineStatus } from "../services/online-orders";
 import { bankFundId, markOrderPaid } from "../services/online-payments";
 import {
   cancelOrder, canCost, confirmOrder, createSocialOrder, deliverOrder, failOrder, loadOpsOrder, packOrder, prepareOrder,
-  redeliverOrder, refundOrder, returnToStock, shipOrder,
+  redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
 } from "../services/online-ops";
 import { b64uDecode, pushConfigured } from "../services/webpush";
 
@@ -64,7 +64,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     await c.env.DB
       .prepare(
         `SELECT o.id, o.code, o.channel, o.status, o.payment_method, o.payment_status, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
-                o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder,
+                o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status,
                 EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight
            FROM orders o LEFT JOIN delivery_slots s ON s.id = o.slot_id LEFT JOIN delivery_zones z ON z.id = o.zone_id
           WHERE ${conds.join(" AND ")} ORDER BY o.id DESC LIMIT ?`,
@@ -94,6 +94,8 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     createdAt: r.created_at,
     isPreorder: !!r.is_preorder,
     needsRefund: ["cancelled", "returned"].includes(r.status) && r.payment_status === "paid",
+    diffAmount: r.diff_status === "pending" ? r.diff_amount : 0,
+    diffStatus: r.diff_status,
   }));
   const cnt = (
     await c.env.DB
@@ -138,6 +140,8 @@ async function orderDetail(c: Ctx, oid: number) {
   const events = (await db.prepare(`SELECT * FROM order_events WHERE order_id = ? ORDER BY id`).bind(oid).all<any>()).results;
   const intents = (await db.prepare(`SELECT id, provider, amount, status, transfer_content, provider_ref, expires_at, created_at, completed_at FROM payment_intents WHERE order_id = ? ORDER BY id`).bind(oid).all<any>()).results;
   const payments = (await db.prepare(`SELECT id, method, amount, fund_id, ref, status, created_at FROM payments WHERE order_id = ? ORDER BY id`).bind(oid).all<any>()).results;
+  const returns = (await db.prepare(`SELECT id, code, total, cost_total, created_at FROM orders WHERE original_order_id = ? AND kind = 'return' AND status = 'completed' ORDER BY id`).bind(oid).all<any>()).results;
+  const returnedTotal = returns.reduce((s, r) => s + r.total, 0);
   const slot = o.slot_id ? await db.prepare(`SELECT id, label, start_time, end_time FROM delivery_slots WHERE id = ?`).bind(o.slot_id).first<any>() : null;
   const zone = o.zone_id ? await db.prepare(`SELECT id, name FROM delivery_zones WHERE id = ?`).bind(o.zone_id).first<any>() : null;
   return {
@@ -163,6 +167,15 @@ async function orderDetail(c: Ctx, oid: number) {
     paidTotal: o.paid_total,
     estimatedTotal: o.estimated_total,
     weightAdjustStatus: o.weight_adjust_status,
+    // A-02: chênh lệch cân đơn trả trước — dương "Thu thêm" (thu khi giao), âm "Hoàn lại" (phải hoàn / miễn mới hoàn tất được)
+    diffAmount: o.diff_amount,
+    diffStatus: o.diff_status,
+    diffNote: o.diff_note,
+    diffKind: o.diff_status === "none" || !o.diff_amount ? null : o.diff_amount > 0 ? "collect" : "refund",
+    // A-05: phiếu trả hàng sau giao (đơn gốc vẫn 'completed')
+    returns: returns.map((r) => ({ id: r.id, code: r.code, total: r.total, createdAt: r.created_at })),
+    returnedTotal,
+    fullyReturned: o.status === "completed" && returnedTotal > 0 && returnedTotal >= o.total,
     isPreorder: !!o.is_preorder,
     carrier: o.carrier,
     carrierTrackingNo: o.carrier_tracking_no,
@@ -228,7 +241,7 @@ onlineOrderRoutes.post("/online-orders", requirePerm("orders.online.manage"), as
 
 // ====================================================================== chuyển trạng thái
 
-const act = (path: string, perm: "orders.online.manage" | "finance.write", fn: (c: Ctx, oid: number) => Promise<unknown>) =>
+const act = (path: string, perm: "orders.online.manage" | "finance.write" | "finance.approve", fn: (c: Ctx, oid: number) => Promise<unknown>) =>
   onlineOrderRoutes.post(`/online-orders/:id/${path}`, requirePerm(perm), async (c) => {
     const oid = id(c);
     const extra = await fn(c, oid);
@@ -262,6 +275,9 @@ act("return-to-stock", "orders.online.manage", async (c, oid) =>
   }))));
 act("cancel", "orders.online.manage", async (c, oid) => cancelOrder(c, oid, (await parseBody(c, z.object({ reason: z.string().trim().min(3).max(300) }))).reason));
 act("refund", "finance.write", (c, oid) => refundOrder(c, oid));
+// A-02: chênh lệch cân của đơn trả trước — hoàn phần dư (finance.write) hoặc miễn (finance.approve, bắt buộc lý do, ghi audit)
+act("refund-diff", "finance.write", (c, oid) => refundDiff(c, oid));
+act("waive-diff", "finance.approve", async (c, oid) => waiveDiff(c, oid, (await parseBody(c, z.object({ reason: z.string().trim().min(3).max(300) }))).reason));
 
 act("mark-paid", "finance.write", async (c, oid) => {
   const b = await parseBody(c, z.object({

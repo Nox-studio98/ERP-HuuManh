@@ -7,7 +7,8 @@ import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDate } from "../lib/time";
-import { addDays, BILL_OUTSTANDING_SQL, INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { addDays, BILL_OUTSTANDING_SQL, customerCreditSql, customerInvoiceCredit, INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { assertPeriodOpen, periodOf } from "../services/period";
 import { enqueueJobStmt, kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { matchOnlineOrder } from "../services/online-payments";
@@ -63,9 +64,9 @@ async function unappliedMap(db: D1Database, side: "receivable" | "payable") {
   const pay = await db
     .prepare(
       `SELECT p.partner_id pid, SUM(p.amount - COALESCE((SELECT SUM(x.amount) FROM debt_allocations x WHERE x.payment_id = p.id), 0)) u
-         FROM debt_payments p WHERE p.partner_type = ? AND p.status = 'posted' GROUP BY p.partner_id`,
+         FROM debt_payments p WHERE p.partner_type = ? AND p.direction = ? AND p.status = 'posted' GROUP BY p.partner_id`,
     )
-    .bind(pt)
+    .bind(pt, side === "receivable" ? "in" : "out")
     .all<{ pid: number; u: number }>();
   for (const r of pay.results) m.set(r.pid, (m.get(r.pid) ?? 0) + r.u);
   if (side === "receivable") {
@@ -80,6 +81,28 @@ async function unappliedMap(db: D1Database, side: "receivable" | "payable") {
   return m;
 }
 
+/** Số dư có của khách từ hoá đơn (trả hàng sau thanh toán, A-01) theo khách: Σ(−còn nợ âm) − đã cấn − đã hoàn. */
+async function creditMap(db: D1Database) {
+  const m = new Map<number, number>();
+  const neg = await db
+    .prepare(
+      `SELECT pid, SUM(-os) AS c FROM (SELECT i.customer_id AS pid, ${INVOICE_OUTSTANDING_SQL} AS os FROM invoices i
+          WHERE i.status = 'open' AND i.kind IN ('sale','replacement') AND i.customer_id IS NOT NULL) WHERE os < 0 GROUP BY pid`,
+    )
+    .all<{ pid: number; c: number }>();
+  for (const r of neg.results) m.set(r.pid, r.c);
+  const used = await db
+    .prepare(`SELECT partner_id pid, SUM(amount) c FROM debt_adjustments WHERE partner_type = 'customer' AND type = 'return_credit' AND status = 'posted' GROUP BY partner_id`)
+    .all<{ pid: number; c: number }>();
+  for (const r of used.results) m.set(r.pid, (m.get(r.pid) ?? 0) - r.c);
+  const out = await db
+    .prepare(`SELECT partner_id pid, SUM(amount) c FROM debt_payments WHERE partner_type = 'customer' AND direction = 'out' AND status = 'posted' GROUP BY partner_id`)
+    .all<{ pid: number; c: number }>();
+  for (const r of out.results) m.set(r.pid, (m.get(r.pid) ?? 0) - r.c);
+  for (const [k, v] of m) if (v <= 0) m.delete(k);
+  return m;
+}
+
 async function summarize(c: Ctx, side: "receivable" | "payable") {
   const db = c.env.DB;
   const today = vnDate();
@@ -88,18 +111,20 @@ async function summarize(c: Ctx, side: "receivable" | "payable") {
   const overdueOnly = c.req.query("overdueOnly") === "1" || c.req.query("overdueOnly") === "true";
   const docs = await allOpenDocs(db, side);
   const un = await unappliedMap(db, side);
+  const cr = side === "receivable" ? await creditMap(db) : new Map<number, number>();
   const partners = (
     await db
       .prepare(side === "receivable" ? `SELECT id, code, name, credit_limit FROM customers` : `SELECT id, code, name FROM suppliers`)
       .all<{ id: number; code: string; name: string; credit_limit?: number }>()
   ).results;
   const items: any[] = [];
-  const totals = { outstanding: 0, unapplied: 0, balance: 0, overdueAmount: 0 };
+  const totals = { outstanding: 0, unapplied: 0, invoiceCredit: 0, credit: 0, balance: 0, overdueAmount: 0 };
   for (const p of partners) {
     if (q && !`${p.name} ${p.code}`.toLowerCase().includes(q)) continue;
     const mine = docs.filter((d) => d.pid === p.id);
     const unapplied = un.get(p.id) ?? 0;
-    if (!mine.length && !unapplied) continue;
+    const invoiceCredit = cr.get(p.id) ?? 0;
+    if (!mine.length && !unapplied && !invoiceCredit) continue;
     const buckets = emptyBuckets();
     let outstanding = 0, overdueAmount = 0, oldest = 0;
     for (const d of mine) {
@@ -109,8 +134,11 @@ async function summarize(c: Ctx, side: "receivable" | "payable") {
       if (od > 0) { overdueAmount += d.os; oldest = Math.max(oldest, od); }
     }
     if (overdueOnly && overdueAmount <= 0) continue;
-    const base: any = { outstanding, unapplied, balance: outstanding - unapplied, overdueAmount, oldestOverdueDays: oldest, buckets };
-    totals.outstanding += outstanding; totals.unapplied += unapplied; totals.balance += base.balance; totals.overdueAmount += overdueAmount;
+    // balance âm = "Khách dư có" (tiền đã trả trước chưa gạch + số dư có do trả hàng sau thanh toán); aging chỉ tính phần còn nợ dương
+    const balance = outstanding - unapplied - invoiceCredit;
+    const base: any = { outstanding, unapplied, invoiceCredit, credit: Math.max(0, -balance), balance, overdueAmount, oldestOverdueDays: oldest, buckets };
+    totals.outstanding += outstanding; totals.unapplied += unapplied; totals.invoiceCredit += invoiceCredit; totals.balance += base.balance; totals.overdueAmount += overdueAmount;
+    totals.credit += base.credit;
     if (side === "receivable") items.push({ customerId: p.id, customerCode: p.code, customerName: p.name, ...base, creditLimit: p.credit_limit ?? 0 });
     else
       items.push({
@@ -186,7 +214,7 @@ debtRoutes.get("/bills/:id", requirePerm("debt.view"), async (c) => {
 
 debtRoutes.post("/bills/:id/finalize", requirePerm("debt.write"), async (c) => {
   const id = Number(c.req.param("id"));
-  const body = await parseBody(c, z.object({ supplierRef: z.string().trim().min(1).max(100), total: z.number().int().positive().optional(), reason: z.string().trim().max(300).optional() }));
+  const body = await parseBody(c, z.object({ supplierRef: z.string().trim().min(1).max(100), total: z.number().int().positive().optional(), vatAmount: z.number().int().min(0).max(10_000_000_000).optional(), reason: z.string().trim().max(300).optional() }));
   const db = c.env.DB;
   const b = await db.prepare(`SELECT * FROM supplier_bills WHERE id = ?`).bind(id).first<any>();
   if (!b) throw notFound("bill_not_found", "Không tìm thấy hoá đơn mua");
@@ -197,11 +225,17 @@ debtRoutes.post("/bills/:id/finalize", requirePerm("debt.write"), async (c) => {
   const paid = await db.prepare(`SELECT COALESCE(SUM(x.amount),0) s FROM debt_allocations x LEFT JOIN debt_payments p ON p.id=x.payment_id LEFT JOIN debt_adjustments d ON d.id=x.adjustment_id
                                   WHERE x.bill_id = ? AND (p.status='posted' OR d.status='posted')`).bind(id).first<{ s: number }>();
   if (newTotal < (paid?.s ?? 0)) throw new AppError(422, "total_below_paid", "Tổng chốt nhỏ hơn số đã thanh toán");
+  const newVat = body.vatAmount ?? b.vat_amount ?? 0; // B-07: VAT đầu vào, không vượt tổng hoá đơn
+  if (newVat > newTotal) throw new AppError(422, "vat_exceeds_total", "VAT đầu vào không được lớn hơn tổng hoá đơn", { vatAmount: newVat, total: newTotal });
+  // B-08: chốt hoá đơn mua đổi AP/VAT của kỳ phát hành → kỳ đã khoá thì không được chốt (và hôm nay cũng không được ghi vào kỳ khoá)
+  await assertPeriodOpen(db, b.issue_date, "chốt hoá đơn mua");
+  await assertPeriodOpen(db, new Date(), "chốt hoá đơn mua");
   const r = await db.batch([
-    db.prepare(`UPDATE supplier_bills SET supplier_ref = ?, total = ?, is_provisional = 0 WHERE id = ? AND is_provisional = 1`).bind(body.supplierRef, newTotal, id),
-    auditStmt(c, { action: "bill.finalize", entity: "supplier_bill", entityId: id, before: { total: b.total, supplierRef: b.supplier_ref, provisional: true }, after: { total: newTotal, supplierRef: body.supplierRef, provisional: false }, reason: body.reason }),
+    assertStmt(db, "bill.finalize", `SELECT is_provisional = 1 AND status = 'open' FROM supplier_bills WHERE id = ?`, [id]),
+    db.prepare(`UPDATE supplier_bills SET supplier_ref = ?, total = ?, vat_amount = ?, is_provisional = 0 WHERE id = ? AND is_provisional = 1`).bind(body.supplierRef, newTotal, newVat, id),
+    auditStmt(c, { action: "bill.finalize", entity: "supplier_bill", entityId: id, before: { total: b.total, vat: b.vat_amount ?? 0, supplierRef: b.supplier_ref, provisional: true }, after: { total: newTotal, vat: newVat, supplierRef: body.supplierRef, provisional: false }, reason: body.reason }),
   ]);
-  if (!r[0].meta.changes) throw conflict("not_provisional", "Hoá đơn đã được chốt");
+  if (!r[1].meta.changes) throw conflict("not_provisional", "Hoá đơn đã được chốt");
   return c.json(camel(await db.prepare(`SELECT * FROM supplier_bills WHERE id = ?`).bind(id).first()));
 });
 
@@ -232,7 +266,10 @@ debtRoutes.post("/debts/payments/:id/allocate", requirePerm("debt.write"), async
   const db = c.env.DB;
   const p = await db.prepare(`SELECT * FROM debt_payments WHERE id = ?`).bind(id).first<any>();
   if (!p) throw notFound("payment_not_found", "Không tìm thấy phiếu thu/chi công nợ");
-  if (p.status !== "posted") throw conflict("payment_reversed", "Phiếu đã bị đảo");
+  if (p.status !== "posted") throw conflict("payment_reversed", p.status === "pending_approval" ? "Phiếu đang chờ duyệt, chưa gạch nợ được" : "Phiếu đã bị đảo / từ chối");
+  if (p.direction === "out" && p.partner_type === "customer") throw conflict("refund_not_allocatable", "Phiếu hoàn tiền dư có cho khách không gạch vào hoá đơn");
+  await assertPeriodOpen(db, p.paid_at, "gạch nợ");
+  await assertPeriodOpen(db, new Date(), "gạch nợ");
   const cur = await paymentResult(db, id);
   if (cur.unapplied <= 0) throw conflict("nothing_to_allocate", "Phiếu đã gạch hết");
   const docs = await openDocs(db, p.partner_type, p.partner_id, true);
@@ -287,7 +324,7 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
   if (q.partnerType === "customer" || q.partnerType === "supplier") { conds.push(`p.partner_type = ?`); params.push(q.partnerType); }
   if (q.partnerId) { conds.push(`p.partner_id = ?`); params.push(Number(q.partnerId)); }
   if (q.direction === "in" || q.direction === "out") { conds.push(`p.direction = ?`); params.push(q.direction); }
-  if (q.status === "posted" || q.status === "reversed") { conds.push(`p.status = ?`); params.push(q.status); }
+  if (q.status === "posted" || q.status === "reversed" || q.status === "pending_approval" || q.status === "rejected") { conds.push(`p.status = ?`); params.push(q.status); }
   if (q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from)) { conds.push(`substr(p.paid_at,1,10) >= ?`); params.push(q.from); }
   if (q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to)) { conds.push(`substr(p.paid_at,1,10) <= ?`); params.push(q.to); }
   if (q.cursor) { conds.push(`p.id < ?`); params.push(Number(q.cursor)); }
@@ -302,7 +339,7 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
 
 // ---------------------------------------------------------------- điều chỉnh: chiết khấu, xoá nợ, cấn trừ
 const adjSchema = z.object({
-  type: z.enum(["discount", "write_off", "offset"]),
+  type: z.enum(["discount", "write_off", "offset", "return_credit"]),
   partnerType: partnerTypeEnum,
   partnerId: z.number().int().positive(),
   amount: money,
@@ -326,6 +363,29 @@ debtRoutes.post("/debts/adjustments", requirePerm("debt.write"), async (c) => {
   const db = c.env.DB;
   const user = c.get("user");
   const partner = await partnerInfo(db, body.partnerType, body.partnerId);
+  // B-08: điều chỉnh công nợ không tạo phiếu quỹ nên trigger khoá sổ không chặn → kiểm ở đây (bút toán ghi vào kỳ hiện tại)
+  await assertPeriodOpen(db, new Date(), "điều chỉnh công nợ");
+
+  if (body.type === "return_credit") {
+    // A-01: cấn số dư có của khách (do trả hàng sau thanh toán) vào hoá đơn còn nợ khác của chính khách
+    if (body.partnerType !== "customer") throw new AppError(422, "validation_error", "Chỉ cấn số dư có cho khách hàng");
+    const credit = await customerInvoiceCredit(db, body.partnerId);
+    if (body.amount > credit) throw new AppError(422, "credit_exceeds_balance", `Số cấn vượt số dư có của khách (${credit}đ)`, { credit });
+    const docs = await adjDocs(db, "customer", body.partnerId, body.invoiceId, undefined);
+    const total = docs.reduce((s, d) => s + d.outstanding, 0);
+    if (body.amount > total) throw new AppError(422, "adjustment_exceeds_outstanding", `Số cấn vượt số còn nợ của hoá đơn (${total}đ)`, { outstanding: total });
+    const plan = planOldestFirst(docs, body.amount);
+    const code = await nextCode(db, "DCN");
+    const q = customerCreditSql(body.partnerId);
+    await db.batch([
+      assertStmt(db, "debt.credit_apply", `SELECT ${q.sql} >= ?`, [...q.binds, body.amount]),
+      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?, 'return_credit', 'customer', ?, ?, 'posted', ?, ?)`).bind(code, body.partnerId, body.amount, body.reason, user.id),
+      ...plan.allocs.map((a) => allocStmt(db, a.doc, a.amount, { adjustmentCode: code })),
+      auditStmt(c, { action: "debt.return_credit", entity: "debt_adjustment", entityId: code, after: { partnerId: body.partnerId, amount: body.amount, allocations: plan.allocs.map((a) => ({ invoice: a.doc.id, amount: a.amount })) }, reason: body.reason }),
+    ]);
+    const adj = await db.prepare(`SELECT * FROM debt_adjustments WHERE code = ?`).bind(code).first<any>();
+    return c.json({ adjustment: camel(adj), status: adj.status, approvalId: null }, 201);
+  }
 
   if (body.type === "offset") {
     // M5-09: cấn trừ khách ↔ NCC cùng đối tác
@@ -400,6 +460,7 @@ registerApprovalHandler("debt_adjustment.post", {
     const adj = await db.prepare(`SELECT * FROM debt_adjustments WHERE id = ?`).bind(adjId).first<any>();
     if (!adj) throw notFound("adjustment_not_found", "Không tìm thấy điều chỉnh");
     if (adj.status !== "pending_approval") throw conflict("not_pending", "Điều chỉnh không còn chờ duyệt");
+    await assertPeriodOpen(db, new Date(), "điều chỉnh công nợ");
     let payload: any = {};
     try { payload = a.payload_json ? JSON.parse(a.payload_json) : {}; } catch { /* bỏ qua */ }
     const docs = await adjDocs(db, adj.partner_type, adj.partner_id, payload.invoiceId ?? undefined, payload.billId ?? undefined);
@@ -521,10 +582,12 @@ debtRoutes.get("/debts/statements/:partnerType/:partnerId", requirePerm("debt.vi
     const bills = (await db.prepare(`SELECT id, code, issue_date, total FROM supplier_bills WHERE supplier_id = ? AND status='open'`).bind(pid).all<any>()).results;
     for (const r of bills) ev.push({ date: r.issue_date, ord: 0, id: r.id, docType: "bill", docCode: r.code, debit: r.total, credit: 0 });
   }
-  const pays = (await db.prepare(`SELECT id, code, paid_at, amount FROM debt_payments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
-  for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: "payment", docCode: r.code, debit: 0, credit: r.amount });
+  const pays = (await db.prepare(`SELECT id, code, paid_at, amount, direction FROM debt_payments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
+  // Hoàn tiền dư có cho khách (direction='out', partner customer) làm số dư tăng lại → ghi bên phát sinh tăng
+  for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: r.direction === "out" && pt === "customer" ? "customer_refund" : "payment", docCode: r.code, debit: r.direction === "out" && pt === "customer" ? r.amount : 0, credit: r.direction === "out" && pt === "customer" ? 0 : r.amount });
   const adjs = (await db.prepare(`SELECT id, code, type, created_at, amount FROM debt_adjustments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
-  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.amount });
+  // 'return_credit' chỉ chuyển số dư có sang hoá đơn khác (tổng nợ không đổi) → hiển thị nhưng không phát sinh
+  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.type === "return_credit" ? 0 : r.amount });
   ev.sort((a, b) => a.date.localeCompare(b.date) || a.ord - b.ord || a.id - b.id);
 
   let opening = 0;
@@ -781,6 +844,7 @@ debtRoutes.post("/settlements", requirePerm("finance.write"), async (c) => {
   const db = c.env.DB;
   const user = c.get("user");
   if (!(await db.prepare(`SELECT 1 FROM funds WHERE id = ? AND active = 1`).bind(body.fundId).first())) throw new AppError(422, "fund_not_found", "Quỹ không tồn tại hoặc đã ngừng");
+  if (!(await isRealFund(db, body.fundId))) throw new AppError(422, "fund_is_clearing", "Quỹ nhận tiền đối soát phải là quỹ thật (tiền mặt/ngân hàng/ví), không phải quỹ chờ đối soát");
   for (const l of body.lines) if (l.orderId == null && !l.externalOrderId) throw new AppError(422, "validation_error", "Mỗi dòng cần orderId hoặc externalOrderId");
   const expected = body.lines.reduce((s, l) => s + l.expectedAmount, 0);
   const received = body.lines.reduce((s, l) => s + l.receivedAmount, 0);
@@ -815,27 +879,24 @@ debtRoutes.post("/settlements/:id/confirm", requirePerm("finance.write"), async 
   const s = await db.prepare(`SELECT * FROM settlements WHERE id = ?`).bind(id).first<any>();
   if (!s) throw notFound("settlement_not_found", "Không tìm thấy đợt đối soát");
   if (s.status !== "draft") throw conflict("already_confirmed", "Đợt đối soát đã xác nhận");
+  if (!(await isRealFund(db, s.fund_id))) throw new AppError(422, "fund_is_clearing", "Quỹ nhận tiền đối soát phải là quỹ thật (tiền mặt/ngân hàng/ví), không phải quỹ chờ đối soát");
   const stmts: D1PreparedStatement[] = [
     assertStmt(db, "settlement.confirm", `SELECT status = 'draft' FROM settlements WHERE id = ?`, [id]),
     db.prepare(`UPDATE settlements SET status='confirmed' WHERE id = ? AND status='draft'`).bind(id),
   ];
-  const guard = `NOT EXISTS (SELECT 1 FROM cash_vouchers WHERE ref_type='settlement' AND ref_id = ${id} AND direction = ?)`;
   const note = `Đối soát ${s.source} ${s.code}${s.external_ref ? " / " + s.external_ref : ""}`;
-  const mk = async (direction: "in" | "out", amount: number, cats: string[], label: string) => {
-    const catId = await categoryId(db, cats, direction);
+  const mk = async (direction: "in" | "out", fundId: number, amount: number, cat: string, label: string) => {
+    if (amount <= 0) return;
+    const catId = await categoryId(db, [cat], direction);
     const code = await nextCode(db, direction === "in" ? PREFIX.cashIn : PREFIX.cashOut);
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by)
-           SELECT ?,?,?,?,?,?, 'settlement', ?, 'posted', ?, ?, ?, ? WHERE ${guard}`,
-        )
-        .bind(code, direction, s.fund_id, catId, amount, s.source, id, vnPeriodNow(), `${label}: ${note}`, user.id, user.id, direction),
-    );
+    stmts.push(voucherStmt(db, { code, direction, fundId, categoryId: catId, amount, counterparty: s.source, refType: "settlement", refId: id, note: `${label}: ${note}`, userId: user.id }));
   };
-  // Audit #11: tiền COD/sàn đã ghi vào quỹ chờ đối soát lúc giao hàng → chuyển RA khỏi quỹ chờ (cùng số đã ghi), rồi VÀO quỹ thật
-  // theo số thực nhận. Nhờ vậy số dư quỹ chờ về 0 và báo cáo dòng tiền không đếm hai lần (quỹ chờ không tính vào tổng dòng tiền).
-  const clearing = (
+  // Hạch toán (A-03/B-05, B-13): `received` là tiền THỰC NHẬN (đã trừ phí) về quỹ thật.
+  //   quỹ thật  : +received (chuyển nội bộ DOI_SOAT)
+  //   quỹ chờ   : −received (chuyển DOI_SOAT_RA) − phí (chi phí PHI_DOI_SOAT) − thiếu (CHENH_LECH_DOI_SOAT) + thừa (THU_CHENH_LECH_DOI_SOAT)
+  // Tổng ra khỏi quỹ chờ = expected nên quỹ chờ về 0; phí và chênh lệch là chi phí/thu khác của P&L và không bao giờ chạm quỹ thật.
+  const clearing = new Map<number, number>();
+  const rows = (
     await db
       .prepare(
         `SELECT p.fund_id AS fundId, SUM(p.amount) AS amt
@@ -847,29 +908,42 @@ debtRoutes.post("/settlements/:id/confirm", requirePerm("finance.write"), async 
       .bind(id)
       .all<{ fundId: number; amt: number }>()
   ).results;
-  if (clearing.length) await db.prepare(`INSERT OR IGNORE INTO cash_categories(code, name, direction, pnl_line) VALUES ('DOI_SOAT_RA','Chuyển khỏi quỹ chờ đối soát','out','transfer')`).run();
-  const clearingStmts: D1PreparedStatement[] = [];
-  for (const cl of clearing) {
-    const catId = await categoryId(db, ["DOI_SOAT_RA"], "out");
-    const code = await nextCode(db, PREFIX.cashOut);
-    clearingStmts.push(
-      db
-        .prepare(
-          `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by)
-           SELECT ?, 'out', ?, ?, ?, ?, 'settlement', ?, 'posted', ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM cash_vouchers WHERE ref_type='settlement' AND ref_id = ${id} AND fund_id = ?)`,
-        )
-        .bind(code, cl.fundId, catId, cl.amt, s.source, id, vnPeriodNow(), `Chuyển khỏi quỹ chờ đối soát: ${note}`, user.id, user.id, cl.fundId),
-    );
+  for (const r of rows) clearing.set(r.fundId, (clearing.get(r.fundId) ?? 0) + r.amt);
+  // dòng chỉ có mã đơn sàn (không map đơn nội bộ): không có payment để truy → rút phần expected khỏi quỹ chờ mặc định của nguồn
+  const ext = await db.prepare(`SELECT COALESCE(SUM(expected_amount),0) AS s FROM settlement_lines WHERE settlement_id = ? AND order_id IS NULL`).bind(id).first<{ s: number }>();
+  const defaultClearing = await db
+    .prepare(`SELECT id FROM funds WHERE active = 1 AND type IN ('cod_clearing','marketplace_clearing') ORDER BY (type = ?) DESC, id LIMIT 1`)
+    .bind(s.source === "cod" ? "cod_clearing" : "marketplace_clearing")
+    .first<{ id: number }>();
+  if (!defaultClearing && (!clearing.size || ext!.s > 0)) throw new AppError(422, "no_clearing_fund", "Chưa có quỹ chờ đối soát để ghi phí/chênh lệch của đợt này");
+  if (ext!.s > 0) clearing.set(defaultClearing!.id, (clearing.get(defaultClearing!.id) ?? 0) + ext!.s);
+  if (!clearing.size) clearing.set(defaultClearing!.id, 0);
+
+  const fee = s.fee_amount as number;
+  const diff = s.diff_amount as number;
+  let feeLeft = fee, shortLeft = diff < 0 ? -diff : 0;
+  const entries = [...clearing.entries()];
+  await mk("in", s.fund_id, s.received_amount, "DOI_SOAT", "Tiền đối soát về quỹ");
+  for (const [i, [fundId, cap]] of entries.entries()) {
+    let left = cap + (i === 0 && diff > 0 ? diff : 0);
+    const last = i === entries.length - 1;
+    const f = last ? feeLeft : Math.min(feeLeft, left);
+    left -= f; feeLeft -= f;
+    const sh = last ? shortLeft : Math.min(shortLeft, Math.max(0, left));
+    left -= sh; shortLeft -= sh;
+    if (i === 0 && diff > 0) await mk("in", fundId, diff, "THU_CHENH_LECH_DOI_SOAT", "Chênh lệch đối soát (thừa)");
+    await mk("out", fundId, Math.max(0, left), "DOI_SOAT_RA", "Chuyển khỏi quỹ chờ đối soát");
+    await mk("out", fundId, f, "PHI_DOI_SOAT", "Phí sàn/vận chuyển thu hộ");
+    await mk("out", fundId, sh, "CHENH_LECH_DOI_SOAT", "Chênh lệch đối soát (thiếu)");
   }
-  if (s.received_amount > 0) await mk("in", s.received_amount, ["BAN_HANG"], "Thu tiền đối soát");
-  if (s.fee_amount > 0) await mk("out", s.fee_amount, ["PHI_SAN", "VAN_CHUYEN", "KHAC"], "Phí sàn/vận chuyển");
-  stmts.push(...clearingStmts); // sau phiếu phí: guard của phiếu phí theo hướng 'out' không bị phiếu chuyển quỹ chặn
-  stmts.push(auditStmt(c, { action: "settlement.confirm", entity: "settlement", entityId: id, before: { status: "draft" }, after: { status: "confirmed", received: s.received_amount, fee: s.fee_amount } }));
+  stmts.push(auditStmt(c, { action: "settlement.confirm", entity: "settlement", entityId: id, before: { status: "draft" }, after: { status: "confirmed", received: s.received_amount, fee: s.fee_amount, diff } }));
   await db.batch(stmts);
   const { results } = await db.prepare(`SELECT * FROM cash_vouchers WHERE ref_type='settlement' AND ref_id = ? ORDER BY id`).bind(id).all<any>();
   return c.json({ ...camel(await db.prepare(`SELECT * FROM settlements WHERE id = ?`).bind(id).first()), vouchers: results.map(camel) });
 });
 
-function vnPeriodNow() {
-  return vnDate().slice(0, 7);
+async function isRealFund(db: D1Database, fundId: number) {
+  const f = await db.prepare(`SELECT type FROM funds WHERE id = ?`).bind(fundId).first<{ type: string }>();
+  return !!f && ["cash", "bank", "ewallet"].includes(f.type);
 }
+
