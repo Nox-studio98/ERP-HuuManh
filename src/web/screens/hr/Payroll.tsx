@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ApiError, get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { BarChart } from "../../components/charts";
@@ -171,6 +171,7 @@ function Entries() {
 }
 function EntryForm({ period, emps, onClose, onSaved }: { period: string; emps: any[]; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ employeeId: emps[0]?.id ?? 0, kind: "bonus", amount: 0, reason: "", taxable: true, negative: false }), [busy, setBusy] = useState(false);
+  useEffect(() => { setF((p) => (p.employeeId || !emps.length ? p : { ...p, employeeId: emps[0].id })); }, [emps]); // danh sách NV tải sau khi mở form
   return (
     <Sheet open onClose={onClose} title={`Thêm khoản · ${periodLabel(period)}`} footer={<Button block loading={busy} disabled={!f.employeeId || !f.amount || !f.reason.trim()} onClick={async () => {
       setBusy(true);
@@ -216,6 +217,7 @@ function Advances() {
 }
 function AdvForm({ emps, funds, onClose, onSaved }: { emps: any[]; funds: any[]; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ employeeId: emps[0]?.id ?? 0, amount: 0, fundId: funds[0]?.id ?? 0, reason: "" }), [busy, setBusy] = useState(false);
+  useEffect(() => { setF((p) => ({ ...p, employeeId: p.employeeId || emps[0]?.id || 0, fundId: p.fundId || funds[0]?.id || 0 })); }, [emps, funds]); // NV/quỹ tải sau khi mở form
   return (
     <Sheet open onClose={onClose} title="Tạm ứng lương" footer={<Button block loading={busy} disabled={!f.employeeId || !f.amount || !f.fundId} onClick={async () => {
       setBusy(true);

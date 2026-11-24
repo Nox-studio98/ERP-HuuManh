@@ -150,6 +150,7 @@ function Overtime({ onChange }: { onChange: () => void }) {
 }
 function OtForm({ emps, onClose, onSaved }: { emps: any[]; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ employeeId: emps[0]?.id ?? 0, workDate: todayVN(), hours: 1, reason: "" }), [busy, setBusy] = useState(false);
+  useEffect(() => { setF((p) => (p.employeeId || !emps.length ? p : { ...p, employeeId: emps[0].id })); }, [emps]); // danh sách NV tải sau khi mở form
   return (
     <Sheet open onClose={onClose} title="Ghi nhận tăng ca (đã xác nhận)" footer={<Button block loading={busy} disabled={!f.employeeId || f.hours <= 0} onClick={async () => {
       setBusy(true); try { await post("/overtime-requests", { employeeId: Number(f.employeeId), workDate: f.workDate, minutes: Math.round(f.hours * 60), reason: f.reason.trim() || undefined }); onSaved(); } catch { /* toast */ } finally { setBusy(false); }
