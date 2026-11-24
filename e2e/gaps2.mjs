@@ -82,7 +82,7 @@ try {
   await shot("gaps2-recurring-form.png");
   await btn(d2, "Lưu").click();
   await toastOk(/Đã tạo mẫu đơn lặp/);
-  const card = page.locator(".card", { hasText: cName }).first();
+  const card = page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first();
   await card.getByText("T2, T5").waitFor();
   await shot("gaps2-recurring-list.png");
   const tpl = (await apiGet("/b2b/recurring")).items.find((t) => t.customerName === cName);
@@ -92,16 +92,16 @@ try {
   await dlg().getByRole("button", { name: "T7", exact: true }).click();
   await btn(dlg(), "Lưu").click();
   await toastOk(/Đã lưu mẫu đơn lặp/);
-  await page.locator(".card", { hasText: cName }).first().getByText("T2, T5, T7").waitFor();
+  await page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first().getByText("T2, T5, T7").waitFor();
   ok("sửa mẫu: thêm T7");
   // tắt → nút tạo ngay bị khoá
-  await btn(page.locator(".card", { hasText: cName }).first(), "Tắt").click();
+  await btn(page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first(), "Tắt").click();
   await toastOk(/Đã tắt mẫu đơn lặp/);
-  assert(await btn(page.locator(".card", { hasText: cName }).first(), "Tạo đơn ngay").isDisabled(), "mẫu tắt thì không tạo đơn ngay được");
-  await btn(page.locator(".card", { hasText: cName }).first(), "Bật").click();
+  assert(await btn(page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first(), "Tạo đơn ngay").isDisabled(), "mẫu tắt thì không tạo đơn ngay được");
+  await btn(page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first(), "Bật").click();
   await toastOk(/Đã bật mẫu đơn lặp/);
   // tạo đơn ngay (có thể thiếu tồn → chấp nhận 409 cho phép; kiểm tra bằng API sau)
-  await btn(page.locator(".card", { hasText: cName }).first(), "Tạo đơn ngay").click();
+  await btn(page.locator("[data-testid=recurring] .cards-grid .card", { hasText: cName }).first(), "Tạo đơn ngay").click();
   await dlg().getByLabel("Ngày giao").fill(addDays(TODAY, 3));
   await shot("gaps2-recurring-generate.png");
   await btn(dlg(), "Tạo đơn").click();
@@ -138,6 +138,9 @@ try {
   await go("/debts");
   await page.getByRole("tab", { name: "Phiếu thu/chi" }).click();
   await page.getByTestId("all-payments").waitFor();
+  // giao diện mới: bộ lọc phụ gập sau nút "Bộ lọc" (điện thoại), khoảng ngày chọn bằng nút "Tuỳ chọn"
+  await page.getByTestId("all-payments").getByRole("button", { name: /^Bộ lọc/ }).click();
+  await page.getByTestId("all-payments").getByRole("button", { name: "Tuỳ chọn", exact: true }).click();
   await page.getByLabel("Loại phiếu").selectOption("in");
   await page.getByLabel("Đối tác").selectOption("customer");
   await page.getByLabel("Từ ngày").fill(TODAY);
@@ -145,7 +148,7 @@ try {
   await page.getByTestId("all-payments").getByText(pay.payment.code).locator("visible=true").first().waitFor();
   await shot("gaps2-debt-payments.png");
   await page.getByLabel("Loại phiếu").selectOption("out");
-  await page.getByText("Không có phiếu phù hợp").waitFor();
+  await page.getByText("Không có phiếu nào khớp bộ lọc").waitFor();
   ok("lọc chi: không còn phiếu thu");
   await page.getByLabel("Loại phiếu").selectOption("in");
   await page.getByTestId("all-payments").getByRole("button", { name: "Đảo phiếu" }).locator("visible=true").first().click();

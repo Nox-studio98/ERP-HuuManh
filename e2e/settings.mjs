@@ -200,8 +200,8 @@ try {
   const dk = await newPage(desktop, "owner-desktop");
   await login(dk.page, OWNER.u, OWNER.p);
   await dk.page.goto(BASE + "/settings");
-  await dk.page.getByRole("button", { name: /Nhân sự & lương/ }).click();
-  await dk.page.getByRole("button", { name: /Bán hàng & giá/ }).click();
+  await dk.page.locator("button.set-head", { hasText: /Nhân sự & lương/ }).click();
+  await dk.page.locator("button.set-head", { hasText: /Bán hàng & giá/ }).click();
   await dk.page.getByRole("heading", { name: "Ngưỡng duyệt" }).waitFor();
   await dk.page.evaluate(() => { window.scrollTo(0, 0); document.querySelector(".main")?.scrollTo(0, 0); });
   await shot(dk.page, "settings-07-params-desktop.png");
