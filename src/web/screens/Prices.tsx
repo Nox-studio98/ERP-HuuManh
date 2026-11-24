@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { get, items, post } from "../api";
+import { get, items, post, put } from "../api";
 import { Badge, Banner, Button, Card, DataTable, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
 import { LineChart } from "../components/charts";
 import { toast } from "../components/toast";
@@ -26,26 +26,48 @@ const KINDS: Record<string, string> = { base: "Giá nền", group: "Theo nhóm k
 const CH: Record<string, string> = { ...CHANNELS, all: "Tất cả kênh" };
 function Lists({ canWrite }: { canWrite: boolean }) {
   const l = useAsync(() => get("/price-lists").then((r) => items<any>(r)), []);
-  const [add, setAdd] = useState(false);
-  const [f, setF] = useState({ name: "", channel: "pos", kind: "promo", priority: 10 });
+  const groups = useAsync(() => get("/customer-groups", undefined, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]), []);
+  const [edit, setEdit] = useState<any | "new" | null>(null);
   return (
-    <div className="stack">
-      {canWrite && <div><Button onClick={() => setAdd(true)}>+ Bảng giá mới</Button></div>}
-      {l.loading ? <Spinner /> : <DataTable rows={l.data ?? []} rowKey={(x) => x.id} cols={[
+    <div className="stack" data-testid="price-lists">
+      {canWrite && <div><Button onClick={() => setEdit("new")}>+ Bảng giá mới</Button></div>}
+      {l.loading ? <Spinner /> : <DataTable rows={l.data ?? []} rowKey={(x) => x.id} onRowClick={canWrite ? (x) => setEdit(x) : undefined} cols={[
         { key: "n", label: "Tên", title: true, render: (x) => <b>{x.name}</b> },
         { key: "c", label: "Kênh", render: (x) => CH[x.channel] ?? x.channel },
         { key: "k", label: "Loại", render: (x) => KINDS[x.kind] ?? x.kind },
+        { key: "g", label: "Nhóm khách", hideMobile: true, render: (x) => (x.customerGroupId ? (groups.data ?? []).find((g: any) => g.id === x.customerGroupId)?.name ?? `#${x.customerGroupId}` : "—") },
         { key: "p", label: "Ưu tiên", right: true, render: (x) => x.priority },
+        { key: "a", label: "TT", render: (x) => (x.active ? <Badge tone="ok">Đang dùng</Badge> : <Badge tone="warn">Đã tắt</Badge>) },
       ]} />}
-      <Sheet open={add} onClose={() => setAdd(false)} title="Bảng giá mới" footer={<Button block disabled={!f.name} onClick={async () => { try { await post("/price-lists", f); toast("Đã tạo bảng giá", "ok"); setAdd(false); l.reload(); } catch {} }}>Tạo</Button>}>
-        <div className="stack">
-          <Input label="Tên bảng giá" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-          <Select label="Kênh" value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{[["pos", "Tại quầy"], ["online", "Online"], ["b2b", "Sỉ"], ["all", "Tất cả kênh"]].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-          <Select label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-          <Input label="Ưu tiên (số lớn thắng)" type="number" value={f.priority} onChange={(e) => setF({ ...f, priority: Number(e.target.value) })} />
-        </div>
-      </Sheet>
+      {edit && <ListForm pl={edit === "new" ? null : edit} groups={groups.data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); l.reload(); }} />}
     </div>
+  );
+}
+
+function ListForm({ pl, groups, onClose, onSaved }: { pl: any | null; groups: any[]; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ name: pl?.name ?? "", channel: pl?.channel ?? "pos", kind: pl?.kind ?? "promo", priority: pl?.priority ?? 10, customerGroupId: pl?.customerGroupId ? String(pl.customerGroupId) : "", active: pl?.active ?? true });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: any = { name: f.name.trim(), channel: f.channel, kind: f.kind, priority: f.priority, customerGroupId: f.customerGroupId ? Number(f.customerGroupId) : null };
+      if (pl) await put(`/price-lists/${pl.id}`, { ...body, active: f.active }); else await post("/price-lists", body);
+      toast(pl ? "Đã lưu bảng giá" : "Đã tạo bảng giá", "ok"); onSaved();
+    } catch {} finally { setBusy(false); }
+  };
+  return (
+    <Sheet open onClose={onClose} title={pl ? "Sửa bảng giá" : "Bảng giá mới"} footer={<Button block loading={busy} disabled={!f.name.trim()} onClick={save}>{pl ? "Lưu" : "Tạo"}</Button>}>
+      <div className="stack">
+        <Input label="Tên bảng giá" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <Select label="Kênh" value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{[["pos", "Tại quầy"], ["online", "Online"], ["b2b", "Sỉ"], ["all", "Tất cả kênh"]].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+        <Select label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+        {(f.kind === "group" || f.customerGroupId) && (
+          <Select label="Nhóm khách hàng" value={f.customerGroupId} onChange={(e) => setF({ ...f, customerGroupId: e.target.value })}><option value="">— Không —</option>{groups.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
+        )}
+        <Input label="Ưu tiên (số lớn thắng)" type="number" min={0} max={1000} value={f.priority} onChange={(e) => setF({ ...f, priority: Number(e.target.value) })} />
+        {pl && <label className="row" style={{ gap: 8 }}><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Đang dùng</label>}
+      </div>
+    </Sheet>
   );
 }
 
@@ -75,7 +97,7 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
   return (
     <div className="stack">
       <div className="grid3">
-        <Select label="Bảng giá" value={lid} onChange={(e) => setListId(e.target.value)}>{(lists.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
+        <Select label="Bảng giá" value={lid} onChange={(e) => setListId(e.target.value)}>{(lists.data ?? []).filter((l) => l.active !== false).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
         <Input label="Hiệu lực từ" type="datetime-local" value={eff} onChange={(e) => setEff(e.target.value)} />
         <Input label="Tìm hàng" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
