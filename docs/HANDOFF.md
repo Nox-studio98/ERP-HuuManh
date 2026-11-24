@@ -1,6 +1,6 @@
 # Handoff — ERP Hữu Mạnh (cập nhật 24/11/2026)
 
-Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
+Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: **`docs/GO-LIVE.md` (kế hoạch go-live)**, `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
 
 ## 1. Tóm tắt nhanh
 
@@ -10,10 +10,10 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 | Code Đợt 4 (M9 nhân sự–chấm công–lương, M7 giá đối thủ, M2-11, khuyến mãi/voucher/tích điểm, giỏ quà & đặt cọc, báo cáo tài chính bổ sung, đơn lặp tự động) | ✅ Xong (nhánh `dot-4` → PR vào `main`) |
 | Audit bảo mật & toàn vẹn dữ liệu (3 mảng) | ✅ Xong — 36 phát hiện đã sửa, mỗi lỗi có test hồi quy (mục 2.5) |
 | Bổ sung sau Đợt 4 (website tích điểm, màn hình ERP còn thiếu, thuế TNCN 2026) | ✅ Xong, đã merge (PR #4) |
-| **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **cả 3 nhóm lỗi nghiêm trọng/cao đã sửa** (tiền & báo cáo, kho, nhân sự); còn lỗi trung bình/thấp (mục 3.0) |
-| Kiểm thử | ✅ 589 unit/integration test (workerd + D1 thật), 9 kịch bản E2E Playwright đạt trên DB mới |
+| **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **cả 3 nhóm lỗi nghiêm trọng/cao + 9 lỗi tiền/lương đã sửa**, có màn Cài đặt; còn 45 lỗi trung bình/thấp (mục 3.0) |
+| Kiểm thử | ✅ 631 unit/integration test (workerd + D1 thật), 10 kịch bản E2E Playwright đạt trên DB mới |
 | CI (GitHub Actions) | ✅ typecheck, test, `npm audit`, gitleaks; job deploy demo/staging/production |
-| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0017 chưa áp** — job deploy sẽ tự áp |
+| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0020 chưa áp** — job deploy sẽ tự áp |
 | R2 `huu-manh-erp-files` | ✅ Đã tạo (CI demo tự tải font PDF) |
 | **Deploy Worker ERP + Worker website** | ❌ **Chưa** — token Cloudflare lưu trong môi trường cloud bị sai định dạng (mục 4) |
 | Secrets, tên miền, Cloudflare Access | ❌ Chưa |
@@ -100,6 +100,7 @@ Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạ
 - Rủi ro còn lại có chủ đích (ghi trong báo cáo audit): kiểm hạn mức khi xác nhận đơn sỉ đồng thời trả 409 để thử lại (ưu tiên chặn); quỹ chờ đối soát chỉ rút phần tiền đã ghi vào quỹ đó.
 
 ### 3.4 Điểm [Cần xác nhận] với chủ cửa hàng (ảnh hưởng cấu hình)
+Tất cả đã có trên màn **Cài đặt → Tham số** (lọc "chỉ mục cần xác nhận"); chủ cửa hàng lưu/xác nhận là nhãn biến mất.
 Giá vốn theo lô hay bình quân · ngưỡng duyệt (giảm giá, phiếu chi, kiểm kê, xoá nợ) · mốc tuổi nợ · thuế GTGT / hình thức kinh doanh · loại mã vạch · cân điện tử nối điện thoại · thành phố & khu vực giao (đang ví dụ TP.HCM) · số tài khoản nhận tiền VietQR · ngưỡng lệch cân (10%) · ai chịu phí giao khi khách huỷ · mẫu sổ Excel kế toán · danh sách đối thủ & tần suất thu thập · cách tính lương (tháng/giờ/ca), ngày công chuẩn, hệ số tăng ca, quy định phép & đi muộn · cách xác thực chấm công (GPS, QR hay cả hai) · có đóng BHXH cho NV không · bật tích điểm & tỉ lệ đổi điểm · cho cộng dồn khuyến mãi không · % đặt cọc giỏ quà.
 
 ## 4. Cách deploy (khi có API token)

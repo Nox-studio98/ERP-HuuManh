@@ -56,3 +56,14 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - C-06: sao lưu R2 đủ mọi bảng, đọc theo trang, có manifest + thời hạn lưu; script khôi phục `scripts/restore-from-r2.mjs` (chưa thử với D1/R2 thật).
   - C-07: màn "Cửa hàng" đặt toạ độ + bán kính chấm GPS. C-08: duyệt phép kiểm lại số dư lúc duyệt; vượt cần lý do ngoại lệ.
 - **Chưa sửa có chủ đích**: C-21 (kế toán có `hr.manage` — tài liệu API ghi là chủ ý, cần chủ cửa hàng xác nhận); lý do riêng từng dòng kiểm kê (tài liệu nghiệp vụ không yêu cầu; EC-20 đã có duyệt chênh lệch lớn); EC-10 (tách đơn con/đổi hàng — chức năng mới, mức Trung bình); các phát hiện Trung bình/Thấp khác ngoài 3 nhóm.
+- **Đợt sửa 4 (trước go-live) — đã sửa**:
+  - A-06: huỷ đơn POS của ca đã chốt → tiền hoàn ghi vào ca đang mở, chỉ quản lý được huỷ.
+  - A-07: chặn huỷ đơn đặt trước đã giao (dùng Trả hàng, hoàn đủ cả cọc).
+  - A-14: huỷ/trả online chỉ tạo nghĩa vụ hoàn; chi tiền hoàn cần quyền tài chính.
+  - A-16: thu ngân chỉ tự trả hàng của ca đang mở, dưới ngưỡng `approval.pos_return_vnd`, có nhập lại kho; ngoài ra cần duyệt.
+  - B-09: chốt hoá đơn mua khác giá → điều chỉnh giá vốn lô còn tồn, phần đã bán vào "Chênh lệch giá mua".
+  - B-11: lãi lỗ tính phiếu thu khác; phiếu đảo bù đúng dòng gốc.
+  - C-09 (lễ không lương), C-14 (lương tháng theo giờ làm thực tế — chọn được trong Cài đặt), C-15 (ngày phép chỉ tính ngày làm việc).
+  - C-16, C-17: màn **Cài đặt** (tham số theo nhóm, nhãn "Cần xác nhận", khoá/mở khoá sổ có lý do, nhật ký thay đổi).
+  - Thêm khoản mục **Số dư quỹ đầu kỳ** (không tính vào lãi lỗ) để nhập số dư khi go-live.
+- **Còn tồn sau đợt 4**: 45 lỗi trung bình/thấp còn lại trong danh sách — xử lý theo phát sinh trong tuần chạy song song.
