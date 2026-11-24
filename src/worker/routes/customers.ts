@@ -322,7 +322,7 @@ customerRoutes.get("/customers/:id/history", requirePerm("b2b.view"), async (c) 
   await loadCustomer(db, id);
   const orders = (
     await db
-      .prepare(`SELECT id, code, status, delivery_date, total, created_at FROM orders WHERE customer_id = ? AND channel = 'b2b' ORDER BY id DESC LIMIT 100`)
+      .prepare(`SELECT id, code, status, delivery_date, total, created_at FROM orders WHERE customer_id = ? AND channel = 'b2b' AND kind = 'sale' ORDER BY id DESC LIMIT 100`)
       .bind(id)
       .all<any>()
   ).results;

@@ -840,7 +840,7 @@ debtRoutes.post("/settlements/:id/confirm", requirePerm("finance.write"), async 
       .bind(id)
       .all<{ fundId: number; amt: number }>()
   ).results;
-  if (clearing.length) await db.prepare(`INSERT OR IGNORE INTO cash_categories(code, name, direction, pnl_line) VALUES ('DOI_SOAT_RA','Chuyển khỏi quỹ chờ đối soát','out','revenue')`).run();
+  if (clearing.length) await db.prepare(`INSERT OR IGNORE INTO cash_categories(code, name, direction, pnl_line) VALUES ('DOI_SOAT_RA','Chuyển khỏi quỹ chờ đối soát','out','transfer')`).run();
   const clearingStmts: D1PreparedStatement[] = [];
   for (const cl of clearing) {
     const catId = await categoryId(db, ["DOI_SOAT_RA"], "out");
