@@ -854,7 +854,7 @@ debtRoutes.post("/settlements/:id/confirm", requirePerm("finance.write"), async 
     .prepare(`SELECT id FROM funds WHERE active = 1 AND type IN ('cod_clearing','marketplace_clearing') ORDER BY (type = ?) DESC, id LIMIT 1`)
     .bind(s.source === "cod" ? "cod_clearing" : "marketplace_clearing")
     .first<{ id: number }>();
-  if (!defaultClearing && !clearing.size) throw new AppError(422, "no_clearing_fund", "Chưa có quỹ chờ đối soát để ghi phí/chênh lệch của đợt này");
+  if (!defaultClearing && (!clearing.size || ext!.s > 0)) throw new AppError(422, "no_clearing_fund", "Chưa có quỹ chờ đối soát để ghi phí/chênh lệch của đợt này");
   if (ext!.s > 0) clearing.set(defaultClearing!.id, (clearing.get(defaultClearing!.id) ?? 0) + ext!.s);
   if (!clearing.size) clearing.set(defaultClearing!.id, 0);
 
