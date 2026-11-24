@@ -40,7 +40,9 @@
         { "name": "RL_AUTH", "namespace_id": "2103", "simple": { "limit": 10, "period": 60 } },
         { "name": "RATE_LIMITER", "namespace_id": "2104", "simple": { "limit": 300, "period": 60 } }
       ],
-      "vars": { "APP_ENV": "demo" },
+      // Tên miền riêng cho bản demo (zone noxelis.co trong cùng account) — wrangler tự tạo DNS + chứng chỉ
+      "routes": [{ "pattern": "huumanh.noxelis.co", "custom_domain": true }],
+      "vars": { "APP_ENV": "demo", "SHOP_BASE_URL": "https://huumanhfruit.noxelis.co" },
       "d1_databases": [
         {
           "binding": "DB",

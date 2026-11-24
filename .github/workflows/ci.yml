@@ -97,5 +97,5 @@ jobs:
           npx wrangler deploy
       - name: Deploy website (demo)
         run: |
-          VITE_TURNSTILE_SITE_KEY=1x00000000000000000000AA npm run build:shop
-          npx wrangler deploy -c wrangler.shop.jsonc --env demo
+          CLOUDFLARE_ENV=demo VITE_TURNSTILE_SITE_KEY=1x00000000000000000000AA npm run build:shop
+          npx wrangler deploy -c dist-shop/huu_manh_shop/wrangler.json
