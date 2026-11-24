@@ -89,7 +89,7 @@ Quy tắc bắt buộc: không có endpoint sửa tồn trực tiếp; lô `expi
 | POST | /vouchers/:id/approve | finance.approve | |
 | POST | /vouchers/:id/reverse | finance.write | tạo phiếu đảo (reverses_id) ở kỳ hiện tại — không sửa phiếu cũ (EC-33) |
 | GET | /reconcile/shifts?day= | finance.shift_reconcile | M6-03 danh sách ca, expected vs counted |
-| GET | /periods, POST /periods/:period/lock | finance.view / finance.lock_period | |
+| GET | /periods, POST /periods/:period/lock | finance.view / finance.lock_period | Khoá sổ (B-08): chỉ khoá được kỳ **đã kết thúc** (kỳ hiện tại/tương lai → 422 `period_not_ended`). Kỳ đã khoá → 423 `period_locked` cho: phiếu quỹ (trigger), chốt hoá đơn mua tạm (theo ngày hoá đơn), phiếu thu/chi công nợ + gạch nợ (theo `paidAt` và hôm nay), điều chỉnh công nợ, trả hàng B2B, huỷ/trả/hoàn tiền đơn online (lập ngày hôm nay). Phiếu chi chờ duyệt trong kỳ vừa khoá vẫn từ chối được. |
 
 ## Báo cáo — `routes/reports.ts`
 | GET | /reports/pnl?from=YYYY-MM-DD&to=&groupBy=day|channel|group | reports.view | M6-04: doanh thu (orders sale − return), giá vốn (Σ cost_amount), lãi gộp; chi phí từ vouchers theo pnl_line (hao hụt từ phiếu waste quy ra tiền tính vào chi phí, không vào giá vốn) |

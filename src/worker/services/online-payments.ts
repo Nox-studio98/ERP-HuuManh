@@ -139,16 +139,16 @@ export async function paidNet(db: D1Database, orderId: number) {
 }
 
 /** Hoàn tiền: dòng payments âm cùng phương thức/quỹ + cập nhật payment_status (đặt vào extraSet của transitionStmts, bind từ ?3). */
-export async function refundPlan(db: D1Database, orderId: number, total: number, keep = 0) {
+export async function refundPlan(db: D1Database, orderId: number, total: number, keep = 0, cap = Number.POSITIVE_INFINITY, ref = "refund") {
   const p = await paidNet(db, orderId);
-  const amount = Math.max(0, Math.min(p.net, p.net - keep));
+  const amount = Math.max(0, Math.min(p.net - keep, cap));
   if (p.net <= 0 || amount <= 0) return null;
   const full = amount >= p.net;
   return {
     amount,
     // Chốt chặn (audit #4): tiền còn lại (đã trả − đã hoàn) phải còn đủ tại lúc ghi; hoàn đôi → state_changed 409
     guard: assertStmt(db, "order.refund", `SELECT COALESCE(SUM(amount), 0) >= ? FROM payments WHERE order_id = ? AND status = 'confirmed'`, [p.net, orderId]),
-    stmt: db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(orderId, p.method, -amount, p.fundId, "refund"),
+    stmt: db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(orderId, p.method, -amount, p.fundId, ref),
     status: full ? "refunded" : "partially_refunded",
     totalRef: total,
   };

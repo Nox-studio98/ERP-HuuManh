@@ -64,6 +64,11 @@ export async function orderView(db: D1Database, o: any) {
         .first<{ earned: number; redeemed: number; amount: number }>()
     : null;
   const pointsEarnable = o.shop_account_id && !["completed", "cancelled", "returned"].includes(o.status) ? await earnFor(db, Math.max(0, o.total - o.shipping_fee), o.customer_id) : 0;
+  // A-02: chênh lệch cân đơn trả trước (dương: thu thêm khi nhận hàng; âm: cửa hàng hoàn lại) — A-05: tổng tiền đã trả hàng sau giao
+  const diffAmount = o.diff_status === "pending" ? o.diff_amount ?? 0 : 0;
+  const returnedTotal = o.kind === "sale"
+    ? (await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind = 'return' AND status = 'completed'`).bind(o.id).first<{ t: number }>())?.t ?? 0
+    : 0;
   const view: Record<string, unknown> = {
     code: o.code,
     trackingToken: o.tracking_token ?? null,
@@ -88,6 +93,9 @@ export async function orderView(db: D1Database, o: any) {
     pointsEarned: pts?.earned ?? 0,
     pointsEarnable,
     weightAdjustStatus: o.weight_adjust_status,
+    diffAmount,
+    diffKind: diffAmount > 0 ? "collect" : diffAmount < 0 ? "refund" : null,
+    returnedTotal,
     lines: lines.results.map((l) => ({
       productId: l.product_id,
       name: l.product_name,

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { api, seedBase } from "./helpers";
+import { api, seedBase, testEnv } from "./helpers";
 import { vnPeriod } from "../src/worker/lib/time";
 
 beforeAll(seedBase);
@@ -64,13 +64,23 @@ describe("finance", () => {
   });
 
   it("locked period blocks new vouchers with 423", async () => {
-    expect((await api("accountant", "POST", `/api/v1/periods/${vnPeriod()}/lock`)).status).toBe(403);
-    const lk = await api("owner", "POST", `/api/v1/periods/${vnPeriod()}/lock`);
+    // B-08: chỉ khoá được kỳ đã kết thúc; kỳ hiện tại/tương lai → 422 period_not_ended
+    const prev = new Date(Date.now() - 40 * 86400_000);
+    const past = vnPeriod(prev);
+    expect((await api("accountant", "POST", `/api/v1/periods/${past}/lock`)).status).toBe(403);
+    const cur = await api("owner", "POST", `/api/v1/periods/${vnPeriod()}/lock`);
+    expect(cur.status).toBe(422);
+    expect(cur.body.error.code).toBe("period_not_ended");
+    expect((await api("owner", "POST", `/api/v1/periods/2099-01/lock`)).status).toBe(422);
+    const lk = await api("owner", "POST", `/api/v1/periods/${past}/lock`);
     expect(lk.status).toBe(200);
+    // kỳ hiện tại bị khoá (dữ liệu cũ/khoá thủ công trong DB) vẫn chặn phiếu mới bằng trigger
+    await testEnv.DB.prepare(`INSERT INTO periods(period, locked_at, locked_by) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 1)`).bind(vnPeriod()).run();
     const r = await api("accountant", "POST", "/api/v1/vouchers", { direction: "out", fundId: 1, categoryId: await cat("DIEN_NUOC"), amount: 1000 });
     expect(r.status).toBe(423);
     expect(r.body.error.code).toBe("period_locked");
     const list = await api("accountant", "GET", "/api/v1/periods");
+    expect(list.body.items.find((p: any) => p.period === past).locked).toBe(true);
     expect(list.body.items.find((p: any) => p.period === vnPeriod()).locked).toBe(true);
   });
 });

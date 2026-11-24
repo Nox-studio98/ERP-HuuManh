@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { AppBindings } from "../env";
 import { auditStmt } from "../lib/audit";
 import { AppError, conflict, notFound } from "../lib/errors";
+import { PREFIX } from "../lib/codes";
 import { can } from "../lib/rbac";
 import { lineAmount, toMilli } from "../lib/money";
 import { vnDate } from "../lib/time";
@@ -12,9 +13,10 @@ import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveSt
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
 import { assertStmt } from "./guard";
-import { guardStmts, notifyJob, refundPlan, runOrderBatch } from "./online-payments";
+import { guardStmts, notifyJob, paidNet, refundPlan, runOrderBatch } from "./online-payments";
+import { assertPeriodOpen } from "./period";
 import { unitFactor } from "./http";
-import { earnFor, pointsStmts } from "./loyalty-points";
+import { earnFor, pointsStmts, reversalStatements } from "./loyalty-points";
 
 type Ctx = Context<AppBindings>;
 
@@ -105,8 +107,14 @@ export async function packOrder(c: Ctx, id: number, input: { lines: { orderLineI
   const devBp = baseline > 0 ? Math.round((Math.abs(subtotal - baseline) * 10000) / baseline) : 0;
   const weightStatus = devBp <= (Number.isFinite(tolBp) ? tolBp : 1000) ? "auto_accepted" : "pending_customer";
   const pending = weightStatus === "pending_customer";
+  // A-02 (EC-03/EC-05): đơn TRẢ TRƯỚC đã thu đủ theo tổng ước tính → lưu chênh lệch so với tiền đã nhận.
+  //  dương: thu thêm khi giao (COD phần chênh); âm: phải hoàn lại khách; deliver bị chặn tới khi hoàn xong hoặc được miễn có người duyệt.
+  const prepaidPaid = (o.payment_method === "transfer" || o.payment_method === "gateway") && o.payment_status === "paid";
+  const diff = prepaidPaid ? total - (o.paid_total ?? 0) : 0;
   stmts.push(
-    db.prepare(`UPDATE orders SET subtotal=?, total=?, weight_adjust_status=? WHERE id=? AND status='preparing'`).bind(subtotal, total, weightStatus, id),
+    db
+      .prepare(`UPDATE orders SET subtotal=?, total=?, weight_adjust_status=?, diff_amount=?, diff_status=?, diff_note=NULL, diff_waived_by=NULL WHERE id=? AND status='preparing'`)
+      .bind(subtotal, total, weightStatus, diff, diff !== 0 ? "pending" : "none", id),
     db
       .prepare(`INSERT INTO order_events(order_id, status, note, internal_note, actor_type, actor_id) VALUES (?,?,?,?, 'staff', ?)`)
       .bind(id, "preparing", pending ? "Khối lượng thực tế chênh lệch, vui lòng xác nhận lại" : "Đã cân hàng, tổng tiền được cập nhật", input.note ?? null, c.get("user").id),
@@ -115,12 +123,12 @@ export async function packOrder(c: Ctx, id: number, input: { lines: { orderLineI
     auditStmt(c, {
       action: "online_order.pack", entity: "order", entityId: id,
       before: { subtotal: o.subtotal, total: o.total, weightAdjustStatus: o.weight_adjust_status },
-      after: { subtotal, total, baseline, deviationBp: devBp, toleranceBp: tolBp, weightAdjustStatus: weightStatus },
+      after: { subtotal, total, baseline, deviationBp: devBp, toleranceBp: tolBp, weightAdjustStatus: weightStatus, paidTotal: o.paid_total, diff },
     }),
   );
   await runOrderBatch(db, id, "preparing", stmts);
   await finish(c, id);
-  return { weightAdjustStatus: weightStatus, deviationBp: devBp, baseline, subtotal, total };
+  return { weightAdjustStatus: weightStatus, deviationBp: devBp, baseline, subtotal, total, diffAmount: diff };
 }
 
 // ---------------------------------------------------------------- ship (EC-05)
@@ -205,13 +213,30 @@ export async function deliverOrder(c: Ctx, id: number) {
   const o = await loadOpsOrder(db, id);
   const stmts: D1PreparedStatement[] = [];
   let t: D1PreparedStatement[];
-  if (o.payment_method === "cod" && o.payment_status !== "paid") {
+  const prepaid = o.payment_method === "transfer" || o.payment_method === "gateway";
+  if (prepaid && o.diff_status === "pending" && o.diff_amount < 0) {
+    // A-02: khách đã trả dư do cân nhẹ hơn → phải hoàn (hoặc người có quyền duyệt miễn) trước khi hoàn tất
+    throw conflict("diff_unsettled", `Cần hoàn lại ${-o.diff_amount}đ cho khách (hoặc miễn có người duyệt) trước khi hoàn tất đơn`, { diffAmount: o.diff_amount });
+  }
+  if (prepaid && o.diff_status === "pending" && o.diff_amount > 0) {
+    // A-02: thu phần chênh khi giao như COD (quỹ chờ đối soát COD), cùng đường đi với COD thường
+    const fund = await db.prepare(`SELECT id FROM funds WHERE type='cod_clearing' AND active=1 ORDER BY id LIMIT 1`).first<{ id: number }>();
+    if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ chờ đối soát COD (cod_clearing)");
+    t = transitionStmts(db, id, o.status, "completed", staff(c), { note: `Giao hàng thành công, thu thêm ${o.diff_amount}đ (chênh lệch cân)`, extraSet: "paid_total = paid_total + ?3, diff_status = 'settled'", extraBinds: [o.diff_amount] });
+    stmts.push(
+      assertStmt(db, "order.diff_collect", `SELECT diff_status = 'pending' AND diff_amount = ? FROM orders WHERE id = ?`, [o.diff_amount, id]),
+      t[0],
+      db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.diff_amount, fund.id, `${o.code}-CHENH`),
+      ...t.slice(1),
+    );
+  } else if (o.payment_method === "cod" && o.payment_status !== "paid") {
     const fund = await db.prepare(`SELECT id FROM funds WHERE type='cod_clearing' AND active=1 ORDER BY id LIMIT 1`).first<{ id: number }>();
     if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ chờ đối soát COD (cod_clearing)");
     t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công", extraSet: "payment_status = ?3, paid_total = paid_total + ?4", extraBinds: ["paid", o.total] });
     stmts.push(t[0], db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.total, fund.id, o.code), ...t.slice(1));
   } else {
     t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công" });
+    if (prepaid) stmts.push(assertStmt(db, "order.diff_none", `SELECT diff_status <> 'pending' FROM orders WHERE id = ?`, [id]));
     stmts.push(...t);
   }
   // Tích điểm khi đơn website hoàn tất: theo số tiền khách thực trả, không tính phí giao (cùng luật với POS)
@@ -219,7 +244,7 @@ export async function deliverOrder(c: Ctx, id: number) {
     const earn = await earnFor(db, Math.max(0, o.total - (o.shipping_fee ?? 0)), o.customer_id);
     stmts.push(...pointsStmts(db, { sql: "?", bind: id }, o.customer_id, "earn", earn, "Tích điểm đơn hàng online", c.get("user").id));
   }
-  stmts.push(notifyJob(db, id, { status: "completed" }), auditStmt(c, { action: "online_order.deliver", entity: "order", entityId: id, before: { status: o.status }, after: { status: "completed", total: o.total, cod: o.payment_method === "cod" } }));
+  stmts.push(notifyJob(db, id, { status: "completed" }), auditStmt(c, { action: "online_order.deliver", entity: "order", entityId: id, before: { status: o.status }, after: { status: "completed", total: o.total, cod: o.payment_method === "cod", diffCollected: prepaid && o.diff_status === "pending" ? o.diff_amount : 0, diffStatus: o.diff_status } }));
   await runOrderBatch(db, id, o.status, stmts);
   await finish(c, id);
 }
@@ -316,6 +341,9 @@ export async function returnToStock(
   const user = c.get("user");
   const o = await loadOpsOrder(db, id);
   if (o.status !== "delivery_failed" && o.status !== "completed") throw conflict("invalid_transition", "Chỉ trả hàng cho đơn giao không thành công hoặc đã giao", { from: o.status });
+  // B-08/EC-33: trả hàng ghi vào NGÀY HÔM NAY — hôm nay thuộc kỳ khoá thì chặn
+  await assertPeriodOpen(db, new Date(), "phiếu trả hàng");
+  if (o.status === "completed") return returnAfterDelivery(c, o, input);
   const lines = (await db.prepare(`SELECT * FROM order_lines WHERE order_id=? ORDER BY id`).bind(id).all<any>()).results;
   const lots = await shippedLots(db, id);
   if (!lots.size) throw conflict("not_shipped", "Đơn chưa xuất kho nên không có hàng để nhập lại");
@@ -338,11 +366,12 @@ export async function returnToStock(
     stmts.push(...restockStmts(db, l.product_id, parts.restock, parts.waste, "order_return", id, user.id));
     summary.push({ orderLineId: l.id, restockMilli, wasteMilli, reason: r?.reason ?? null });
   }
+  // Giao không thành công: chưa từng ghi nhận doanh thu → vẫn chuyển đơn gốc sang 'returned' (không có phiếu trả)
   const refund = await refundPlan(db, id, o.total);
   const t = transitionStmts(db, id, o.status, "returned", staff(c), {
     note: "Đơn đã được trả hàng",
     internalNote: input.lines.map((l) => `${l.orderLineId}: ${l.reason}${l.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500) || undefined,
-    extraSet: refund ? "payment_status = ?3, paid_total = paid_total - ?4" : undefined,
+    extraSet: refund ? "payment_status = ?3, paid_total = paid_total - ?4, diff_status = 'none', diff_amount = 0" : "diff_status = 'none', diff_amount = 0",
     extraBinds: refund ? [refund.status, refund.amount] : undefined,
   });
   stmts.unshift(t[0]);
@@ -353,12 +382,209 @@ export async function returnToStock(
   return { refund: refund?.amount ?? 0 };
 }
 
+/**
+ * A-05 (EC-01/EC-33): trả hàng SAU KHI GIAO → lập phiếu trả `orders.kind='return'` (original_order_id, ngày hôm nay, cùng cách POS/B2B biểu diễn)
+ * thay vì sửa đơn gốc: đơn gốc vẫn 'completed' nên doanh thu/giá vốn ngày đã giao giữ nguyên; báo cáo trừ doanh thu ở NGÀY TRẢ (returnsTotal).
+ * Hỗ trợ trả một phần/nhiều lần. `lines` rỗng = trả toàn bộ phần còn lại (nhập lại kho). Trả hết mọi dòng → phiếu trả gồm cả phí giao hàng.
+ * Hoàn tiền: trừ vào số đã thu của đơn gốc (dòng payments âm cùng phương thức/quỹ). Điểm tích/đổi và lượt voucher đảo đúng một lần theo luỹ kế
+ * (reversalStatements idempotent theo sổ điểm) — đơn gốc không đổi trạng thái nên trigger 0011 không chạy.
+ */
+async function returnAfterDelivery(
+  c: Ctx,
+  o: any,
+  input: { lines: { orderLineId: number; qty: number; unit?: string; restock: boolean; reason: string }[] },
+) {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const id: number = o.id;
+  const lines = (await db.prepare(`SELECT * FROM order_lines WHERE order_id=? ORDER BY id`).bind(id).all<any>()).results;
+  const lotsByLine = new Map<number, LotAllocation[]>();
+  for (const r of (await db.prepare(`SELECT oll.order_line_id, oll.lot_id, oll.qty_milli, oll.unit_cost FROM order_line_lots oll JOIN order_lines ol ON ol.id = oll.order_line_id WHERE ol.order_id = ? ORDER BY oll.id`).bind(id).all<any>()).results) {
+    lotsByLine.set(r.order_line_id, [...(lotsByLine.get(r.order_line_id) ?? []), { lotId: r.lot_id, qtyMilli: r.qty_milli, unitCost: r.unit_cost }]);
+  }
+  if (!lotsByLine.size) throw conflict("not_shipped", "Đơn chưa xuất kho nên không có hàng để nhập lại");
+  const prevRows = (
+    await db
+      .prepare(
+        `SELECT r.original_line_id AS lid, COALESCE(SUM(r.qty_milli),0) AS q, COALESCE(SUM(r.line_total),0) AS amt
+           FROM order_lines r JOIN orders ro ON ro.id = r.order_id
+          WHERE ro.original_order_id = ? AND ro.kind = 'return' AND ro.status = 'completed' GROUP BY r.original_line_id`,
+      )
+      .bind(id)
+      .all<any>()
+  ).results;
+  const prev = new Map<number, { q: number; amt: number }>(prevRows.map((r) => [r.lid, { q: r.q, amt: r.amt }]));
+  const priorTotal = (await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(id).first<{ t: number }>())?.t ?? 0;
+
+  // Phân bổ tiền hàng thực thu (đã trừ giảm giá đơn) cho từng dòng; dòng cuối nhận phần làm tròn dư
+  const itemsNet = Math.max(0, o.total - (o.shipping_fee ?? 0));
+  const sumLines = lines.reduce((s, l) => s + l.line_total, 0);
+  const net = new Map<number, number>();
+  let acc = 0;
+  lines.forEach((l, i) => {
+    const v = i === lines.length - 1 ? itemsNet - acc : sumLines > 0 ? Math.round((l.line_total * itemsNet) / sumLines) : 0;
+    net.set(l.id, Math.max(0, v));
+    acc += v;
+  });
+
+  const want = new Map<number, { qty: number; restock: boolean; reason: string }>();
+  if (input.lines.length === 0) {
+    for (const l of lines) {
+      const left = l.qty_milli - (prev.get(l.id)?.q ?? 0);
+      if (left > 0 && lotsByLine.has(l.id)) want.set(l.id, { qty: left, restock: true, reason: "Trả toàn bộ đơn" });
+    }
+  } else {
+    for (const r of input.lines) {
+      const l = lines.find((x) => x.id === r.orderLineId);
+      if (!l) throw new AppError(422, "line_not_found", "Dòng hàng không thuộc đơn này", { orderLineId: r.orderLineId });
+      if (want.has(l.id)) throw new AppError(422, "validation_error", "Dòng hàng bị lặp", { orderLineId: l.id });
+      const q = toMilli(r.qty, await unitFactor(db, l.product_id, r.unit ?? l.unit));
+      if (q <= 0) continue;
+      want.set(l.id, { qty: q, restock: r.restock, reason: r.reason });
+    }
+  }
+  if (!want.size) throw conflict("nothing_to_return", "Không còn số lượng nào để trả");
+
+  const prepared: { l: any; qtyMilli: number; lineTotal: number; cost: number; alloc: LotAllocation[]; restock: boolean; reason: string }[] = [];
+  for (const [lid, w] of want) {
+    const l = lines.find((x) => x.id === lid)!;
+    const already = prev.get(lid)?.q ?? 0;
+    if (already + w.qty > l.qty_milli) throw conflict("return_exceeds_sold", "Số lượng trả vượt số đã giao trừ số đã trả", { orderLineId: lid, soldMilli: l.qty_milli, returnedMilli: already });
+    // đi qua các lô đã xuất theo thứ tự, bỏ qua phần đã trả trước đó (cùng cách POS)
+    let skip = already, need = w.qty;
+    const alloc: LotAllocation[] = [];
+    for (const lot of lotsByLine.get(lid) ?? []) {
+      let avail = lot.qtyMilli;
+      if (skip > 0) { const x = Math.min(skip, avail); skip -= x; avail -= x; }
+      if (avail <= 0 || need <= 0) continue;
+      const take = Math.min(avail, need);
+      alloc.push({ lotId: lot.lotId, qtyMilli: take, unitCost: lot.unitCost });
+      need -= take;
+    }
+    const isLast = already + w.qty === l.qty_milli;
+    const base = net.get(lid) ?? 0;
+    const lineTotal = isLast ? base - (prev.get(lid)?.amt ?? 0) : Math.round((base * w.qty) / l.qty_milli);
+    prepared.push({ l, qtyMilli: w.qty, lineTotal: Math.max(0, lineTotal), cost: allocationCost(alloc), alloc, restock: w.restock, reason: w.reason });
+  }
+  // Trả hết mọi dòng (luỹ kế) → phiếu cuối gồm cả phí giao hàng để luỹ kế = tổng đơn
+  const fullyReturned = lines.every((l) => (prev.get(l.id)?.q ?? 0) + (want.get(l.id)?.qty ?? 0) >= l.qty_milli);
+  const shippingBack = fullyReturned ? Math.max(0, o.total - priorTotal - prepared.reduce((s, x) => s + x.lineTotal, 0)) : 0;
+  const total = prepared.reduce((s, x) => s + x.lineTotal, 0) + shippingBack;
+  const costTotal = prepared.reduce((s, x) => s + x.cost, 0);
+  const refund = await refundPlan(db, id, o.total, 0, total, "refund_return");
+  const code = await nextCode(db, PREFIX.return);
+  const note = prepared.map((x) => `${x.l.id}: ${x.reason}${x.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500);
+  const r = await db
+    .prepare(`INSERT INTO orders(code, channel, kind, original_order_id, store_id, customer_id, status, note, created_by) VALUES (?,?,'return',?,?,?,'draft',?,?)`)
+    .bind(code, o.channel, id, o.store_id, o.customer_id, note, user.id)
+    .run();
+  const retId = r.meta.last_row_id as number;
+  try {
+    const lineIds: number[] = [];
+    for (const x of prepared) {
+      const row = await db
+        .prepare(
+          `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, cost_amount, original_line_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        )
+        .bind(retId, x.l.product_id, x.l.unit, x.qtyMilli, x.l.unit_price, x.l.price_list_id, Math.max(0, lineAmount(x.l.unit_price, x.qtyMilli) - x.lineTotal), x.lineTotal, x.cost, x.l.id)
+        .first<{ id: number }>();
+      lineIds.push(row!.id);
+    }
+    const stmts: D1PreparedStatement[] = [
+      // Chốt chặn đồng thời: đơn gốc còn 'completed'; tổng số trả không vượt số đã giao; tổng tiền trả không vượt tổng đơn
+      assertStmt(db, "online.return.status", `SELECT status = 'completed' AND kind = 'sale' FROM orders WHERE id = ?`, [id]),
+      ...prepared.map((x) =>
+        assertStmt(
+          db,
+          "online.return.qty",
+          `SELECT (SELECT qty_milli FROM order_lines WHERE id = ?)
+                  - COALESCE((SELECT SUM(r.qty_milli) FROM order_lines r WHERE r.original_line_id = ? AND r.order_id IN (SELECT id FROM orders WHERE kind = 'return' AND status = 'completed')), 0) >= ?`,
+          [x.l.id, x.l.id, x.qtyMilli],
+        ),
+      ),
+      assertStmt(db, "online.return.amount", `SELECT (SELECT total FROM orders WHERE id = ?) - COALESCE((SELECT SUM(total) FROM orders WHERE original_order_id = ? AND kind = 'return' AND status = 'completed'), 0) >= ?`, [id, id, total]),
+    ];
+    // Điểm tích / điểm đã đổi / lượt voucher: đảo theo luỹ kế tiền đã trả (chỉ đơn có khách; idempotent theo sổ)
+    stmts.push(...(await reversalStatements(db, o, priorTotal + total, user.id, `trả hàng ${code}`)));
+    prepared.forEach((x, i) => {
+      if (!x.restock) return;
+      for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
+      stmts.push(...moveStatements(db, x.l.product_id, x.alloc, 1, "return", "order", retId, user.id));
+    });
+    if (refund) {
+      stmts.push(
+        refund.guard,
+        refund.stmt,
+        db.prepare(`UPDATE orders SET payment_status = ?, paid_total = paid_total - ? WHERE id = ?`).bind(refund.status, refund.amount, id),
+      );
+    }
+    stmts.push(
+      db
+        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
+        .bind(total - shippingBack, total, costTotal, refund?.amount ?? 0, retId),
+      notifyJob(db, id, { status: "returned" }),
+      auditStmt(c, {
+        action: "online_order.return", entity: "order", entityId: id,
+        before: { status: o.status },
+        after: { status: o.status, returnOrder: code, returnTotal: total, fullyReturned, refund: refund?.amount ?? 0, lines: prepared.map((x) => ({ orderLineId: x.l.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
+        reason: note,
+      }),
+    );
+    await db.batch(stmts);
+  } catch (e) {
+    await db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(retId).run();
+    throw e;
+  }
+  await finish(c, id);
+  return { refund: refund?.amount ?? 0, returnOrder: code, returnTotal: total, fullyReturned };
+}
+
+// ---------------------------------------------------------------- chênh lệch cân đơn trả trước (A-02)
+
+/** Hoàn phần khách trả dư do cân nhẹ hơn ước tính: dòng payments âm cùng phương thức/quỹ gốc; xong thì đơn được giao/hoàn tất. */
+export async function refundDiff(c: Ctx, id: number) {
+  const db = c.env.DB;
+  const o = await loadOpsOrder(db, id);
+  if (o.diff_status !== "pending" || o.diff_amount >= 0) throw conflict("nothing_to_refund", "Đơn không có khoản chênh lệch cần hoàn lại");
+  if (!["preparing", "shipping", "delivery_failed"].includes(o.status)) throw conflict("invalid_transition", "Chỉ hoàn chênh lệch khi đơn đang chuẩn bị/giao", { from: o.status });
+  await assertPeriodOpen(db, new Date(), "hoàn tiền chênh lệch");
+  const amount = -o.diff_amount;
+  const p = await paidNet(db, id);
+  if (p.net < amount) throw conflict("nothing_to_refund", "Số đã thu của đơn không đủ để hoàn", { paid: p.net, amount });
+  await runOrderBatch(db, id, o.status, [
+    assertStmt(db, "order.diff_refund", `SELECT diff_status = 'pending' AND diff_amount = ? AND status = ? FROM orders WHERE id = ?`, [o.diff_amount, o.status, id]),
+    assertStmt(db, "order.refund", `SELECT COALESCE(SUM(amount), 0) >= ? FROM payments WHERE order_id = ? AND status = 'confirmed'`, [amount, id]),
+    db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(id, p.method, -amount, p.fundId, "refund_diff"),
+    db.prepare(`UPDATE orders SET paid_total = paid_total - ?, diff_status = 'settled', diff_note = ? WHERE id = ?`).bind(amount, `Đã hoàn ${amount}đ chênh lệch cân`, id),
+    db.prepare(`INSERT INTO order_events(order_id, status, note, actor_type, actor_id) VALUES (?,?,?, 'staff', ?)`).bind(id, o.status, `Đã hoàn ${amount}đ chênh lệch khối lượng`, c.get("user").id),
+    auditStmt(c, { action: "online_order.diff_refund", entity: "order", entityId: id, before: { diffAmount: o.diff_amount, diffStatus: "pending" }, after: { diffStatus: "settled", refunded: amount } }),
+  ]);
+  return { refund: amount };
+}
+
+/** Miễn khoản chênh lệch (thu thêm / hoàn lại) — chỉ người có quyền duyệt; bắt buộc lý do, ghi audit. */
+export async function waiveDiff(c: Ctx, id: number, reason: string) {
+  const db = c.env.DB;
+  const o = await loadOpsOrder(db, id);
+  if (o.diff_status !== "pending") throw conflict("nothing_to_waive", "Đơn không có khoản chênh lệch chờ xử lý");
+  if (!["preparing", "shipping", "delivery_failed"].includes(o.status)) throw conflict("invalid_transition", "Chỉ miễn chênh lệch khi đơn đang chuẩn bị/giao", { from: o.status });
+  await runOrderBatch(db, id, o.status, [
+    assertStmt(db, "order.diff_waive", `SELECT diff_status = 'pending' AND status = ? FROM orders WHERE id = ?`, [o.status, id]),
+    db.prepare(`UPDATE orders SET diff_status = 'waived', diff_waived_by = ?, diff_note = ? WHERE id = ?`).bind(c.get("user").id, reason, id),
+    db.prepare(`INSERT INTO order_events(order_id, status, note, internal_note, actor_type, actor_id) VALUES (?,?,?,?, 'staff', ?)`).bind(id, o.status, "Cửa hàng miễn khoản chênh lệch cân", reason, c.get("user").id),
+    auditStmt(c, { action: "online_order.diff_waive", entity: "order", entityId: id, before: { diffAmount: o.diff_amount, diffStatus: "pending" }, after: { diffStatus: "waived" }, reason }),
+  ]);
+  return { waived: o.diff_amount };
+}
+
 // ---------------------------------------------------------------- cancel (EC-06)
 
 export async function cancelOrder(c: Ctx, id: number, reason: string) {
   const db = c.env.DB;
   const user = c.get("user");
   const o = await loadOpsOrder(db, id);
+  await assertPeriodOpen(db, new Date(), "huỷ đơn / hoàn tiền"); // B-08
   const release = await releaseOrderStmts(db, id);
   const lots = await shippedLots(db, id); // đã xuất ở lần giao trước rồi giao lại → hàng về kho đúng lô
   const restock: D1PreparedStatement[] = [];
@@ -370,7 +596,7 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
   const policy = (await db.prepare(`SELECT value FROM settings WHERE key='online.cancel_fee_policy'`).first<{ value: string }>())?.value ?? "shop";
   const keepFee = policy === "customer" && o.status === "preparing" ? o.shipping_fee : 0;
   const refund = await refundPlan(db, id, o.total, keepFee);
-  const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4"];
+  const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0"];
   const binds: unknown[] = [reason, keepFee ? "customer" : policy];
   if (refund) {
     set.push("payment_status = ?5", "paid_total = paid_total - ?6");
@@ -397,6 +623,7 @@ export async function refundOrder(c: Ctx, id: number) {
   const db = c.env.DB;
   const o = await loadOpsOrder(db, id);
   if (o.status !== "cancelled" && o.status !== "returned") throw conflict("not_refundable", "Chỉ hoàn tiền cho đơn đã huỷ hoặc đã trả hàng");
+  await assertPeriodOpen(db, new Date(), "hoàn tiền"); // B-08
   const refund = await refundPlan(db, id, o.total);
   if (!refund) throw conflict("nothing_to_refund", "Đơn không còn khoản tiền cần hoàn");
   const [g1, g2] = guardStmts(db, id, o.status);
