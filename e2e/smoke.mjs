@@ -286,7 +286,7 @@ try {
   await go(o.page, "/finance");
   await o.page.getByRole("tab", { name: "Phiếu thu chi" }).click();
   const mkVoucher = async (cat, amount, who, note) => {
-    await o.page.getByRole("button", { name: "+ Lập phiếu" }).click();
+    await o.page.getByRole("button", { name: "+ Lập phiếu" }).first().click();
     const d = o.page.getByRole("dialog");
     await d.getByLabel("Hạng mục").selectOption({ label: cat });
     await d.getByLabel("Số tiền (₫)").fill(String(amount));

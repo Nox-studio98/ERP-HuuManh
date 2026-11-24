@@ -96,7 +96,7 @@ try {
   const custName = `Nhà hàng E2E ${RUN}`;
   await go(o.page, "/customers");
   await shot(o.page, "khach-si.png");
-  await o.page.getByRole("button", { name: "+ Thêm khách sỉ" }).click();
+  await o.page.getByRole("button", { name: "+ Thêm khách sỉ" }).first().click();
   {
     const d = dlg(o.page);
     await d.getByLabel("Tên khách / công ty").fill(custName);
