@@ -38,7 +38,9 @@ export function Receipt({ order, names, change }: { order: ReceiptOrder; names?:
           </div>
         ))}
         <hr />
-        {o.discount ? <div className="l"><span>Giảm giá đơn</span><span>-{money(o.discount)}</span></div> : null}
+        {Array.isArray(o.discounts) && o.discounts.length
+          ? o.discounts.map((d: { description: string; amount: number }, i: number) => <div key={i} className="l"><span>{d.description}</span><span>-{money(d.amount)}</span></div>)
+          : o.discount ? <div className="l"><span>Giảm giá đơn</span><span>-{money(o.discount)}</span></div> : null}
         <div className="l" style={{ fontWeight: 700, fontSize: "1.05em" }}><span>TỔNG CỘNG</span><span>{money(o.total)}</span></div>
         {(o.payments ?? []).map((p: any, i: number) => <div className="l" key={i}><span>{METHODS[p.method] ?? p.method}</span><span>{money(p.amount)}</span></div>)}
         {ch ? <div className="l"><span>Tiền thừa</span><span>{money(ch)}</span></div> : null}
