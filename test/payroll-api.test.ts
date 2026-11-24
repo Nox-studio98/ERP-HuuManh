@@ -161,6 +161,9 @@ describe("payroll API", () => {
     expect(a.salesBonus).toBe(400_000); // (5.000.000 − 1.000.000) × 10%
     expect(d.body.items).toHaveLength(4); // NV-LATE vào ngày 05/10 → có trong kỳ
     await db().prepare(`UPDATE settings SET value='0' WHERE key='hr.sales_bonus_bp'`).run();
+    // C-04: tham số hr.* đổi sau lần tính → phải tính lại mới duyệt được
+    expect((await api("owner", "POST", "/api/v1/payroll/periods/2026-10/approve")).body.error.code).toBe("payroll_stale");
+    expect((await api("accountant", "POST", "/api/v1/payroll/periods/2026-10/calculate")).status).toBe(200);
     expect((await api("owner", "POST", "/api/v1/payroll/periods/2026-10/approve")).status).toBe(200);
     await db().prepare(`INSERT INTO periods(period, locked_at, locked_by) VALUES (?, '2026-11-30T00:00:00Z', 1)`).bind(vnPeriod()).run();
     const pay = await api("accountant", "POST", "/api/v1/payroll/periods/2026-10/pay", { fundId: 1 });

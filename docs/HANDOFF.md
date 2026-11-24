@@ -10,10 +10,10 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 | Code Đợt 4 (M9 nhân sự–chấm công–lương, M7 giá đối thủ, M2-11, khuyến mãi/voucher/tích điểm, giỏ quà & đặt cọc, báo cáo tài chính bổ sung, đơn lặp tự động) | ✅ Xong (nhánh `dot-4` → PR vào `main`) |
 | Audit bảo mật & toàn vẹn dữ liệu (3 mảng) | ✅ Xong — 36 phát hiện đã sửa, mỗi lỗi có test hồi quy (mục 2.5) |
 | Bổ sung sau Đợt 4 (website tích điểm, màn hình ERP còn thiếu, thuế TNCN 2026) | ✅ Xong, đã merge (PR #4) |
-| **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **nhóm 1 (tiền & báo cáo) đã sửa**, nhóm 2–3 chưa (mục 3.0) |
-| Kiểm thử | ✅ 552 unit/integration test (workerd + D1 thật), 9 kịch bản E2E Playwright đạt trên DB mới |
+| **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **cả 3 nhóm lỗi nghiêm trọng/cao đã sửa** (tiền & báo cáo, kho, nhân sự); còn lỗi trung bình/thấp (mục 3.0) |
+| Kiểm thử | ✅ 589 unit/integration test (workerd + D1 thật), 9 kịch bản E2E Playwright đạt trên DB mới |
 | CI (GitHub Actions) | ✅ typecheck, test, `npm audit`, gitleaks; job deploy demo/staging/production |
-| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0015 chưa áp** — job deploy sẽ tự áp |
+| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0017 chưa áp** — job deploy sẽ tự áp |
 | R2 `huu-manh-erp-files` | ✅ Đã tạo (CI demo tự tải font PDF) |
 | **Deploy Worker ERP + Worker website** | ❌ **Chưa** — token Cloudflare lưu trong môi trường cloud bị sai định dạng (mục 4) |
 | Secrets, tên miền, Cloudflare Access | ❌ Chưa |
@@ -65,10 +65,10 @@ CSP/HSTS cho cả API lẫn HTML, cookie `__Host-` + chống CSRF, rate limit/Tu
 ### 3.0 Lỗi nghiệp vụ phải sửa trước go-live (chi tiết `docs/audit/`)
 Audit 24/11/2026 (3 mảng, có probe test tái hiện). Lõi bán hàng/B2B/phân quyền/chống đồng thời tốt; điểm yếu ở chỗ giao nhau giữa quỹ – công nợ – báo cáo lãi lỗ, kho với lô hỏng, và lương/chấm công. Kế hoạch sửa theo 3 nhóm, mỗi lỗi kèm test hồi quy:
 1. ✅ **Đã sửa** (xem `docs/audit/README.md` mục Trạng thái sửa) — **Tiền & báo cáo**: phí đối soát COD/sàn trừ 2 lần khỏi quỹ (A-03/B-05); xoá nợ/chiết khấu/cọc không vào P&L (A-04/C-13, EC-29); trả hàng online xoá doanh thu ngày đã giao, không chứng từ, không kiểm khoá kỳ (A-05); chênh lệch kiểm kê không vào P&L, VAT đầu vào luôn 0 (B-06/B-07); chi NCC qua công nợ bỏ qua ngưỡng duyệt (B-01); khoá sổ chưa chặn hoá đơn mua & điều chỉnh công nợ (B-08); trả hàng B2B sau khi đã thu mất số dư có (A-01); đơn trả trước cân lại tăng tiền không thu chênh lệch (A-02).
-2. **Kho**: lô hỏng đang giữ chỗ không ghi hao hụt được — **nghiêm trọng, EC-15** (B-03); kiểm kê dùng snapshot cũ (B-02); giao hàng không kiểm hạn lô (B-04); EC-21/22.
-3. **Nhân sự**: chấm công offline tính 0 phút (C-01); lương giờ trả tăng ca 2 lần (C-03); duyệt lương không kiểm dữ liệu thay đổi sau lần tính (C-04); tạm ứng vượt lương làm net âm (C-05); lộ lương qua xuất sổ quỹ (C-02); sao lưu R2 thiếu bảng & chưa có công cụ khôi phục (C-06); chưa có giao diện đặt toạ độ cửa hàng cho chấm GPS (C-07).
+2. ✅ **Đã sửa** — **Kho**: lô hỏng đang giữ chỗ không ghi hao hụt được — **nghiêm trọng, EC-15** (B-03); kiểm kê dùng snapshot cũ (B-02); giao hàng không kiểm hạn lô (B-04); EC-21/22.
+3. ✅ **Đã sửa** — **Nhân sự**: chấm công offline tính 0 phút (C-01); lương giờ trả tăng ca 2 lần (C-03); duyệt lương không kiểm dữ liệu thay đổi sau lần tính (C-04); tạm ứng vượt lương làm net âm (C-05); lộ lương qua xuất sổ quỹ (C-02); sao lưu R2 thiếu bảng & chưa có công cụ khôi phục (C-06); chưa có giao diện đặt toạ độ cửa hàng cho chấm GPS (C-07).
 
-Các lỗi trung bình/thấp còn lại xử lý trong tuần chạy song song.
+Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạng thái sửa) xử lý trong tuần chạy song song. Script khôi phục từ R2 (`scripts/restore-from-r2.mjs`) **phải chạy thử một lần trên D1 staging** trước go-live.
 
 ### 3.1 Hạ tầng / deploy (việc cần làm ngay)
 1. **Deploy 2 Worker** (`huu-manh-erp`, `huu-manh-shop`) — cần API token (mục 4).

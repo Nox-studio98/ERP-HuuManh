@@ -217,6 +217,20 @@ npx wrangler secret put VAPID_PRIVATE_KEY
 - Khuyến nghị: đặt ERP sau **Cloudflare Access** (chỉ nhân viên), website để công khai.
 - Dữ liệu mẫu: `seed/seed-dot3.sql` (khu vực giao lấy TP.HCM làm ví dụ — [Cần xác nhận]).
 
+## Sao lưu R2 và khôi phục
+
+Cron 00:00 giờ VN (`0 17 * * *`) ghi toàn bộ bảng nghiệp vụ vào R2: `backups/YYYY-MM-DD/<bảng>.part-NNNN.ndjson.gz` và `manifest.json` (số dòng + sha256 từng phần; có manifest = bản sao lưu đủ). Giữ `settings.backup.retention_days` ngày (mặc định 30). Bản sao lưu không chứa `users.pass_hash` và `sessions`.
+
+Khôi phục vào D1 (đã chạy `wrangler d1 migrations apply <db> --remote` để có lược đồ):
+
+```bash
+node scripts/restore-from-r2.mjs --day 2026-11-24 --db huu-manh-erp --remote --dry-run   # chỉ tải + kiểm checksum/số dòng, sinh SQL
+node scripts/restore-from-r2.mjs --day 2026-11-24 --db huu-manh-erp --remote             # nạp thật (INSERT OR REPLACE theo thứ tự khoá ngoại)
+node scripts/restore-from-r2.mjs --day 2026-11-24 --db huu-manh-erp --local              # dựng D1 local để thử
+```
+
+Tuỳ chọn: `--bucket`, `--env demo`, `--from-dir <thư mục đã tải>`, `--out`, `--max-file-mb`. Sau khôi phục phải đặt lại mật khẩu người dùng (bản sao lưu không có mật khẩu).
+
 ## Ghi chú
 
 - `seed/seed.sql` chỉ chứa master data demo: cửa hàng, quỹ, danh mục, sản phẩm, bảng giá. Không có lô hàng, đơn hàng hay tài khoản người dùng thật. Tài khoản `system` (id 1) không đăng nhập được.

@@ -20,10 +20,10 @@ beforeAll(async () => {
 });
 
 describe("payroll pay (audit #3)", () => {
-  it("concurrent pay creates one voucher per employee; zero-net employees keep their advances", async () => {
+  it("concurrent pay creates one voucher per employee; zero-net employees carry their advances to next period", async () => {
     await db().batch([
       db().prepare(`INSERT INTO payroll_periods(id, period, status, calculated_at) VALUES (9701,'2026-10','approved', '2026-11-01T00:00:00.000Z')`),
-      db().prepare(`INSERT INTO payroll_items(payroll_period_id, employee_id, pay_type, gross, advances, net) VALUES (9701,9701,'monthly',5000000,100000,5000000),(9701,9702,'monthly',1000000,1000000,0)`),
+      db().prepare(`INSERT INTO payroll_items(payroll_period_id, employee_id, pay_type, gross, advances, advances_carried, net) VALUES (9701,9701,'monthly',5000000,100000,0,5000000),(9701,9702,'monthly',0,0,1000000,0)`),
       db().prepare(`INSERT INTO salary_advances(id, employee_id, amount, advance_date, deduct_period, fund_id, status, created_by, created_at) VALUES (9701,9701,100000,'2026-10-01','2026-10',1,'paid',1,'2026-10-02T00:00:00.000Z'),(9702,9702,1000000,'2026-10-01','2026-10',1,'paid',1,'2026-10-02T00:00:00.000Z')`),
     ]);
     const res = await Promise.all([
@@ -35,9 +35,10 @@ describe("payroll pay (audit #3)", () => {
     expect(statuses[1]).toBeGreaterThanOrEqual(409);
     const v = await db().prepare(`SELECT COUNT(*) n FROM cash_vouchers WHERE ref_type='payroll_item' AND counterparty='NV-P1'`).first<{ n: number }>();
     expect(v!.n).toBe(1);
-    const adv = (await db().prepare(`SELECT id, status FROM salary_advances WHERE id IN (9701, 9702) ORDER BY id`).all<any>()).results;
+    const adv = (await db().prepare(`SELECT id, status, deduct_period FROM salary_advances WHERE id IN (9701, 9702) ORDER BY id`).all<any>()).results;
     expect(adv.find((a) => a.id === 9701).status).toBe("deducted");
-    expect(adv.find((a) => a.id === 9702).status).toBe("paid"); // net = 0 → chưa khấu trừ được, giữ lại
+    // C-05: net = 0 → chưa khấu trừ được; khoản tạm ứng không mất mà chuyển sang kỳ sau
+    expect(adv.find((a) => a.id === 9702)).toMatchObject({ status: "paid", deduct_period: "2026-11" });
   });
 
   it("advances above approval.cash_out_vnd need approval unless finance.approve", async () => {

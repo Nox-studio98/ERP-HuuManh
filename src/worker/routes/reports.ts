@@ -147,11 +147,14 @@ async function inventoryReport(c: Ctx) {
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='sale' THEN -m.qty_delta_milli END),0) AS soldMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='return' THEN m.qty_delta_milli END),0) AS returnedMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli END),0) AS wasteMilli,
-         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('adjust','transfer_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS assembleMilli,
+         -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt + Lắp ráp + Điều chỉnh = Tồn cuối
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli * m.unit_cost / 1000 END),0) AS wasteValue,
          COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS stockValue
-         FROM products p JOIN stock_moves m ON m.product_id = p.id AND m.at < ?2
+         FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
+        WHERE p.merged_into IS NULL
         GROUP BY p.id ORDER BY p.name`,
     )
     .bind(start, end)
