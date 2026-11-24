@@ -64,7 +64,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     await c.env.DB
       .prepare(
         `SELECT o.id, o.code, o.channel, o.status, o.payment_method, o.payment_status, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
-                o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status,
+                o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status, o.refund_due,
                 EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight
            FROM orders o LEFT JOIN delivery_slots s ON s.id = o.slot_id LEFT JOIN delivery_zones z ON z.id = o.zone_id
           WHERE ${conds.join(" AND ")} ORDER BY o.id DESC LIMIT ?`,
@@ -93,7 +93,8 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     weightAdjustStatus: r.weight_adjust_status,
     createdAt: r.created_at,
     isPreorder: !!r.is_preorder,
-    needsRefund: ["cancelled", "returned"].includes(r.status) && r.payment_status === "paid",
+    needsRefund: r.refund_due > 0,
+    refundDue: r.refund_due,
     diffAmount: r.diff_status === "pending" ? r.diff_amount : 0,
     diffStatus: r.diff_status,
   }));
@@ -165,6 +166,8 @@ async function orderDetail(c: Ctx, oid: number) {
     shippingFee: o.shipping_fee,
     total: o.total,
     paidTotal: o.paid_total,
+    // A-14: nghĩa vụ hoàn tiền chờ kế toán (finance.write) hoàn thực tế
+    refundDue: o.refund_due,
     estimatedTotal: o.estimated_total,
     weightAdjustStatus: o.weight_adjust_status,
     // A-02: chênh lệch cân đơn trả trước — dương "Thu thêm" (thu khi giao), âm "Hoàn lại" (phải hoàn / miễn mới hoàn tất được)

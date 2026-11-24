@@ -184,7 +184,7 @@ describe("B2B return: race and P&L (audit #14)", () => {
 describe("online refunds / payments / slots (audit #4, #17)", () => {
   it("concurrent refunds of a cancelled paid order refund only once", async () => {
     const r = await db().prepare(
-      `INSERT INTO orders(code, channel, kind, store_id, status, total, paid_total, payment_method, payment_status, tracking_token) VALUES ('DH-SEC-RF','online','sale',1,'cancelled',100000,100000,'transfer','paid','tok-sec-rf') RETURNING id`,
+      `INSERT INTO orders(code, channel, kind, store_id, status, total, paid_total, payment_method, payment_status, tracking_token, refund_due) VALUES ('DH-SEC-RF','online','sale',1,'cancelled',100000,100000,'transfer','paid','tok-sec-rf',100000) RETURNING id`,
     ).first<{ id: number }>();
     await db().prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?, 'transfer', 100000, 2, 'confirmed')`).bind(r!.id).run();
     const res = await Promise.all([
