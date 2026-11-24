@@ -181,13 +181,15 @@ financeRoutes.get("/reconcile/shifts", requirePerm("finance.shift_reconcile"), a
 financeRoutes.get("/periods", requirePerm("finance.view"), async (c) => {
   const { results } = await c.env.DB
     .prepare(
-      `SELECT period, MAX(locked_at) AS locked_at, MAX(locked_by) AS locked_by FROM (
-         SELECT period, locked_at, locked_by FROM periods
-         UNION ALL SELECT period, NULL, NULL FROM cash_vouchers
-       ) GROUP BY period ORDER BY period DESC`,
+      `SELECT g.period, g.locked_at, g.locked_by, u.full_name AS locked_by_name FROM (
+         SELECT period, MAX(locked_at) AS locked_at, MAX(locked_by) AS locked_by FROM (
+           SELECT period, locked_at, locked_by FROM periods
+           UNION ALL SELECT period, NULL, NULL FROM cash_vouchers
+         ) GROUP BY period
+       ) g LEFT JOIN users u ON u.id = g.locked_by ORDER BY g.period DESC`,
     )
     .all();
-  return c.json({ items: results.map((r: any) => ({ ...r, locked: !!r.locked_at })), current: vnPeriod() });
+  return c.json({ items: results.map((r: any) => ({ ...r, locked: !!r.locked_at, lockable: !r.locked_at && r.period < vnPeriod() })), current: vnPeriod() });
 });
 
 financeRoutes.post("/periods/:period/lock", requirePerm("finance.lock_period"), async (c) => {
@@ -209,4 +211,22 @@ financeRoutes.post("/periods/:period/lock", requirePerm("finance.lock_period"), 
     auditStmt(c, { action: "period.lock", entity: "period", entityId: period, before: { locked: false }, after: { locked: true } }),
   ]);
   return c.json({ period, locked: true });
+});
+
+// Mở khoá sổ (C-16): chỉ chủ (finance.lock_period), bắt buộc lý do, ghi nhật ký. Không đụng khoá bảng công / bảng lương (bảng riêng).
+financeRoutes.post("/periods/:period/unlock", requirePerm("finance.lock_period"), async (c) => {
+  const period = c.req.param("period");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new AppError(422, "validation_error", "Kỳ phải có dạng YYYY-MM");
+  const body = await c.req.json().catch(() => ({}));
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 5) throw new AppError(422, "validation_error", "Phải nhập lý do mở khoá (ít nhất 5 ký tự)", { fields: { reason: "Phải nhập lý do mở khoá (ít nhất 5 ký tự)" } });
+  if (reason.length > 500) throw new AppError(422, "validation_error", "Lý do tối đa 500 ký tự", { fields: { reason: "Lý do tối đa 500 ký tự" } });
+  const db = c.env.DB;
+  const cur = await db.prepare(`SELECT locked_at, locked_by FROM periods WHERE period = ?`).bind(period).first<{ locked_at: string | null; locked_by: number | null }>();
+  if (!cur?.locked_at) throw conflict("not_locked", "Kỳ này chưa khoá sổ");
+  await db.batch([
+    db.prepare(`UPDATE periods SET locked_at = NULL, locked_by = NULL WHERE period = ? AND locked_at IS NOT NULL`).bind(period),
+    auditStmt(c, { action: "period.unlock", entity: "period", entityId: period, before: { locked: true, lockedAt: cur.locked_at, lockedBy: cur.locked_by }, after: { locked: false }, reason }),
+  ]);
+  return c.json({ period, locked: false });
 });

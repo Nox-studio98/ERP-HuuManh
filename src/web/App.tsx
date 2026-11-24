@@ -19,6 +19,7 @@ const Finance = lazy(() => import("./screens/Finance"));
 const Reports = lazy(() => import("./screens/Reports"));
 const Approvals = lazy(() => import("./screens/Approvals"));
 const Users = lazy(() => import("./screens/Users"));
+const Settings = lazy(() => import("./screens/Settings"));
 const Customers = lazy(() => import("./screens/b2b/Customers"));
 const Quotes = lazy(() => import("./screens/b2b/Quotes"));
 const B2bOrders = lazy(() => import("./screens/b2b/B2bOrders"));
@@ -75,6 +76,7 @@ const NAV: Nav[] = [
   { path: "/approvals", label: "Duyệt", group: G.admin, perms: ["approvals.decide"], icon: I("M5 12l4 4 10-10"), el: <Approvals /> },
   { path: "/integrations", label: "Tích hợp", group: G.admin, perms: ["integrations.manage"], icon: I("M9 7V3M15 7V3M7 7h10v5a5 5 0 01-10 0zM12 17v4"), el: <Integrations /> },
   { path: "/users", label: "Người dùng", group: G.admin, perms: ["users.manage"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM20 20v-1a3 3 0 00-2-2.8"), el: <Users /> },
+  { path: "/settings", label: "Cài đặt", group: G.admin, perms: ["settings.view"], icon: I("M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"), el: <Settings /> },
   // ===== Đợt 4 =====
   { path: "/promotions", label: "Khuyến mãi", group: G.retail, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM8 8h.01M15 9l-6 6"), el: <Promotions /> },
   { path: "/bundles", label: "Giỏ quà & đặt trước", group: G.retail, perms: ["pos.sell"], icon: I("M4 10h16v10H4zM2 7h20v3H2zM12 7v13M12 7c-2-4-6-3-6-1s3 1 6 1c3 0 6 1 6-1s-4-3-6 1"), el: <Bundles /> },
