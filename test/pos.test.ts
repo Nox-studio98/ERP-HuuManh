@@ -7,6 +7,16 @@ beforeAll(async () => {
   await seedSales();
 });
 
+
+/** A-16: trả hàng không nhập lại kho của thu ngân cần quản lý duyệt: gửi → duyệt → gửi lại kèm approvalId */
+async function returnWithApproval(orderId: number, body: any) {
+  const first = await api("cashier", "POST", `/api/v1/orders/${orderId}/return`, body);
+  if (first.status !== 409 || first.body.error.code !== "approval_required") return first;
+  const aid = first.body.error.details.approvalId;
+  await api("manager", "POST", `/api/v1/approvals/${aid}/decide`, { decision: "approved" });
+  return api("cashier", "POST", `/api/v1/orders/${orderId}/return`, { ...body, approvalId: aid });
+}
+
 const line = (productId: number, qty: number, extra: object = {}) => ({ productId, unit: "kg", qty, ...extra });
 let orderA: any;
 let orderB: any;
@@ -160,7 +170,7 @@ describe("returns, void, shift close", () => {
 
   it("returns without restock (discard) and blocks over-return", async () => {
     const lineId = orderA.lines[0].id;
-    const r = await api("cashier", "POST", `/api/v1/orders/${orderA.id}/return`, {
+    const r = await returnWithApproval(orderA.id, {
       lines: [{ orderLineId: lineId, qty: 0.5, unit: "kg", restock: false, reason: "Dập nát" }], refundMethod: "cash",
     });
     expect(r.status).toBe(201);
@@ -192,6 +202,9 @@ describe("returns, void, shift close", () => {
     const f = await api("cashier", "POST", `/api/v1/orders/${orderB.id}/void`, { reason: "nhầm" });
     expect(f.status).toBe(403);
     expect(await lotQty(2)).toBe(4000);
+    // A-06: đơn tiền mặt của ca đã chốt → hoàn từ két ca đang mở của quản lý
+    expect((await api("manager", "POST", `/api/v1/orders/${orderB.id}/void`, { reason: "Khách huỷ đơn" })).body.error.code).toBe("no_open_shift");
+    expect((await api("manager", "POST", "/api/v1/shifts/open", { openingCash: 0 })).status).toBe(201);
     const ok = await api("manager", "POST", `/api/v1/orders/${orderB.id}/void`, { reason: "Khách huỷ đơn" });
     expect(ok.status).toBe(200);
     expect(ok.body.status).toBe("cancelled");

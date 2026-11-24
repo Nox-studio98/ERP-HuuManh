@@ -145,10 +145,10 @@ describe("A-05: trả hàng online sau khi giao = phiếu trả hàng", () => {
     const r1 = await post("online_staff", o.id, "return-to-stock", { lines: [{ orderLineId: o.lineId, qty: 1, restock: true, reason: "Khách đổi ý" }] });
     expect(r1.status, JSON.stringify(r1.body)).toBe(200);
     expect(r1.body.status).toBe("completed");
-    expect(r1.body.result).toMatchObject({ refund: 50000, fullyReturned: false });
+    expect(r1.body.result).toMatchObject({ refund: 0, refundDue: 50000, fullyReturned: false }); // A-14: chỉ ghi nghĩa vụ hoàn
     const ret1 = (await db().prepare(`SELECT * FROM orders WHERE original_order_id=? AND kind='return'`).bind(o.id).all<any>()).results;
     expect(ret1).toHaveLength(1);
-    expect(ret1[0]).toMatchObject({ status: "completed", channel: "online", total: 50000, cost_total: 20000, paid_total: 50000 });
+    expect(ret1[0]).toMatchObject({ status: "completed", channel: "online", total: 50000, cost_total: 20000, paid_total: 0 });
     expect(vnDate(new Date(ret1[0].completed_at))).toBe(vnDate());
     expect(await lot(710)).toBe(19000);
     // doanh thu ngày giao không đổi; ngày trả có returnsTotal
@@ -156,7 +156,12 @@ describe("A-05: trả hàng online sau khi giao = phiếu trả hàng", () => {
     expect((await pnl(dayGave)).returnsTotal).toBe(pGave.returnsTotal);
     expect((await pnl(vnDate())).returnsTotal).toBe(pToday.returnsTotal + 50000);
     const d1 = (await api("online_staff", "GET", `${V}/online-orders/${o.id}`)).body;
-    expect(d1).toMatchObject({ status: "completed", returnedTotal: 50000, fullyReturned: false, paymentStatus: "partially_refunded", paidTotal: 60000 });
+    expect(d1).toMatchObject({ status: "completed", returnedTotal: 50000, fullyReturned: false, paymentStatus: "paid", paidTotal: 110000, refundDue: 50000 });
+    // online_staff không hoàn tiền thực; kế toán hoàn (finance.write)
+    expect((await post("online_staff", o.id, "refund")).status).toBe(403);
+    const rf1 = await post("accountant", o.id, "refund");
+    expect(rf1.body).toMatchObject({ paymentStatus: "partially_refunded", paidTotal: 60000, refundDue: 0, result: { refund: 50000 } });
+    expect((await post("accountant", o.id, "refund")).status).toBe(409);
     expect(d1.returns).toHaveLength(1);
     expect((await db().prepare(`SELECT COALESCE(SUM(points),0) s FROM loyalty_ledger WHERE order_id=? AND kind='reverse'`).bind(o.id).first<any>()).s).toBe(-9); // floor(20 × 50.000/110.000)
 
@@ -165,8 +170,9 @@ describe("A-05: trả hàng online sau khi giao = phiếu trả hàng", () => {
     // trả phần còn lại không nhập lại kho (hỏng) → trả hết = hoàn cả phí giao; hao hụt vào P&L
     const r2 = await post("online_staff", o.id, "return-to-stock", { lines: [{ orderLineId: o.lineId, qty: 1, restock: false, reason: "Dập nát" }] });
     expect(r2.status, JSON.stringify(r2.body)).toBe(200);
-    expect(r2.body.result).toMatchObject({ refund: 60000, fullyReturned: true });
-    expect(r2.body).toMatchObject({ status: "completed", paymentStatus: "refunded", paidTotal: 0, fullyReturned: true, returnedTotal: 110000 });
+    expect(r2.body.result).toMatchObject({ refund: 0, refundDue: 60000, fullyReturned: true });
+    expect(r2.body).toMatchObject({ status: "completed", fullyReturned: true, returnedTotal: 110000, refundDue: 60000 });
+    expect((await post("accountant", o.id, "refund")).body).toMatchObject({ paymentStatus: "refunded", paidTotal: 0, refundDue: 0 });
     expect(await lot(710)).toBe(19000); // không nhập lại kho
     expect((await db().prepare(`SELECT SUM(amount) s FROM payments WHERE order_id=?`).bind(o.id).first<any>()).s).toBe(0);
     expect((await db().prepare(`SELECT COALESCE(SUM(points),0) s FROM loyalty_ledger WHERE order_id=? AND kind='reverse'`).bind(o.id).first<any>()).s).toBe(-20);

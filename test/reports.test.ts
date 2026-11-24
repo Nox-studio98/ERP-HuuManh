@@ -11,6 +11,16 @@ beforeAll(async () => {
 
 const today = vnDate();
 
+/** A-16: trả hàng không nhập lại kho của thu ngân cần quản lý duyệt: gửi → duyệt → gửi lại kèm approvalId */
+async function returnWithApproval(orderId: number, body: any) {
+  const first = await api("cashier", "POST", `/api/v1/orders/${orderId}/return`, body);
+  if (first.status !== 409 || first.body.error.code !== "approval_required") return first;
+  const aid = first.body.error.details.approvalId;
+  await api("manager", "POST", `/api/v1/approvals/${aid}/decide`, { decision: "approved" });
+  return api("cashier", "POST", `/api/v1/orders/${orderId}/return`, { ...body, approvalId: aid });
+}
+
+
 describe("reports", () => {
   it("builds P&L for a small scenario", async () => {
     expect((await api("cashier", "POST", "/api/v1/shifts/open", { openingCash: 0 })).status).toBe(201);
@@ -22,7 +32,7 @@ describe("reports", () => {
     await api("cashier", "POST", `/api/v1/orders/${sale.body.id}/return`, {
       lines: [{ orderLineId: lineId, qty: 1, unit: "kg", restock: true, reason: "đổi ý" }], refundMethod: "cash",
     });
-    await api("cashier", "POST", `/api/v1/orders/${sale.body.id}/return`, {
+    await returnWithApproval(sale.body.id, {
       lines: [{ orderLineId: lineId, qty: 0.5, unit: "kg", restock: false, reason: "dập" }], refundMethod: "cash",
     });
     // đơn nháp/huỷ không được tính

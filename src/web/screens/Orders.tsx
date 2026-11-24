@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { get, items, post } from "../api";
+import { ApiError, get, items, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
 import { Receipt, lineName } from "../components/Receipt";
 import { toast } from "../components/toast";
@@ -75,17 +75,24 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
   );
 }
 
+const REASON_VI: Record<string, string> = { other_shift: "đơn không thuộc ca đang mở", high_value: "giá trị lớn", no_restock: "không nhập lại kho" };
+
 function ReturnForm({ order, onCancel, onDone }: { order: any; onCancel: () => void; onDone: () => void }) {
   const [q, setQ] = useState<Record<number, number>>({});
   const [restock, setRestock] = useState(true), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   const [method, setMethod] = useState((order.payments?.[0]?.method as string) ?? "cash");
+  const [approval, setApproval] = useState<{ id: number; reasons: string[] } | null>(null);
   const chosen = (order.lines ?? []).filter((l: any) => (q[l.id] ?? 0) > 0);
   const submit = async () => {
     setBusy(true);
     try {
-      await post(`/orders/${order.id}/return`, { lines: chosen.map((l: any) => ({ orderLineId: l.id, qty: q[l.id], unit: l.unit, restock, reason })), refundMethod: method });
+      await post(`/orders/${order.id}/return`, { lines: chosen.map((l: any) => ({ orderLineId: l.id, qty: q[l.id], unit: l.unit, restock, reason })), refundMethod: method, ...(approval ? { approvalId: approval.id } : {}) });
       toast("Đã tạo phiếu trả hàng", "ok"); onDone();
-    } catch {} finally { setBusy(false); }
+    } catch (e) {
+      // A-16: thu ngân trả đơn ca khác / giá trị lớn / không nhập lại kho cần quản lý duyệt, rồi bấm xác nhận lại
+      if (e instanceof ApiError && e.code === "approval_required") setApproval({ id: e.details?.approvalId, reasons: e.details?.reasons ?? [] });
+      else if (e instanceof ApiError && e.code === "approval_invalid") setApproval(null);
+    } finally { setBusy(false); }
   };
   return (
     <div className="stack">
@@ -99,6 +106,7 @@ function ReturnForm({ order, onCancel, onDone }: { order: any; onCancel: () => v
       <label className="row" style={{ minHeight: 44 }}><input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} style={{ width: 22, height: 22 }} /> <span>Nhập lại kho (hàng còn bán được)</span></label>
       {!restock && <div className="hint">Không nhập lại kho: ghi nhận hao hụt.</div>}
       <Select label="Hoàn tiền bằng" value={method} onChange={(e) => setMethod(e.target.value)}>{["cash", "transfer", "qr", "card"].map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}</Select>
+      {approval && <Banner tone="info">Trả hàng này cần quản lý duyệt ({approval.reasons.map((r) => REASON_VI[r] ?? r).join(", ")}). Đã gửi yêu cầu duyệt #{approval.id}; khi quản lý duyệt xong, bấm “Xác nhận trả hàng” lại.</Banner>}
       <TextArea label="Lý do trả hàng" value={reason} onChange={(e) => setReason(e.target.value)} />
       <div className="row"><Button variant="ghost" onClick={onCancel}>Quay lại</Button><Button className="grow" loading={busy} disabled={!chosen.length || !reason.trim()} onClick={submit}>Xác nhận trả hàng</Button></div>
     </div>
@@ -109,7 +117,7 @@ function VoidForm({ order, onCancel, onDone }: { order: any; onCancel: () => voi
   const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   return (
     <div className="stack">
-      <Banner>Huỷ đơn sẽ hoàn kho đúng lô và ghi nhật ký. Chỉ huỷ được đơn trong ca đang mở (đơn ca đã chốt cần quản lý).</Banner>
+      <Banner>Huỷ đơn sẽ hoàn kho đúng lô và ghi nhật ký. Chỉ huỷ được đơn trong ca đang mở (đơn ca đã chốt chỉ quản lý huỷ, và tiền mặt hoàn trả khách được tính vào két của CA ĐANG MỞ của người huỷ). Đơn đặt trước đã giao không huỷ được — hãy dùng “Trả hàng”.</Banner>
       <TextArea label="Lý do huỷ đơn" value={reason} onChange={(e) => setReason(e.target.value)} />
       <div className="row"><Button variant="ghost" onClick={onCancel}>Quay lại</Button><Button variant="danger" className="grow" loading={busy} disabled={!reason.trim()} onClick={async () => { setBusy(true); try { await post(`/orders/${order.id}/void`, { reason }); toast("Đã huỷ đơn", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>Huỷ đơn {order.code}</Button></div>
     </div>

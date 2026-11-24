@@ -51,9 +51,10 @@ describe("calculatePayslip", () => {
     // đơn giá giờ = 10.400.000/26/8 = 50.000
     // thường 120' ×1,5 = 50.000×2×1,5 = 150.000; cuối tuần 60' ×2 = 100.000; lễ 180' ×3 = 450.000 → 700.000
     const days = work(26);
-    days[0] = day({ overtimeMinutes: 120, overtimeMultiplierBp: S.otWeekdayBp });
-    days[1] = day({ overtimeMinutes: 60, overtimeMultiplierBp: S.otWeekendBp });
-    days[2] = day({ overtimeMinutes: 180, overtimeMultiplierBp: S.otHolidayBp });
+    // workedMinutes gồm cả giờ tăng ca (C-03): ca 480' + OT
+    days[0] = day({ workedMinutes: 600, overtimeMinutes: 120, overtimeMultiplierBp: S.otWeekdayBp });
+    days[1] = day({ workedMinutes: 540, overtimeMinutes: 60, overtimeMultiplierBp: S.otWeekendBp });
+    days[2] = day({ workedMinutes: 660, overtimeMinutes: 180, overtimeMultiplierBp: S.otHolidayBp });
     const p = calculatePayslip(base({ days }));
     expect(p.overtimePay).toBe(700_000);
     expect(p.gross).toBe(11_100_000);
@@ -139,7 +140,7 @@ describe("calculatePayslip", () => {
     // lương 20,8tr → đơn giá giờ 100.000; tăng ca ngày thường 120' ×1,5 = 300.000, phần chênh 100.000 miễn thuế
     // gross 21.100.000; taxable = 21,1 − 0,1 − 15,5 = 5.500.000 → 275.000
     const days = work(26);
-    days[0] = day({ overtimeMinutes: 120, overtimeMultiplierBp: S.otWeekdayBp });
+    days[0] = day({ workedMinutes: 600, overtimeMinutes: 120, overtimeMultiplierBp: S.otWeekdayBp });
     const p = calculatePayslip(base({ emp: { baseSalary: 20_800_000 }, days }));
     expect(p.overtimePay).toBe(300_000);
     expect(p.gross).toBe(21_100_000);

@@ -66,7 +66,11 @@ export function transitionStmts(
   opts: { note?: string; internalNote?: string; extraSet?: string; extraBinds?: unknown[] } = {},
 ): D1PreparedStatement[] {
   assertTransition(from, to);
-  const completed = to === "completed" ? `, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')` : "";
+  let completed = to === "completed" ? `, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')` : "";
+  // A-14: huỷ (khách tự huỷ ở shop, cron…) không tự hoàn tiền — ghi nghĩa vụ hoàn = tiền đã thu ròng; kế toán hoàn qua /refund.
+  // Luồng nhân viên (cancelOrder) tự đặt refund_due (trừ phí giao theo chính sách).
+  if (to === "cancelled" && !opts.extraSet?.includes("refund_due"))
+    completed += `, refund_due = MAX(0, COALESCE((SELECT SUM(amount) FROM payments WHERE order_id = ?2 AND status = 'confirmed'), 0))`;
   return [
     // Chốt chặn đồng thời: nếu trạng thái hiện tại ≠ from thì chèn vào bảng guard bị lỗi CHECK → cả batch rollback.
     db
