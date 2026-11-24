@@ -1,0 +1,11 @@
+import { createRequire } from "node:module";
+const { chromium } = createRequire(import.meta.url)("playwright");
+const b = await chromium.launch();
+const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+const page = await ctx.newPage();
+await page.goto("http://localhost:8802/");
+await page.getByLabel("Tên đăng nhập").fill("chu"); await page.getByLabel("Mật khẩu").fill("ChuCuaHang-2026");
+await page.getByRole("button", { name: "Đăng nhập" }).click(); await page.locator("main#main").waitFor();
+await page.goto("http://localhost:8802" + process.argv[2]); await page.locator("main#main").waitFor(); await page.waitForTimeout(800);
+console.log(await page.evaluate(() => { const out=[]; document.querySelectorAll("main *").forEach(e => { const r=e.getBoundingClientRect(); if (r.width>0 && r.right>392) out.push(e.tagName+"."+(e.className||"")+" "+Math.round(r.right)+" "+(e.textContent||"").slice(0,30)); }); return out.slice(0,12).join("\n") + "\nSW "+document.documentElement.scrollWidth; }));
+await b.close();

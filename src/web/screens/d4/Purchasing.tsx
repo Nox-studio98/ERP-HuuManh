@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { PageHeader } from "../../components/list";
+import { ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, EmptyState, Input, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -26,11 +26,13 @@ export default function Purchasing() {
   const [ps, setPs] = useState<{ id: number; name: string } | null>(null);
   const [pick, setPick] = useState(false);
 
+  const [qs, setQs] = useState("");
+  const shown = useMemo(() => (sug.data ?? []).filter((r) => !qs.trim() || r.name.toLowerCase().includes(qs.trim().toLowerCase())), [sug.data, qs]);
   const groups = useMemo(() => {
     const m = new Map<number, { name: string; rows: Sug[] }>();
-    for (const r of sug.data ?? []) { const g = m.get(r.supplierId) ?? { name: r.supplierName, rows: [] }; g.rows.push(r); m.set(r.supplierId, g); }
+    for (const r of shown) { const g = m.get(r.supplierId) ?? { name: r.supplierName, rows: [] }; g.rows.push(r); m.set(r.supplierId, g); }
     return [...m.entries()];
-  }, [sug.data]);
+  }, [shown]);
   const factor = (r: Sug) => (r.orderQty > 0 ? r.suggestedMilli / r.orderQty : 1000);
   const qtyOf = (r: Sug) => qty[r.productId] ?? r.orderQty;
   const toggle = (id: number) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -52,14 +54,25 @@ export default function Purchasing() {
   const low = (sug.data ?? []).filter((r) => r.daysCover != null && r.daysCover < r.leadTimeDays).length;
   return (
     <div className="stack d4">
-      <PageHeader actions={<Button size="sm" variant="soft" onClick={() => setPick(true)}>NCC theo sản phẩm</Button>} />
-      <div className="tiles"><Tile label="Mặt hàng cần đặt" value={needCount} /><Tile label="Sắp hết trước khi hàng về" value={low} tone={low ? "danger" : undefined} /><Tile label="Đang chọn" value={sel.size} /><Tile label="Nhà cung cấp" value={groups.length} /></div>
-      <div className="grid2">
-        <Select label="Nhà cung cấp" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}><option value="">Tất cả</option>{(sup.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
-        <label className="row" style={{ alignSelf: "flex-end", minHeight: 44 }}><input type="checkbox" checked={needed} onChange={(e) => setNeeded(e.target.checked)} />Chỉ hàng cần đặt</label>
-      </div>
+      <PageHeader compact subtitle="Đề xuất đặt hàng theo tốc độ bán, tồn khả dụng và thời gian giao của từng nhà cung cấp"
+        actions={<>
+          <ExportButton filename="goi-y-dat-hang" rows={shown} columns={[
+            { label: "Sản phẩm", value: (r) => r.name }, { label: "Nhà cung cấp", value: (r) => r.supplierName }, { label: "Tồn", value: (r) => r.onHandMilli / 1000 }, { label: "Giữ", value: (r) => r.reservedMilli / 1000 },
+            { label: "Bán/ngày", value: (r) => r.avgDailySalesMilli / 1000 }, { label: "Còn đủ (ngày)", value: (r) => r.daysCover }, { label: "Đề xuất", value: (r) => r.orderQty }, { label: "Đơn vị đặt", value: (r) => unitLabel(r.orderUnit) }, { label: "Giá nhập gần nhất", value: (r) => r.lastCost },
+          ]} />
+          <Button size="sm" variant="soft" onClick={() => setPick(true)}>NCC theo sản phẩm</Button>
+        </>} />
+      <KpiRow items={[
+        { label: "Mặt hàng cần đặt", value: needCount }, { label: "Sắp hết trước khi hàng về", value: low, tone: low ? "danger" : undefined },
+        { label: "Đang chọn", value: sel.size }, { label: "Nhà cung cấp", value: groups.length },
+      ]} />
+      <FilterBar dirty={!!(supplierId || qs || !needed)} onReset={() => { setSupplierId(""); setQs(""); setNeeded(true); }} activeCount={[supplierId].filter(Boolean).length}
+        advanced={<FilterSelect label="Nhà cung cấp" value={supplierId} onChange={setSupplierId} options={(sup.data ?? []).map((s) => ({ v: String(s.id), label: s.name }))} />}>
+        <SearchInput value={qs} onSearch={setQs} placeholder="Tên sản phẩm…" label="Tìm sản phẩm" />
+        <label className="row" style={{ minHeight: 40 }}><input type="checkbox" checked={needed} onChange={(e) => setNeeded(e.target.checked)} />Chỉ hàng cần đặt</label>
+      </FilterBar>
       {made && <Banner tone="info">Đã tạo phiếu nhập nháp <b>{made.code}</b> ({money(made.total)}). <Button size="sm" variant="soft" onClick={() => navigate("/inventory")}>Mở trong Kho</Button> — kiểm tra rồi ghi sổ khi hàng về.</Banner>}
-      {sug.loading ? <Spinner /> : groups.length === 0 ? <EmptyState title="Không có mặt hàng cần đặt" hint="Hàng đủ tồn theo tốc độ bán gần đây, hoặc chưa gắn nhà cung cấp cho sản phẩm." /> : groups.map(([id, g]) => {
+      {sug.loading ? <Spinner /> : groups.length === 0 ? <Card><EmptyState title="Không có mặt hàng cần đặt" hint="Hàng đủ tồn theo tốc độ bán gần đây, hoặc chưa gắn nhà cung cấp cho sản phẩm." action={<div className="row wrap" style={{ justifyContent: "center" }}>{(!needed || supplierId || qs) && <Button variant="soft" onClick={() => { setNeeded(true); setSupplierId(""); setQs(""); }}>Đặt lại bộ lọc</Button>}{needed && <Button variant="ghost" onClick={() => setNeeded(false)}>Xem tất cả mặt hàng</Button>}<Button variant="ghost" onClick={() => setPick(true)}>Cài NCC theo sản phẩm</Button></div>} /></Card> : groups.map(([id, g]) => {
         const chosen = g.rows.filter((r) => sel.has(r.productId));
         return (
           <Card key={id} title={g.name} actions={<span className="small muted">{g.rows.length} mặt hàng</span>}>

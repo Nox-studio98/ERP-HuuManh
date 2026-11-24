@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { get, items, post, put } from "../api";
-import { Badge, Button, Card, DataTable, DecInput, Input, Segmented, Select, Sheet, Spinner, useAsync, useDebounced } from "../components/ui";
+import { Badge, Button, Card, DataTable, DecInput, EmptyState, Input, Segmented, Select, Sheet, Spinner, useAsync, useDebounced } from "../components/ui";
+import { ExportButton, FilterBar, FilterSelect, PageHeader, SearchInput, usePagedList } from "../components/list";
 import { Barcode } from "../components/Barcode";
 import { toast } from "../components/toast";
 import { UNIT_OPTIONS, money, qtyText, unitLabel } from "../format";
@@ -12,34 +13,61 @@ type UnitRow = { unit: string; factor: number | ""; barcode: string };
 export default function Products() {
   const can = useCan();
   const [q, setQ] = useState(() => new URLSearchParams(location.search).get("q") ?? "");
-  const dq = useDebounced(q);
-  const list = useAsync(() => get("/products", { q: dq, limit: 100 }).then((r) => items<Product>(r)), [dq]);
+  const [group, setGroup] = useState(""), [active, setActive] = useState(""), [stock, setStock] = useState("");
+  const groups = useAsync(() => get("/product-groups", undefined, { silent: true }).then((r) => items<{ id: number; name: string }>(r)).catch(() => [] as { id: number; name: string }[]), []);
+  const list = usePagedList<Product>("/products", { q, groupId: group, active, limit: 100 }, [q, group, active]);
   const [edit, setEdit] = useState<Product | "new" | null>(null);
   const [label, setLabel] = useState<Product | null>(null);
+  const costOk = can("prices.view_cost");
+  const gname = (id?: number | null) => (id ? groups.data?.find((g) => g.id === id)?.name ?? `#${id}` : "—");
+  const low = (p: Product) => p.minStockMilli != null && p.minStockMilli > 0 && (p.availableMilli ?? 0) < p.minStockMilli;
+  const rows = list.rows.filter((p) => (stock === "out" ? (p.availableMilli ?? 0) <= 0 : stock === "in" ? (p.availableMilli ?? 0) > 0 : stock === "low" ? low(p) : true));
+  const dirty = !!(q || group || active || stock);
+  const reset = () => { setQ(""); setGroup(""); setActive(""); setStock(""); };
+  const rowsAll = list.rows;
   return (
     <div className="stack">
-      <div className="row" style={{ alignItems: "flex-end" }}>
-        <div className="grow"><Input label="Tìm hàng hoá" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên, SKU, mã vạch…" /></div>
-        {can("products.write") && <Button onClick={() => setEdit("new")}>+ Thêm</Button>}
-      </div>
+      <PageHeader compact subtitle={`${rowsAll.length}${list.hasMore ? "+" : ""} mặt hàng${stock ? ` · ${rows.length} khớp lọc tồn` : ""}`}
+        actions={<>
+          <ExportButton filename="hang-hoa" rows={rows} columns={[
+            { label: "SKU", value: (p) => p.sku }, { label: "Tên", value: (p) => p.name }, { label: "Nhóm hàng", value: (p) => gname(p.groupId) }, { label: "Đơn vị", value: (p) => unitLabel(p.baseUnit) },
+            { label: "Tồn", value: (p) => (p.availableMilli ?? 0) / 1000 }, { label: "Giá bán", value: (p) => priceOf(p) || "" },
+            ...(costOk ? [{ label: "Giá vốn", value: (p: Product) => p.avgCost ?? "" }] : []),
+            { label: "Đang bán", value: (p) => (p.active === false || p.active === 0 ? "Không" : "Có") },
+          ]} />
+          {can("products.write") && <Button onClick={() => setEdit("new")}>+ Thêm hàng hoá</Button>}
+        </>} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[group, active, stock].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Nhóm hàng" value={group} onChange={setGroup} options={(groups.data ?? []).map((g) => ({ v: String(g.id), label: g.name }))} />
+        <FilterSelect label="Đang bán" value={active} onChange={setActive} allLabel="Tất cả" options={[{ v: "1", label: "Đang bán" }, { v: "0", label: "Ngưng bán" }]} />
+        <FilterSelect label="Tồn kho" value={stock} onChange={setStock} options={[{ v: "in", label: "Còn hàng" }, { v: "low", label: "Dưới tối thiểu" }, { v: "out", label: "Hết hàng" }]} />
+      </>}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên, SKU, mã vạch…" label="Tìm hàng hoá" />
+      </FilterBar>
       {list.loading ? <Spinner /> : (
-        <DataTable rows={list.data ?? []} rowKey={(p) => p.id} onRowClick={(p) => (can("products.write") ? setEdit(p) : setLabel(p))} empty="Chưa có hàng hoá" cols={[
-          { key: "n", label: "Tên", title: true, render: (p) => <><b>{p.name}</b> {!p.active && p.active !== undefined && <Badge>Ngưng bán</Badge>}</> },
-          { key: "s", label: "SKU", render: (p) => <span className="num">{p.sku}</span> },
-          { key: "u", label: "Đơn vị", render: (p) => <>{unitLabel(p.baseUnit)}{(p.units ?? []).filter((u) => u.unit !== p.baseUnit).map((u) => ` · ${unitLabel(u.unit)}=${u.factorMilli / 1000}${unitLabel(p.baseUnit)}`)}</> },
-          { key: "st", label: "Tồn", right: true, render: (p) => qtyText(p.availableMilli, p.baseUnit) },
-          { key: "p", label: "Giá bán", right: true, render: (p) => (priceOf(p) ? money(priceOf(p)) : "—") },
-          { key: "l", label: "", render: (p) => <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setLabel(p); }}>Tem</Button> },
-        ]} />
+        <DataTable rows={rows} rowKey={(p) => p.id} onRowClick={(p) => (can("products.write") ? setEdit(p) : setLabel(p))} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+          footer={`Đang hiển thị ${rows.length} mặt hàng`}
+          emptyState={<EmptyState title={dirty ? "Không có hàng hoá nào khớp bộ lọc" : "Chưa có hàng hoá"} hint={dirty ? "Thử bỏ bớt bộ lọc." : "Thêm hàng hoá để bắt đầu bán và quản lý tồn kho."}
+            action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{can("products.write") && <Button onClick={() => setEdit("new")}>+ Thêm hàng hoá</Button>}</div>} />}
+          cols={[
+            { key: "n", label: "Tên", title: true, sort: (p) => p.name, render: (p) => <><b>{p.name}</b> {!p.active && p.active !== undefined && <Badge>Ngưng bán</Badge>}</> },
+            { key: "s", label: "SKU", sort: (p) => p.sku, render: (p) => <span className="num">{p.sku}</span> },
+            { key: "g", label: "Nhóm hàng", hideBelow: 1280, sort: (p) => gname(p.groupId), render: (p) => gname(p.groupId) },
+            { key: "u", label: "Đơn vị", hideBelow: 1440, render: (p) => <>{unitLabel(p.baseUnit)}{(p.units ?? []).filter((u) => u.unit !== p.baseUnit).map((u) => ` · ${unitLabel(u.unit)}=${u.factorMilli / 1000}${unitLabel(p.baseUnit)}`)}</> },
+            { key: "st", label: "Tồn", num: true, sort: (p) => p.availableMilli ?? 0, render: (p) => <span style={{ color: low(p) ? "var(--warn)" : undefined }}>{qtyText(p.availableMilli, p.baseUnit)}{low(p) ? " ⚠" : ""}</span> },
+            ...(costOk ? [{ key: "c", label: "Giá vốn", num: true as const, hideBelow: 1024 as const, sort: (p: Product) => p.avgCost ?? 0, render: (p: Product) => (p.avgCost ? money(p.avgCost) : "—") }] : []),
+            { key: "p", label: "Giá bán", num: true, sort: (p) => priceOf(p), render: (p) => (priceOf(p) ? money(priceOf(p)) : "—") },
+            { key: "l", label: "", render: (p) => <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setLabel(p); }}>Tem</Button> },
+          ]} />
       )}
-      {edit && <ProductForm p={edit === "new" ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); }} />}
+      {edit && <ProductForm p={edit === "new" ? null : edit} groups={groups.data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); }} />}
       {label && <LabelSheet p={label} onClose={() => setLabel(null)} />}
     </div>
   );
 }
 
-function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ sku: p?.sku ?? "", name: p?.name ?? "", baseUnit: p?.baseUnit ?? "kg", sellByWeight: !!p?.sellByWeight, origin: p?.origin ?? "", barcode: p?.barcode ?? "", shelfLifeDays: p?.shelfLifeDays ?? ("" as number | ""), minStock: p?.minStockMilli != null ? p.minStockMilli / 1000 : ("" as number | "") });
+function ProductForm({ p, groups, onClose, onSaved }: { p: Product | null; groups: { id: number; name: string }[]; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ groupId: p?.groupId ? String(p.groupId) : "", sku: p?.sku ?? "", name: p?.name ?? "", baseUnit: p?.baseUnit ?? "kg", sellByWeight: !!p?.sellByWeight, origin: p?.origin ?? "", barcode: p?.barcode ?? "", shelfLifeDays: p?.shelfLifeDays ?? ("" as number | ""), minStock: p?.minStockMilli != null ? p.minStockMilli / 1000 : ("" as number | "") });
   const [units, setUnits] = useState<UnitRow[]>((p?.units ?? []).filter((u) => u.unit !== p?.baseUnit).map((u) => ({ unit: u.unit, factor: u.factorMilli / 1000, barcode: u.barcode ?? "" })));
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"info" | "online">("info");
@@ -49,7 +77,7 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
   const save = async () => {
     setBusy(true);
     const body: any = {
-      sku: f.sku.trim(), name: f.name.trim(), baseUnit: f.baseUnit, sellByWeight: f.sellByWeight,
+      ...(f.groupId ? { groupId: Number(f.groupId) } : {}), sku: f.sku.trim(), name: f.name.trim(), baseUnit: f.baseUnit, sellByWeight: f.sellByWeight,
       ...(f.origin ? { origin: f.origin } : {}), ...(f.barcode ? { barcode: f.barcode } : {}),
       ...(typeof f.shelfLifeDays === "number" ? { shelfLifeDays: f.shelfLifeDays } : {}), ...(typeof f.minStock === "number" ? { minStockMilli: Math.round(f.minStock * 1000) } : {}),
       units: [{ unit: f.baseUnit, factorMilli: 1000 }, ...units.filter((u) => u.unit && Number(u.factor) > 0).map((u) => ({ unit: u.unit, factorMilli: Math.round(Number(u.factor) * 1000), ...(u.barcode ? { barcode: u.barcode } : {}) }))],
@@ -65,6 +93,7 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
         {p && <Segmented value={tab} onChange={setTab} options={[{ v: "info", label: "Thông tin" }, { v: "online", label: "Bán online" }]} />}
         {tab === "online" && p ? <ProductOnline productId={p.id} /> : <>
         <div className="grid2"><Input label="SKU" value={f.sku} onChange={(e) => set("sku", e.target.value)} /><Input label="Tên hàng" value={f.name} onChange={(e) => set("name", e.target.value)} /></div>
+        {groups.length > 0 && <Select label="Nhóm hàng" value={f.groupId} onChange={(e) => set("groupId", e.target.value)}><option value="">— Chưa phân nhóm —</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>}
         <div className="grid2">
           <Select label="Đơn vị chính" value={f.baseUnit} onChange={(e) => set("baseUnit", e.target.value)}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{unitLabel(u)}</option>)}</Select>
           <Input label="Xuất xứ" value={f.origin} onChange={(e) => set("origin", e.target.value)} />

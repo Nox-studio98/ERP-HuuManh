@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { ApiError, get, items, post } from "../../api";
+import { PageHeader, SearchInput, useMedia } from "../../components/list";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Segmented, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { Scanner } from "../../components/Scanner";
 import { toast } from "../../components/toast";
@@ -13,15 +14,27 @@ export default function Delivery() {
   return m ? <DeliveryDetail id={Number(m[1])} /> : <DeliveryList />;
 }
 
-/** Danh sách việc cần làm của thủ kho: đơn cần soạn / đang soạn / đang giao */
+/** Danh sách việc cần làm của thủ kho: đơn cần soạn / đang soạn / đang giao. ≥1024px: kanban 3 cột; nhỏ hơn: 3 tab. */
+type Col3 = "confirmed" | "preparing" | "shipping";
+const COLS: { v: Col3; label: string; hint: string; cta: string }[] = [
+  { v: "confirmed", label: "Cần soạn", hint: "Không có đơn cần soạn", cta: "Bấm để soạn" },
+  { v: "preparing", label: "Đang soạn", hint: "Không có phiếu đang soạn", cta: "Mở phiếu" },
+  { v: "shipping", label: "Đang giao", hint: "Không có phiếu đang giao", cta: "Mở phiếu" },
+];
 function DeliveryList() {
-  const [tab, setTab] = useState<"confirmed" | "preparing" | "shipping">("confirmed");
-  const l = useAsync(() => get("/b2b/orders", { status: tab, limit: 100 }).then((r) => items<any>(r)), [tab]);
+  const [tab, setTab] = useState<Col3>("confirmed");
+  const desktop = useMedia("(min-width: 1024px)");
+  const [q, setQ] = useState("");
+  const l1 = useAsync(() => get("/b2b/orders", { status: "confirmed", limit: 100 }).then((r) => items<any>(r)), []);
+  const l2 = useAsync(() => get("/b2b/orders", { status: "preparing", limit: 100 }).then((r) => items<any>(r)), []);
+  const l3 = useAsync(() => get("/b2b/orders", { status: "shipping", limit: 100 }).then((r) => items<any>(r)), []);
+  const lists: Record<Col3, typeof l1> = { confirmed: l1, preparing: l2, shipping: l3 };
+  const data = (c: Col3) => (lists[c].data ?? []).filter((o) => !q.trim() || `${o.code} ${o.customerName}`.toLowerCase().includes(q.trim().toLowerCase()));
   const [busy, setBusy] = useState<number | null>(null);
-  const open = async (o: any) => {
+  const open = async (o: any, col: Col3) => {
     setBusy(o.id);
     try {
-      if (tab === "confirmed") { const r = await post(`/b2b/orders/${o.id}/pick`); toast("Đã tạo phiếu soạn", "ok"); navigate(`/deliveries/${r.deliveryId}`); }
+      if (col === "confirmed") { const r = await post(`/b2b/orders/${o.id}/pick`); toast("Đã tạo phiếu soạn", "ok"); navigate(`/deliveries/${r.deliveryId}`); }
       else {
         const d = await get(`/b2b/orders/${o.id}`);
         const dl = [...d.deliveries].reverse().find((x: any) => ["picking", "ready", "shipping"].includes(x.status));
@@ -29,19 +42,34 @@ function DeliveryList() {
       }
     } catch { /* toast */ } finally { setBusy(null); }
   };
+  const card = (o: any, col: Col3, cta: string) => (
+    <button key={o.id} className={desktop ? "kanban-card" : "dt-card"} disabled={busy === o.id} onClick={() => open(o, col)} style={desktop ? undefined : { minHeight: 76 }}>
+      <div className="row between"><b>{o.code}</b><span className="money">{money(o.total)}</span></div>
+      <div>{o.customerName}</div>
+      <div className="row between small muted"><span>Giao {ymd(o.deliveryDate)}{o.addressLabel ? ` · ${o.addressLabel}` : ""}</span><Badge tone="info">{cta}</Badge></div>
+    </button>
+  );
+  const loading = l1.loading || l2.loading || l3.loading;
+  const reload = () => { l1.reload(); l2.reload(); l3.reload(); };
+  const total = COLS.reduce((a, c) => a + (lists[c.v].data?.length ?? 0), 0);
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "confirmed", label: "Cần soạn" }, { v: "preparing", label: "Đang soạn" }, { v: "shipping", label: "Đang giao" }]} />
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title={tab === "confirmed" ? "Không có đơn cần soạn" : "Không có phiếu"} hint="Đơn sỉ đã giữ hàng sẽ hiện ở đây." /> : (
-        <div className="stack">
-          {(l.data ?? []).map((o) => (
-            <button key={o.id} className="dt-card" disabled={busy === o.id} onClick={() => open(o)} style={{ minHeight: 76 }}>
-              <div className="row between"><b>{o.code}</b><span className="money">{money(o.total)}</span></div>
-              <div>{o.customerName}</div>
-              <div className="row between small muted"><span>Giao {ymd(o.deliveryDate)} · {o.addressLabel ?? ""}</span><Badge tone="info">{tab === "confirmed" ? "Bấm để soạn" : "Mở phiếu"}</Badge></div>
-            </button>
-          ))}
-        </div>
+      <PageHeader compact subtitle="Việc cần làm của thủ kho: soạn hàng theo lô rồi giao" actions={<Button size="sm" variant="ghost" onClick={reload}>Tải lại</Button>} />
+      <div className="filterbar card flat"><SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên khách…" label="Tìm phiếu" />{q && <Button variant="ghost" size="sm" onClick={() => setQ("")}>Xoá lọc</Button>}</div>
+      {!desktop && <Segmented value={tab} onChange={setTab} options={COLS.map((c) => ({ v: c.v, label: `${c.label}${lists[c.v].data ? ` (${lists[c.v].data!.length})` : ""}` }))} />}
+      {loading ? <Spinner /> : desktop ? (
+        total === 0 ? <Card><EmptyState title="Không có đơn nào cần soạn hoặc giao" hint="Đơn sỉ đã giữ hàng sẽ hiện ở đây." action={<Button onClick={() => navigate("/b2b-orders")}>Mở đơn sỉ</Button>} /></Card> : (
+          <div className="kanban">
+            {COLS.map((c) => (
+              <section key={c.v} className="kanban-col" aria-label={c.label}>
+                <h3><span>{c.label}</span><Badge tone={c.v === "confirmed" && data(c.v).length ? "warn" : undefined}>{data(c.v).length}</Badge></h3>
+                {data(c.v).length ? data(c.v).map((o) => card(o, c.v, c.cta)) : <div className="kanban-empty">{c.hint}</div>}
+              </section>
+            ))}
+          </div>
+        )
+      ) : !data(tab).length ? <EmptyState title={COLS.find((c) => c.v === tab)!.hint} hint="Đơn sỉ đã giữ hàng sẽ hiện ở đây." /> : (
+        <div className="stack">{data(tab).map((o) => card(o, tab, COLS.find((c) => c.v === tab)!.cta))}</div>
       )}
     </div>
   );

@@ -6,6 +6,8 @@ import { toast } from "../components/toast";
 import { DOC_STATUS, DOC_TYPES, fmtDate, fmtDateTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
 import { useUnitMap } from "../units";
 import { useCan } from "../store";
+import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, rangeOf, usePagedList, type DateRange } from "../components/list";
+import { navigate } from "../router";
 import type { Product } from "./Pos";
 
 const REASONS = [["dap", "Dập"], ["heo", "Héo"], ["het_han", "Hết hạn"], ["hao_can", "Hao cân"], ["khac", "Khác"]];
@@ -20,33 +22,35 @@ export default function Inventory() {
   const [rev, setRev] = useState(0);
   return (
     <div className="stack">
-      <div className="row wrap">
-        <div className="grow" style={{ minWidth: 260 }}><Segmented value={tab} onChange={setTab} options={[{ v: "alerts", label: "Cảnh báo" }, { v: "docs", label: "Chứng từ" }, { v: "trace", label: "Truy vết lô" }]} /></div>
-      </div>
-      {can("inventory.write") && (
-        <div className="row wrap">
-          <Button onClick={() => setEditor({ type: "receipt" })}>+ Nhập hàng</Button>
-          <Button variant="soft" onClick={() => setEditor({ type: "waste" })}>Huỷ hàng</Button>
-          <Button variant="soft" onClick={() => setEditor({ type: "count" })}>Kiểm kê</Button>
-          <Button variant="soft" onClick={() => setEditor({ type: "transfer" })}>Chuyển kho</Button>
-        </div>
-      )}
-      {tab === "alerts" && <Alerts key={rev} />}
-      {tab === "docs" && <Docs key={rev} onOpen={(id) => setEditor({ id })} />}
+      <PageHeader compact subtitle="Tồn kho, chứng từ nhập – xuất – kiểm kê và truy vết lô"
+        actions={can("inventory.write") && (
+          <>
+            <Button onClick={() => setEditor({ type: "receipt" })}>+ Nhập hàng</Button>
+            <Button variant="soft" onClick={() => setEditor({ type: "waste" })}>Huỷ hàng</Button>
+            <Button variant="soft" onClick={() => setEditor({ type: "count" })}>Kiểm kê</Button>
+            <Button variant="soft" onClick={() => setEditor({ type: "transfer" })}>Chuyển kho</Button>
+          </>
+        )} />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "alerts", label: "Cảnh báo" }, { v: "docs", label: "Chứng từ" }, { v: "trace", label: "Truy vết lô" }]} />
+      {tab === "alerts" && <Alerts key={rev} onGoDocs={() => setTab("docs")} />}
+      {tab === "docs" && <Docs key={rev} onOpen={(id) => setEditor({ id })} onCreate={() => setEditor({ type: "receipt" })} />}
       {tab === "trace" && <Trace />}
       {editor && <DocEditor {...editor} onClose={() => { setEditor(null); setRev((r) => r + 1); }} />}
     </div>
   );
 }
 
-function Alerts() {
+function Alerts({ onGoDocs }: { onGoDocs: () => void }) {
   const a = useAsync(() => get("/stock/alerts"), []);
   const notes = useAsync(() => get("/notifications", { unread: 1 }).catch(() => ({ items: [] })), []);
   const pmap = useUnitMap();
+  const can = useCan();
   const bu = (x: any) => pmap?.get(x.productId ?? x.id)?.baseUnit ?? x.baseUnit;
   if (a.loading) return <Spinner />;
   const d = a.data ?? {};
   const low = d.lowStock ?? [], soon = d.expiringSoon ?? [], exp = d.expired ?? [], quar = d.quarantined ?? [];
+  const total = low.length + soon.length + exp.length + quar.length;
+  const go = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   return (
     <div className="stack">
       {(notes.data?.items ?? []).map((n: any) => (
@@ -57,47 +61,78 @@ function Alerts() {
           </div>
         </div>
       ))}
-      <div className="kpis">
-        <div className="kpi"><div className="l">Sắp hết hàng</div><div className="v" style={{ color: low.length ? "var(--warn)" : undefined }}>{low.length}</div></div>
-        <div className="kpi"><div className="l">Sắp hết hạn (≤2 ngày)</div><div className="v" style={{ color: soon.length ? "var(--warn)" : undefined }}>{soon.length}</div></div>
-        <div className="kpi"><div className="l">Đã hết hạn</div><div className="v" style={{ color: exp.length ? "var(--danger)" : undefined }}>{exp.length}</div></div>
-      </div>
+      <KpiRow items={[
+        { label: "Sắp hết hàng", value: low.length, tone: low.length ? "warn" : undefined, onClick: () => go("al-low") },
+        { label: "Sắp hết hạn (≤2 ngày)", value: soon.length, tone: soon.length ? "warn" : undefined, onClick: () => go("al-soon") },
+        { label: "Đã hết hạn", value: exp.length, tone: exp.length ? "danger" : undefined, onClick: () => go("al-exp") },
+        { label: "Đang cách ly", value: quar.length, tone: quar.length ? "danger" : undefined, onClick: () => go("al-quar") },
+      ]} />
       {exp.length > 0 && <Banner tone="danger">Có {exp.length} lô đã hết hạn — chỉ được xuất bằng phiếu huỷ hàng.</Banner>}
-      <Card title="Tồn thấp"><DataTable rows={low} rowKey={(x: any) => x.productId ?? x.id} empty="Không có mặt hàng dưới mức tồn tối thiểu" cols={[
-        { key: "n", label: "Hàng", title: true, render: (x: any) => pname(x) },
-        { key: "a", label: "Tồn", right: true, render: (x: any) => qtyText(x.onHandMilli, bu(x)) },
-        { key: "m", label: "Tối thiểu", right: true, render: (x: any) => qtyText(x.minStockMilli, bu(x)) },
-      ]} /></Card>
-      <div className="grid3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", alignItems: "start" }}>
-        {[["Sắp hết hạn", soon, "warn"], ["Đã hết hạn", exp, "danger"], ["Đang cách ly (lô hỏng)", quar, "danger"]].map(([t, rows, tn]: any) => (
-          <Card key={t} title={t}><DataTable rows={rows} rowKey={(x: any) => x.id} empty="Không có lô nào" cols={[
-            { key: "n", label: "Hàng", title: true, render: (x: any) => pname(x) },
+      {total === 0 && (
+        <Card><EmptyState title="Kho đang ổn — không có cảnh báo" hint="Tồn thấp, lô sắp hết hạn, hết hạn hoặc cách ly sẽ hiện ở đây."
+          action={<div className="row wrap" style={{ justifyContent: "center" }}><Button variant="soft" onClick={onGoDocs}>Xem chứng từ kho</Button>{can("inventory.write") && <Button variant="ghost" onClick={() => navigate("/products")}>Xem hàng hoá</Button>}</div>} /></Card>
+      )}
+      <div className="alert-grid">
+        <div id="al-low"><Card title={`Tồn thấp (${low.length})`}><DataTable rows={low} rowKey={(x: any) => x.productId ?? x.id} empty="Không có mặt hàng dưới mức tồn tối thiểu" defaultSort={null} cols={[
+          { key: "n", label: "Hàng", title: true, sort: (x: any) => pname(x), render: (x: any) => pname(x) },
+          { key: "a", label: "Tồn", right: true, sort: (x: any) => x.onHandMilli, render: (x: any) => qtyText(x.onHandMilli, bu(x)) },
+          { key: "m", label: "Tối thiểu", right: true, sort: (x: any) => x.minStockMilli, render: (x: any) => qtyText(x.minStockMilli, bu(x)) },
+        ]} /></Card></div>
+        <div className="stack">
+        {([["al-soon", "Sắp hết hạn", soon, "warn"], ["al-exp", "Đã hết hạn", exp, "danger"], ["al-quar", "Đang cách ly (lô hỏng)", quar, "danger"]] as any[]).map(([id, t, rows, tn]) => (
+          <div id={id} key={t}><Card title={`${t} (${rows.length})`}><DataTable rows={rows} rowKey={(x: any) => x.id} empty="Không có lô nào" cols={[
+            { key: "n", label: "Hàng", title: true, sort: (x: any) => pname(x), render: (x: any) => pname(x) },
             { key: "l", label: "Lô", render: (x: any) => <span className="num">{x.lotCode}</span> },
-            { key: "e", label: t === "Đang cách ly (lô hỏng)" ? "Lý do" : "HSD", render: (x: any) => (t === "Đang cách ly (lô hỏng)" ? <Badge tone={tn}>{x.quarantineReason ?? "Cách ly"}</Badge> : <Badge tone={tn}>{fmtDate(x.expiresAt)}</Badge>) },
-            { key: "q", label: "Còn", right: true, render: (x: any) => qtyText(remain(x), bu(x)) },
-          ]} /></Card>
+            { key: "e", label: id === "al-quar" ? "Lý do" : "HSD", sort: (x: any) => x.expiresAt ?? "", render: (x: any) => (id === "al-quar" ? <Badge tone={tn}>{x.quarantineReason ?? "Cách ly"}</Badge> : <Badge tone={tn}>{fmtDate(x.expiresAt)}</Badge>) },
+            { key: "q", label: "Còn", right: true, sort: (x: any) => remain(x), render: (x: any) => qtyText(remain(x), bu(x)) },
+          ]} /></Card></div>
         ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function Docs({ onOpen }: { onOpen: (id: number) => void }) {
-  const [type, setType] = useState(""), [status, setStatus] = useState("");
-  const d = useAsync(() => get("/stock-docs", { type, status }).then((r) => items<any>(r)), [type, status]);
+function Docs({ onOpen, onCreate }: { onOpen: (id: number) => void; onCreate: () => void }) {
+  const can = useCan();
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [type, setType] = useState(""), [status, setStatus] = useState(""), [q, setQ] = useState("");
+  const list = usePagedList<any>("/stock-docs", { type, status, q, from: range.from, to: range.to, limit: 50 }, [type, status, q, range.from, range.to]);
+  const dirty = !!(type || status || q);
+  const reset = () => { setType(""); setStatus(""); setQ(""); };
+  const rows = list.rows;
+  const posted = rows.filter((x) => x.status === "posted");
   return (
     <div className="stack">
-      <div className="grid2">
-        <Select label="Loại" value={type} onChange={(e) => setType(e.target.value)}><option value="">Tất cả</option>{Object.entries(DOC_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-        <Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option>{Object.entries(DOC_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
-      </div>
-      {d.loading ? <Spinner /> : <DataTable rows={d.data ?? []} rowKey={(x) => x.id} onRowClick={(x) => onOpen(x.id)} empty="Chưa có chứng từ" cols={[
-        { key: "c", label: "Mã", title: true, render: (x) => <b>{x.code}</b> },
-        { key: "t", label: "Loại", render: (x) => DOC_TYPES[x.type] ?? x.type },
-        { key: "s", label: "Trạng thái", render: (x) => <Badge tone={docTone(x.status)}>{DOC_STATUS[x.status] ?? x.status}</Badge> },
-        { key: "d", label: "Ngày", render: (x) => fmtDateTime(x.createdAt) },
-        { key: "a", label: "Giá trị", right: true, render: (x) => money(x.totalAmount) },
-      ]} />}
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[type, status].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Loại" value={type} onChange={setType} options={Object.entries(DOC_TYPES).map(([v, label]) => ({ v, label }))} />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(DOC_STATUS).map(([v, label]) => ({ v, label }))} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["today", "7d", "month", "lastMonth", "custom"]} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã chứng từ…" label="Tìm chứng từ" />
+        <ExportButton className="fb-end" filename={`chung-tu-kho-${range.from}_${range.to}`} rows={rows} columns={[
+          { label: "Mã", value: (x) => x.code }, { label: "Loại", value: (x) => DOC_TYPES[x.type] ?? x.type }, { label: "Trạng thái", value: (x) => DOC_STATUS[x.status] ?? x.status },
+          { label: "Ngày", value: (x) => fmtDateTime(x.createdAt) }, { label: "Giá trị", value: (x) => x.totalAmount },
+        ]} />
+      </FilterBar>
+      <KpiRow cols={3} items={[
+        { label: "Chứng từ đang hiện", value: rows.length, sub: list.hasMore ? "còn nữa — bấm Tải thêm" : undefined },
+        { label: "Chờ duyệt", value: rows.filter((x) => x.status === "pending_approval").length, tone: rows.some((x) => x.status === "pending_approval") ? "warn" : undefined },
+        { label: "Giá trị đã ghi sổ", value: money(posted.reduce((a, x) => a + (x.totalAmount ?? 0), 0)), sub: `${posted.length} phiếu` },
+      ]} />
+      {list.loading ? <Spinner /> : (
+        <DataTable rows={rows} rowKey={(x) => x.id} onRowClick={(x) => onOpen(x.id)} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+          footer={`Đang hiển thị ${rows.length} chứng từ`}
+          emptyState={<EmptyState title={dirty ? "Không có chứng từ nào khớp bộ lọc" : "Chưa có chứng từ trong khoảng này"} hint="Phiếu nhập, huỷ hàng, kiểm kê và chuyển kho sẽ hiện ở đây."
+            action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{can("inventory.write") && <Button onClick={onCreate}>+ Nhập hàng</Button>}<Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button></div>} />}
+          cols={[
+            { key: "c", label: "Mã", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
+            { key: "t", label: "Loại", sort: (x) => DOC_TYPES[x.type] ?? x.type, render: (x) => DOC_TYPES[x.type] ?? x.type },
+            { key: "s", label: "Trạng thái", sort: (x) => x.status, render: (x) => <Badge tone={docTone(x.status)}>{DOC_STATUS[x.status] ?? x.status}</Badge> },
+            { key: "d", label: "Ngày", sort: (x) => x.createdAt, render: (x) => fmtDateTime(x.createdAt) },
+            { key: "a", label: "Giá trị", num: true, sort: (x) => x.totalAmount, render: (x) => <span className="money">{money(x.totalAmount)}</span> },
+          ]} />
+      )}
     </div>
   );
 }
@@ -351,8 +386,10 @@ function Trace() {
   const d = r.data;
   const bu = d ? pmap?.get(d.lot?.productId)?.baseUnit : undefined;
   return (
-    <div className="stack">
+    <div className="trace-grid">
       <Card title="Truy vết lô hàng"><Scanner onCode={setCode} /></Card>
+      <div className="stack">
+      {!code && <Card><EmptyState title="Quét hoặc nhập mã lô để truy vết" hint="Xem lô nhập từ nhà cung cấp nào, đã bán cho đơn nào và các biến động kho." /></Card>}
       {code && (r.loading ? <Spinner /> : d ? (
         <>
           <Card title={`Lô ${d.lot.lotCode} · ${d.lot.productName}`}>
@@ -378,6 +415,7 @@ function Trace() {
           ]} /></Card>
         </>
       ) : <EmptyState title="Không tìm thấy lô" hint="Kiểm tra lại mã lô (dạng L…)." />)}
+      </div>
     </div>
   );
 }

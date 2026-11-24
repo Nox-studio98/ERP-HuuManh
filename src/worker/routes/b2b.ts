@@ -15,7 +15,7 @@ import { kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { getSettingInt } from "../services/settings";
 import { assertStmt } from "../services/guard";
-import { pageParams } from "../services/http";
+import { addVnRange, likeOf, pageParams } from "../services/http";
 import {
   confirmOrderFlow, createB2bOrder, loadCustomerForOrder, loadOrderDetail, orderLineInsert, priceLines, storeIdOf, isCheckFail, DATE_RE, type LineIn,
 } from "../services/b2b-orders";
@@ -62,6 +62,17 @@ b2bRoutes.get("/b2b/orders", requirePerm("b2b.view"), async (c) => {
   if (q.status) (where.push("o.status = ?"), binds.push(q.status));
   if (q.customerId) (where.push("o.customer_id = ?"), binds.push(Number(q.customerId)));
   if (q.deliveryDate) (where.push("o.delivery_date = ?"), binds.push(q.deliveryDate));
+  if (q.q?.trim()) (where.push(`(o.code LIKE ? ESCAPE '\\' OR cu.name LIKE ? ESCAPE '\\')`), binds.push(likeOf(q.q), likeOf(q.q)));
+  addVnRange(q, "o.created_at", where, binds);
+  const sumRows = (
+    await c.env.DB
+      .prepare(`SELECT o.status AS st, COUNT(*) AS n, COALESCE(SUM(o.total),0) AS s FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id WHERE ${where.join(" AND ")} GROUP BY o.status`)
+      .bind(...binds)
+      .all<{ st: string; n: number; s: number }>()
+  ).results;
+  const byStatus: Record<string, { count: number; total: number }> = {};
+  for (const r of sumRows) byStatus[r.st] = { count: r.n, total: r.s };
+  const summary = { count: sumRows.reduce((a, r) => a + r.n, 0), total: sumRows.filter((r) => r.st !== "cancelled").reduce((a, r) => a + r.s, 0), byStatus };
   if (cursor) (where.push("o.id < ?"), binds.push(cursor));
   const rows = (
     await c.env.DB
@@ -81,6 +92,7 @@ b2bRoutes.get("/b2b/orders", requirePerm("b2b.view"), async (c) => {
       total: r.total, addressLabel: r.address_label, createdAt: r.created_at, invoiceId: r.invoice_id,
     })),
     nextCursor: rows.length > limit ? page[page.length - 1].id : null,
+    summary,
   });
 });
 

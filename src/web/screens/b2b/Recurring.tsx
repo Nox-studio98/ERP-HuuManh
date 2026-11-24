@@ -2,6 +2,7 @@ import { useState } from "react";
 import { get, items, post, put } from "../../api";
 import { Badge, Button, Card, EmptyState, Input, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
+import { FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { todayVN } from "../../format";
 import { CustomerSelect, LinesEditor, linePayload, qtyU, ymd, type CustomerLite, type EditLine } from "./kit";
 
@@ -11,6 +12,12 @@ const wdText = (w: number[]) => (w.length === 7 ? "Hằng ngày" : WD.filter(([n
 
 export default function Recurring() {
   const list = useAsync(() => get("/b2b/recurring").then((r) => items<any>(r)), []);
+  const [q, setQ] = useState(""), [cust, setCust] = useState(""), [act, setAct] = useState("");
+  const all = list.data ?? [];
+  const rows = all.filter((r) => (!cust || String(r.customerId) === cust) && (!act || (act === "1") === !!r.active) && (!q.trim() || `${r.customerName} ${r.lines.map((l: any) => l.productName ?? "").join(" ")}`.toLowerCase().includes(q.trim().toLowerCase())));
+  const custOpts = [...new Map(all.map((r) => [r.customerId, r.customerName])).entries()].map(([v, label]) => ({ v: String(v), label: String(label) }));
+  const dirty = !!(q || cust || act);
+  const reset = () => { setQ(""); setCust(""); setAct(""); };
   const [edit, setEdit] = useState<any | "new" | null>(null);
   const [gen, setGen] = useState<any | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
@@ -20,12 +27,19 @@ export default function Recurring() {
   };
   return (
     <div className="stack" data-testid="recurring">
-      <div className="row between wrap">
-        <div className="muted small grow">Mẫu đơn tự sinh lúc 08:00 cho ngày giao hôm sau theo các thứ đã chọn.</div>
-        <Button onClick={() => setEdit("new")}>+ Mẫu đơn lặp</Button>
-      </div>
-      {list.loading ? <Spinner /> : !(list.data ?? []).length ? <EmptyState title="Chưa có mẫu đơn lặp" hint="Tạo mẫu cho khách đặt hàng đều đặn mỗi tuần." /> : (
-        (list.data ?? []).map((r) => (
+      <PageHeader compact subtitle="Mẫu đơn tự sinh lúc 08:00 cho ngày giao hôm sau theo các thứ đã chọn." actions={<Button onClick={() => setEdit("new")}>+ Mẫu đơn lặp</Button>} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[cust, act].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Khách hàng" value={cust} onChange={setCust} options={custOpts} />
+        <FilterSelect label="Trạng thái" value={act} onChange={setAct} options={[{ v: "1", label: "Đang chạy" }, { v: "0", label: "Đã tắt" }]} />
+      </>}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên khách, mặt hàng…" label="Tìm mẫu đơn lặp" />
+      </FilterBar>
+      <KpiRow cols={3} items={[
+        { label: "Mẫu đơn lặp", value: all.length }, { label: "Đang chạy", value: all.filter((r) => r.active).length, tone: "ok" }, { label: "Đã tắt", value: all.filter((r) => !r.active).length },
+      ]} />
+      {list.loading ? <Spinner /> : !all.length ? <Card><EmptyState title="Chưa có mẫu đơn lặp" hint="Tạo mẫu cho khách đặt hàng đều đặn mỗi tuần." action={<Button onClick={() => setEdit("new")}>+ Mẫu đơn lặp</Button>} /></Card> : !rows.length ? <Card><EmptyState title="Không có mẫu nào khớp bộ lọc" action={<Button variant="soft" onClick={reset}>Xoá lọc</Button>} /></Card> : (
+       <div className="cards-grid">{
+        rows.map((r) => (
           <Card key={r.id} className="flat">
             <div className="row between wrap">
               <b>{r.customerName}</b>
@@ -40,6 +54,7 @@ export default function Recurring() {
             </div>
           </Card>
         ))
+       }</div>
       )}
       {edit && <RecurForm tpl={edit === "new" ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); }} />}
       {gen && <GenSheet tpl={gen} onClose={() => setGen(null)} onDone={() => { setGen(null); list.reload(); }} />}

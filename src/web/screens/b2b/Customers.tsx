@@ -9,6 +9,7 @@ import { useAuth, useCan } from "../../store";
 import { Back, DebtBadge, Lnk, ProductPicker, EINVOICE, INVOICE_KIND, einvTone, orderTone, ymd, type ProductLite } from "./kit";
 import { ORDER_STATUS } from "../../format";
 import { PaymentSheet } from "./Debts";
+import { ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, usePagedList } from "../../components/list";
 
 const FALLBACK_GROUPS = [{ id: 3, name: "Sỉ cấp 1" }, { id: 4, name: "Sỉ cấp 2" }];
 function useGroups() {
@@ -32,34 +33,52 @@ export default function Customers() {
 function CustomerList() {
   const can = useCan();
   const [q, setQ] = useState("");
-  const dq = useDebounced(q);
-  const [overdue, setOverdue] = useState(false);
-  const list = useAsync(() => get("/customers", { type: "b2b", q: dq, limit: 100 }).then((r) => items<any>(r)), [dq]);
+  const [overdue, setOverdue] = useState(""), [group, setGroup] = useState("");
+  const list = usePagedList<any>("/customers", { type: "b2b", q, limit: 100 }, [q]);
   const [add, setAdd] = useState(false);
-  const rows = (list.data ?? []).filter((c) => !overdue || c.debt?.overdueAmount > 0);
-  const totalDebt = (list.data ?? []).reduce((s, c) => s + (c.debt?.balance ?? 0), 0);
-  const totalOver = (list.data ?? []).reduce((s, c) => s + (c.debt?.overdueAmount ?? 0), 0);
+  const all = list.rows;
+  const groupOpts = [...new Set(all.map((c) => c.groupName).filter(Boolean))].map((g) => ({ v: String(g), label: String(g) }));
+  const rows = all.filter((c) => (overdue !== "1" || c.debt?.overdueAmount > 0) && (overdue !== "debt" || c.debt?.balance > 0) && (!group || c.groupName === group));
+  const totalDebt = all.reduce((s, c) => s + (c.debt?.balance ?? 0), 0);
+  const totalOver = all.reduce((s, c) => s + (c.debt?.overdueAmount ?? 0), 0);
+  const overN = all.filter((c) => c.debt?.overdueAmount > 0).length;
+  const dirty = !!(q || overdue || group);
+  const reset = () => { setQ(""); setOverdue(""); setGroup(""); };
   return (
     <div className="stack">
-      <div className="kpis">
-        <div className="kpi"><div className="l">Khách sỉ</div><div className="v">{list.data?.length ?? 0}</div></div>
-        <div className="kpi"><div className="l">Tổng công nợ</div><div className="v">{money(totalDebt)}</div></div>
-        <div className="kpi"><div className="l">Quá hạn</div><div className="v" style={{ color: totalOver ? "var(--warn)" : undefined }}>{money(totalOver)}</div></div>
-      </div>
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
-        <div className="grow" style={{ minWidth: 220 }}><Input label="Tìm khách" placeholder="Tên, mã, SĐT, MST…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-        <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={overdue} onChange={(e) => setOverdue(e.target.checked)} /> Chỉ khách quá hạn</label>
-        {can("b2b.write") && <Button onClick={() => setAdd(true)}>+ Thêm khách sỉ</Button>}
-      </div>
+      <PageHeader compact subtitle="Khách sỉ, hạn mức và công nợ"
+        actions={<>
+          <ExportButton filename="khach-si" rows={rows} columns={[
+            { label: "Mã", value: (c) => c.code }, { label: "Tên", value: (c) => c.name }, { label: "Nhóm", value: (c) => c.groupName }, { label: "SĐT", value: (c) => c.phone },
+            { label: "Hạn nợ (ngày)", value: (c) => c.paymentTermsDays }, { label: "Hạn mức", value: (c) => c.creditLimit }, { label: "Công nợ", value: (c) => c.debt?.balance ?? 0 }, { label: "Quá hạn", value: (c) => c.debt?.overdueAmount ?? 0 },
+          ]} />
+          {can("b2b.write") && <Button onClick={() => setAdd(true)}>+ Thêm khách sỉ</Button>}
+        </>} />
+      <KpiRow items={[
+        { label: "Khách sỉ", value: all.length, sub: list.hasMore ? "còn nữa — Tải thêm" : undefined },
+        { label: "Tổng công nợ", value: money(totalDebt), onClick: () => setOverdue("debt") },
+        { label: "Quá hạn", value: money(totalOver), tone: totalOver ? "warn" : undefined, onClick: () => setOverdue("1") },
+        { label: "Khách có nợ quá hạn", value: overN, tone: overN ? "danger" : undefined, onClick: () => setOverdue("1") },
+      ]} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[overdue, group].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Công nợ" value={overdue} onChange={setOverdue} options={[{ v: "debt", label: "Đang còn nợ" }, { v: "1", label: "Có nợ quá hạn" }]} />
+        <FilterSelect label="Nhóm khách" value={group} onChange={setGroup} options={groupOpts} />
+      </>}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên, mã, SĐT, MST…" label="Tìm khách" />
+      </FilterBar>
       {list.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(c) => c.id} onRowClick={(c) => navigate(`/customers/${c.id}`)} empty="Chưa có khách sỉ" cols={[
-          { key: "n", label: "Khách hàng", title: true, render: (c) => <span><b>{c.name}</b> <span className="muted small">{c.code}</span></span> },
-          { key: "g", label: "Nhóm", render: (c) => c.groupName ?? "—" },
-          { key: "p", label: "SĐT", hideMobile: true, render: (c) => c.phone ?? "—" },
-          { key: "t", label: "Hạn nợ", hideMobile: true, render: (c) => `${c.paymentTermsDays} ngày` },
-          { key: "l", label: "Hạn mức", right: true, render: (c) => <span className="money">{money(c.creditLimit)}</span> },
-          { key: "d", label: "Công nợ", right: true, render: (c) => <DebtBadge debt={c.debt} /> },
-        ]} />
+        <DataTable rows={rows} rowKey={(c) => c.id} onRowClick={(c) => navigate(`/customers/${c.id}`)} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+          footer={`Đang hiển thị ${rows.length} khách`}
+          emptyState={<EmptyState title={dirty ? "Không có khách nào khớp bộ lọc" : "Chưa có khách sỉ"} hint="Thêm khách sỉ để lập báo giá, đơn sỉ và theo dõi công nợ."
+            action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{can("b2b.write") && <Button onClick={() => setAdd(true)}>+ Thêm khách sỉ</Button>}</div>} />}
+          cols={[
+            { key: "n", label: "Khách hàng", title: true, sort: (c) => c.name, render: (c) => <span><b>{c.name}</b> <span className="muted small">{c.code}</span></span> },
+            { key: "g", label: "Nhóm", sort: (c) => c.groupName ?? "", render: (c) => c.groupName ?? "—" },
+            { key: "p", label: "SĐT", hideMobile: true, hideBelow: 1280, render: (c) => c.phone ?? "—" },
+            { key: "t", label: "Hạn nợ", hideMobile: true, hideBelow: 1280, num: true, sort: (c) => c.paymentTermsDays, render: (c) => `${c.paymentTermsDays} ngày` },
+            { key: "l", label: "Hạn mức", num: true, sort: (c) => c.creditLimit, render: (c) => <span className="money">{money(c.creditLimit)}</span> },
+            { key: "d", label: "Công nợ", num: true, sort: (c) => c.debt?.balance ?? 0, render: (c) => <DebtBadge debt={c.debt} /> },
+          ]} />
       )}
       {add && <CustomerForm onClose={() => setAdd(false)} onSaved={(c) => { setAdd(false); toast(`Đã tạo khách ${c.code}`, "ok"); navigate(`/customers/${c.id}`); }} />}
     </div>

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { get, items, post, put } from "../api";
-import { Badge, Banner, Button, Card, DataTable, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
+import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
 import { LineChart } from "../components/charts";
 import { toast } from "../components/toast";
 import { CHANNELS, fmtDateTime, money, unitLabel } from "../format";
 import { useCan } from "../store";
 import { priceOf, type Product } from "./Pos";
+import { FilterBar, PageHeader } from "../components/list";
 
 export default function Prices() {
   const can = useCan();
@@ -13,8 +14,9 @@ export default function Prices() {
   const pend = useAsync(() => (can("approvals.decide") ? get("/approvals", { status: "pending" }, { silent: true }).then((r) => items<any>(r).filter((a) => /price/i.test(a.type ?? ""))) : Promise.resolve([])), []);
   return (
     <div className="stack">
+      <PageHeader compact subtitle="Đổi giá hàng loạt, bảng giá theo kênh / nhóm khách và lịch sử thay đổi" />
       {(pend.data?.length ?? 0) > 0 && <Banner>{pend.data!.length} thay đổi giá đang chờ duyệt — vào mục “Duyệt” để xử lý.</Banner>}
-      <Segmented value={tab} onChange={setTab} options={[{ v: "bulk", label: "Đổi giá" }, { v: "lists", label: "Bảng giá" }, { v: "history", label: "Lịch sử" }]} />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "bulk", label: "Đổi giá" }, { v: "lists", label: "Bảng giá" }, { v: "history", label: "Lịch sử" }]} />
       {tab === "bulk" && <Bulk canWrite={can("prices.write")} canCost={can("prices.view_cost")} />}
       {tab === "lists" && <Lists canWrite={can("prices.write")} />}
       {tab === "history" && <History />}
@@ -30,13 +32,13 @@ function Lists({ canWrite }: { canWrite: boolean }) {
   const [edit, setEdit] = useState<any | "new" | null>(null);
   return (
     <div className="stack" data-testid="price-lists">
-      {canWrite && <div><Button onClick={() => setEdit("new")}>+ Bảng giá mới</Button></div>}
-      {l.loading ? <Spinner /> : <DataTable rows={l.data ?? []} rowKey={(x) => x.id} onRowClick={canWrite ? (x) => setEdit(x) : undefined} cols={[
-        { key: "n", label: "Tên", title: true, render: (x) => <b>{x.name}</b> },
-        { key: "c", label: "Kênh", render: (x) => CH[x.channel] ?? x.channel },
-        { key: "k", label: "Loại", render: (x) => KINDS[x.kind] ?? x.kind },
+      <div className="row between wrap"><div className="muted small">Bảng giá ưu tiên cao hơn được áp dụng trước; mỗi kênh / nhóm khách có thể có bảng giá riêng.</div>{canWrite && <Button onClick={() => setEdit("new")}>+ Bảng giá mới</Button>}</div>
+      {l.loading ? <Spinner /> : <DataTable rows={l.data ?? []} rowKey={(x) => x.id} onRowClick={canWrite ? (x) => setEdit(x) : undefined} emptyState={<EmptyState title="Chưa có bảng giá" hint="Tạo bảng giá nền để bắt đầu bán hàng." action={canWrite ? <Button onClick={() => setEdit("new")}>+ Bảng giá mới</Button> : undefined} />} cols={[
+        { key: "n", label: "Tên", title: true, sort: (x) => x.name, render: (x) => <b>{x.name}</b> },
+        { key: "c", label: "Kênh", sort: (x) => CH[x.channel] ?? x.channel, render: (x) => CH[x.channel] ?? x.channel },
+        { key: "k", label: "Loại", sort: (x) => KINDS[x.kind] ?? x.kind, render: (x) => KINDS[x.kind] ?? x.kind },
         { key: "g", label: "Nhóm khách", hideMobile: true, render: (x) => (x.customerGroupId ? (groups.data ?? []).find((g: any) => g.id === x.customerGroupId)?.name ?? `#${x.customerGroupId}` : "—") },
-        { key: "p", label: "Ưu tiên", right: true, render: (x) => x.priority },
+        { key: "p", label: "Ưu tiên", num: true, sort: (x) => x.priority, render: (x) => x.priority },
         { key: "a", label: "TT", render: (x) => (x.active ? <Badge tone="ok">Đang dùng</Badge> : <Badge tone="warn">Đã tắt</Badge>) },
       ]} />}
       {edit && <ListForm pl={edit === "new" ? null : edit} groups={groups.data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); l.reload(); }} />}
@@ -96,18 +98,19 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
   const below = new Set<number>((res?.belowCost ?? []).map(Number));
   return (
     <div className="stack">
-      <div className="grid3">
-        <Select label="Bảng giá" value={lid} onChange={(e) => setListId(e.target.value)}>{(lists.data ?? []).filter((l) => l.active !== false).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
-        <Input label="Hiệu lực từ" type="datetime-local" value={eff} onChange={(e) => setEff(e.target.value)} />
-        <Input label="Tìm hàng" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="filterbar card flat">
+        <div style={{ minWidth: 200 }}><Select label="Bảng giá" value={lid} onChange={(e) => setListId(e.target.value)}>{(lists.data ?? []).filter((l) => l.active !== false).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select></div>
+        <div style={{ minWidth: 200 }}><Input label="Hiệu lực từ" type="datetime-local" value={eff} onChange={(e) => setEff(e.target.value)} /></div>
+        <div className="grow" style={{ minWidth: 200, maxWidth: 320 }}><Input label="Tìm hàng" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên, SKU, mã vạch…" /></div>
+        <div className="muted small" style={{ alignSelf: "center" }}>{changed.length ? `${changed.length} mức giá chưa áp dụng` : "Nhập giá mới ở cột bên phải"}</div>
       </div>
       {res?.belowCost?.length > 0 && <Banner>Cảnh báo: {res.belowCost.length} mặt hàng có giá mới thấp hơn giá vốn bình quân. {res.status === "pending_approval" ? "Đang chờ duyệt." : ""}</Banner>}
       {res?.status === "pending_approval" && <Banner tone="info">Thay đổi giá cần quản lý duyệt trước khi có hiệu lực.</Banner>}
       {prods.loading ? <Spinner /> : (
         <DataTable rows={prods.data ?? []} rowKey={(p) => p.id} rowClass={(p) => (edits[p.id] && p.avgCost && edits[p.id] < p.avgCost) || below.has(p.id) ? "bad" : ""} cols={[
-          { key: "n", label: "Hàng", title: true, render: (p) => <b>{p.name}</b> },
-          ...(canCost ? [{ key: "c", label: "Giá vốn BQ", right: true, render: (p: Product) => (p.avgCost ? money(p.avgCost) : "—") }] : []),
-          { key: "o", label: "Giá hiện tại", right: true, render: (p) => (priceOf(p) ? `${money(priceOf(p))}/${unitLabel(p.baseUnit)}` : "—") },
+          { key: "n", label: "Hàng", title: true, sort: (p) => p.name, render: (p) => <b>{p.name}</b> },
+          ...(canCost ? [{ key: "c", label: "Giá vốn BQ", num: true as const, sort: (p: Product) => p.avgCost ?? 0, render: (p: Product) => (p.avgCost ? money(p.avgCost) : "—") }] : []),
+          { key: "o", label: "Giá hiện tại", num: true, sort: (p) => priceOf(p), render: (p) => (priceOf(p) ? `${money(priceOf(p))}/${unitLabel(p.baseUnit)}` : "—") },
           { key: "w", label: "Giá mới", right: true, render: (p) => (
             <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", minWidth: 130 }}>
               <input className="input num" style={{ textAlign: "right", maxWidth: 140 }} inputMode="numeric" disabled={!canWrite} aria-label={`Giá mới ${p.name}`} placeholder={String(priceOf(p) || "")}
@@ -134,9 +137,16 @@ function History() {
   const pts = rows.filter((r) => r.status === "active" && r.priceListId === basePl).reverse().map((r) => ({ label: (r.effectiveFrom ?? "").slice(5, 10), value: r.unitPrice })).filter((x) => x.value);
   useEffect(() => { setQ(""); }, [prod]);
   return (
-    <div className="stack">
-      <Input label="Tìm hàng để xem lịch sử giá" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
-      {(found.data ?? []).map((p) => <button key={p.id} className="dt-card" onClick={() => setProd(p)}>{p.name}</button>)}
+    <div className="trace-grid">
+      <Card title="Chọn hàng hoá">
+        <div className="stack">
+          <Input label="Tìm hàng để xem lịch sử giá" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên, SKU…" />
+          {(found.data ?? []).map((p) => <button key={p.id} className="dt-card" onClick={() => setProd(p)}>{p.name}</button>)}
+          {prod && <div className="muted small">Đang xem: <b>{prod.name}</b></div>}
+        </div>
+      </Card>
+      <div className="stack">
+      {!prod && <Card><EmptyState title="Chọn một mặt hàng để xem lịch sử giá" hint="Biểu đồ giá bán, các lần đổi giá và giá mua theo lô / nhà cung cấp." /></Card>}
       {prod && (h.loading ? <Spinner /> : (
         <Card title={`Giá bán: ${prod.name}`}>
           {pts.length ? <LineChart points={pts} /> : <div className="muted">Chưa có lịch sử giá.</div>}
@@ -155,6 +165,7 @@ function History() {
           ]} /></>}
         </Card>
       ))}
+      </div>
     </div>
   );
 }

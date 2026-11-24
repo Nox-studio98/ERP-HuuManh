@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { get, items, post, put } from "../../api";
-import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, MoneyInput, Segmented, Sheet, Spinner, useAsync } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Sheet, Spinner, useAsync } from "../../components/ui";
+import { KpiRow, PageHeader } from "../../components/list";
 import { toast } from "../../components/toast";
 import { money } from "../../format";
 import { useCan } from "../../store";
@@ -10,7 +11,8 @@ export default function Zones() {
   const [tab, setTab] = useState<"zones" | "slots">("zones");
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "zones", label: "Khu vực giao" }, { v: "slots", label: "Khung giờ giao" }]} />
+      <PageHeader subtitle="Khu vực nhận giao hàng, phí giao và các khung giờ giao cho đơn online" />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "zones", label: "Khu vực giao" }, { v: "slots", label: "Khung giờ giao" }]} />
       {tab === "zones" ? <ZoneList /> : <SlotList />}
     </div>
   );
@@ -22,16 +24,20 @@ function ZoneList() {
   const [edit, setEdit] = useState<any>(null);
   return (
     <div className="stack">
-      {w && <div className="row"><Button onClick={() => setEdit({})}>+ Thêm khu vực</Button></div>}
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có khu vực giao" /> : (
-        <div className="stack" data-testid="zone-list">
-          {l.data!.map((z) => (
-            <button key={z.id} className="dt-card" disabled={!w} onClick={() => setEdit(z)}>
-              <div className="row between"><b>{z.name}</b>{z.active ? <Badge tone="ok">Đang giao</Badge> : <Badge>Tạm ngưng</Badge>}</div>
-              <div className="small">{z.districts.join(", ")}</div>
-              <div className="small muted">Phí {money(z.fee)}{z.freeOver ? ` · miễn phí từ ${money(z.freeOver)}` : ""}{z.minOrder ? ` · tối thiểu ${money(z.minOrder)}` : ""}</div>
-            </button>
-          ))}
+      <KpiRow cols={3} items={[{ label: "Khu vực", value: (l.data ?? []).length }, { label: "Đang giao", value: (l.data ?? []).filter((z) => z.active).length, tone: "ok" }, { label: "Tạm ngưng", value: (l.data ?? []).filter((z) => !z.active).length }]} />
+      <div className="row between wrap"><span className="muted small">{w ? "Bấm vào một khu vực để sửa phí giao, quận/huyện." : "Chỉ quản lý/chủ mới sửa được khu vực."}</span>{w && <Button onClick={() => setEdit({})}>+ Thêm khu vực</Button>}</div>
+      {l.loading ? <Spinner /> : (
+        <div data-testid="zone-list">
+          <DataTable rows={l.data ?? []} rowKey={(z) => z.id} onRowClick={w ? setEdit : undefined}
+            emptyState={<EmptyState title="Chưa có khu vực giao" hint="Thêm khu vực để khách chọn khi đặt hàng online." action={w ? <Button onClick={() => setEdit({})}>+ Thêm khu vực</Button> : undefined} />}
+            cols={[
+              { key: "n", label: "Khu vực", title: true, sort: (z) => z.name, render: (z) => <b className="nw">{z.name}</b> },
+              { key: "d", label: "Quận/huyện", render: (z) => z.districts.join(", ") },
+              { key: "f", label: "Phí giao", num: true, sort: (z) => z.fee, render: (z) => money(z.fee) },
+              { key: "o", label: "Miễn phí từ", num: true, hideBelow: 1024, sort: (z) => z.freeOver ?? 0, render: (z) => (z.freeOver ? money(z.freeOver) : "—") },
+              { key: "m", label: "Tối thiểu", num: true, hideBelow: 1024, sort: (z) => z.minOrder ?? 0, render: (z) => (z.minOrder ? money(z.minOrder) : "—") },
+              { key: "a", label: "Trạng thái", sort: (z) => (z.active ? 0 : 1), render: (z) => (z.active ? <Badge tone="ok">Đang giao</Badge> : <Badge>Tạm ngưng</Badge>) },
+            ]} />
         </div>
       )}
       {edit && <ZoneForm z={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); l.reload(); }} />}
@@ -67,17 +73,20 @@ function SlotList() {
   const [edit, setEdit] = useState<any>(null);
   return (
     <div className="stack">
-      {w && <div className="row"><Button onClick={() => setEdit({})}>+ Thêm khung giờ</Button></div>}
+      <div className="row between wrap"><span className="muted small">{w ? "Bấm vào một khung giờ để sửa." : "Chỉ quản lý/chủ mới sửa được khung giờ."}</span>{w && <Button onClick={() => setEdit({})}>+ Thêm khung giờ</Button>}</div>
       {!w && <Banner tone="info">Chỉ quản lý/chủ mới sửa được khu vực và khung giờ.</Banner>}
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có khung giờ" /> : (
-        <div className="stack" data-testid="slot-list">
-          {l.data!.map((s) => (
-            <button key={s.id} className="dt-card" disabled={!w} onClick={() => setEdit(s)}>
-              <div className="row between"><b>{s.label}</b>{s.active ? <Badge tone="ok">Đang mở</Badge> : <Badge>Tạm ngưng</Badge>}</div>
-              <div className="small">{s.startTime}–{s.endTime} · tối đa {s.capacity} đơn · chốt trước {s.cutoffMinutes} phút</div>
-              <div className="small muted">{WEEKDAYS.filter(([n]) => s.weekdays.includes(n)).map(([, t]) => t).join(" ")}</div>
-            </button>
-          ))}
+      {l.loading ? <Spinner /> : (
+        <div data-testid="slot-list">
+          <DataTable rows={l.data ?? []} rowKey={(s) => s.id} onRowClick={w ? setEdit : undefined}
+            emptyState={<EmptyState title="Chưa có khung giờ" hint="Thêm khung giờ để khách hẹn giờ nhận hàng." action={w ? <Button onClick={() => setEdit({})}>+ Thêm khung giờ</Button> : undefined} />}
+            cols={[
+              { key: "n", label: "Khung giờ", title: true, sort: (s) => s.startTime, render: (s) => <b>{s.label}</b> },
+              { key: "t", label: "Thời gian", render: (s) => `${s.startTime}–${s.endTime}` },
+              { key: "c", label: "Tối đa", num: true, sort: (s) => s.capacity, render: (s) => `${s.capacity} đơn` },
+              { key: "u", label: "Chốt trước", num: true, hideBelow: 1024, render: (s) => `${s.cutoffMinutes} phút` },
+              { key: "w", label: "Ngày", render: (s) => WEEKDAYS.filter(([n]) => s.weekdays.includes(n)).map(([, t]) => t).join(" ") },
+              { key: "a", label: "Trạng thái", render: (s) => (s.active ? <Badge tone="ok">Đang mở</Badge> : <Badge>Tạm ngưng</Badge>) },
+            ]} />
         </div>
       )}
       {edit && <SlotForm s={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); l.reload(); }} />}
