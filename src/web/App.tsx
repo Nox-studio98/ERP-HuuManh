@@ -41,6 +41,7 @@ const HrAttendance = lazy(() => import("./screens/hr/Attendance"));
 const HrTimesheets = lazy(() => import("./screens/hr/Timesheets"));
 const HrPayroll = lazy(() => import("./screens/hr/Payroll"));
 const HrQrDisplay = lazy(() => import("./screens/hr/QrDisplay"));
+const HrStores = lazy(() => import("./screens/hr/Stores"));
 const Competitors = lazy(() => import("./screens/d4/Competitors"));
 const Purchasing = lazy(() => import("./screens/d4/Purchasing"));
 const Promotions = lazy(() => import("./screens/d4/Promotions"));
@@ -86,6 +87,7 @@ const NAV: Nav[] = [
   { path: "/hr/attendance", label: "Duyệt chấm công", group: G.hr, perms: ["hr.schedule"], icon: I("M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrAttendance /> },
   { path: "/hr/timesheets", label: "Bảng công", group: G.hr, perms: ["hr.view"], icon: I("M4 4h16v16H4zM4 10h16M10 4v16"), el: <HrTimesheets /> },
   { path: "/payroll", label: "Bảng lương", group: G.hr, perms: ["hr.sensitive"], icon: I("M3 7h18v10H3zM12 12a2 2 0 100-4 2 2 0 000 4zM6 12h.01M18 12h.01"), el: <HrPayroll /> },
+  { path: "/hr/stores", label: "Cửa hàng", group: G.hr, perms: ["hr.manage", "users.manage"], icon: I("M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"), el: <HrStores /> },
   { path: "/hr/qr", label: "Mã QR chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2z"), el: <HrQrDisplay /> },
   { path: "/shift-close", label: "Chốt ca", perms: ["pos.shift"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <ShiftClose />, hidden: true },
 ];

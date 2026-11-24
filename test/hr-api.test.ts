@@ -169,7 +169,9 @@ describe("Nghỉ phép", () => {
     const d1 = await call("manager", "POST", `/api/v1/leave-requests/${l2.body.id}/decide`, { decision: "approved" });
     expect(d1.status).toBe(409);
     expect(d1.body.error.code).toBe("over_balance");
-    expect((await call("manager", "POST", `/api/v1/leave-requests/${l2.body.id}/decide`, { decision: "approved", allowOverBalance: true })).status).toBe(200);
+    // C-08: duyệt ngoại lệ bắt buộc có lý do
+    expect((await call("manager", "POST", `/api/v1/leave-requests/${l2.body.id}/decide`, { decision: "approved", allowOverBalance: true })).status).toBe(422);
+    expect((await call("manager", "POST", `/api/v1/leave-requests/${l2.body.id}/decide`, { decision: "approved", allowOverBalance: true, exceptionReason: "Việc gia đình đột xuất" })).status).toBe(200);
     // nửa ngày, nghỉ ốm không dùng số dư
     const l3 = await call("staff1", "POST", "/api/v1/me/leave-requests", { leaveTypeCode: "sick", fromDate: "2027-11-02", toDate: "2027-11-02", halfDay: true });
     expect(l3.body).toMatchObject({ daysX10: 5, overBalance: false });

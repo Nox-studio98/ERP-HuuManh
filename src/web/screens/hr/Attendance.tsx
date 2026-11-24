@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { get, items, post } from "../../api";
+import { ApiError, get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
 import { fmtDateTime, todayVN } from "../../format";
@@ -49,17 +49,21 @@ function Decide({ onDecide, approveLabel = "Duyệt", disabled }: { onDecide: (d
 const Empty = ({ t }: { t: string }) => <Card><div className="muted">{t}</div></Card>;
 
 function Punches({ onChange }: { onChange: () => void }) {
-  const l = useAsync(() => get("/attendance/punches", { status: "pending", limit: 100 }).then((r) => items<any>(r)), []);
+  // chờ duyệt (giờ máy không hợp lý) + chấm offline đã tính công ngay nhưng cần xem lại (reviewFlag)
+  const l = useAsync(async () => {
+    const [a, b] = await Promise.all([get("/attendance/punches", { status: "pending", limit: 100 }), get("/attendance/punches", { reviewFlag: 1, limit: 100 })]);
+    return [...items<any>(a), ...items<any>(b)];
+  }, []);
   if (l.loading) return <Spinner />;
   return (
     <div className="stack" data-testid="pending-punches">
-      <div className="hint">Lần chấm công gửi từ máy khi mất mạng (offline) cần quản lý xác nhận trước khi tính công.</div>
-      {!(l.data ?? []).length && <Empty t="Không có lần chấm công nào chờ duyệt." />}
+      <div className="hint">Chấm công offline (mất mạng) được tính công theo giờ máy nhân viên nếu hợp lý và hiện ở đây để quản lý xem lại; bạn có thể xác nhận hoặc từ chối (từ chối sẽ không tính công).</div>
+      {!(l.data ?? []).length && <Empty t="Không có lần chấm công nào cần xem lại." />}
       {l.data!.map((p) => (
         <Card key={p.id}>
           <div className="stack" style={{ gap: 6 }}>
-            <div className="row between"><b>{p.employeeName} · {KIND[p.kind]}</b><Badge tone="warn">{PUNCH_METHOD[p.method] ?? p.method}</Badge></div>
-            <div className="small">Giờ máy khách: {fmtDateTime(p.clientAt)} · giờ nhận: {fmtDateTime(p.serverAt)}</div>
+            <div className="row between"><b>{p.employeeName} · {KIND[p.kind]}</b><span className="row">{p.reviewFlag && <Badge tone="info">Đã tính công</Badge>}<Badge tone="warn">{PUNCH_METHOD[p.method] ?? p.method}</Badge></span></div>
+            <div className="small">Giờ máy khách: {fmtDateTime(p.clientAt)} · giờ nhận: {fmtDateTime(p.serverAt)}{p.reviewFlag ? ` · tính công theo ${fmtDateTime(p.effectiveAt)}` : ""}</div>
             {p.distanceM != null && <div className="small muted">Cách cửa hàng {p.distanceM} m{p.accuracyM != null ? `, sai số GPS ${Math.round(p.accuracyM)} m` : ""}</div>}
             <Decide onDecide={async (d, note) => { await post(`/attendance/punches/${p.id}/decide`, { decision: d, note }); toast(d === "approved" ? "Đã xác nhận" : "Đã từ chối", "ok"); l.reload(); onChange(); }} approveLabel="Xác nhận" />
           </div>
@@ -98,6 +102,7 @@ function Leaves({ onChange }: { onChange: () => void }) {
   const l = useAsync(() => get("/leave-requests", { status: "pending", limit: 100 }).then((r) => items<any>(r)), []);
   const [over, setOver] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [exReason, setExReason] = useState("");
   if (l.loading) return <Spinner />;
   const done = (t: string) => { toast(t, "ok"); l.reload(); onChange(); };
   return (
@@ -112,15 +117,17 @@ function Leaves({ onChange }: { onChange: () => void }) {
             {r.overBalance && <div className="small" style={{ color: "var(--danger)" }}>Đơn vượt số ngày phép còn lại. Duyệt sẽ là ngoại lệ và được ghi vào nhật ký.</div>}
             <Decide approveLabel={r.overBalance ? "Duyệt ngoại lệ…" : "Duyệt"} onDecide={async (d, note) => {
               if (d === "approved" && r.overBalance) { setOver(r); return; }
-              await post(`/leave-requests/${r.id}/decide`, { decision: d, note }); done(d === "approved" ? "Đã duyệt đơn nghỉ" : "Đã từ chối");
+              try { await post(`/leave-requests/${r.id}/decide`, { decision: d, note }, { silent: true }); done(d === "approved" ? "Đã duyệt đơn nghỉ" : "Đã từ chối"); }
+              catch (e) { if (e instanceof ApiError && e.code === "over_balance") { setExReason(""); setOver(r); } else { toast((e as Error).message, "error"); throw e; } }
             }} />
           </div>
         </Card>
       ))}
       {over && (
-        <Confirm title="Duyệt vượt số dư phép" confirmLabel="Duyệt ngoại lệ" busy={busy} onClose={() => setOver(null)}
-          onConfirm={async () => { setBusy(true); try { await post(`/leave-requests/${over.id}/decide`, { decision: "approved", allowOverBalance: true }); setOver(null); done("Đã duyệt ngoại lệ"); } catch { /* toast */ } finally { setBusy(false); } }}>
+        <Confirm title="Duyệt vượt số dư phép" confirmLabel="Duyệt ngoại lệ" busy={busy} disabled={exReason.trim().length < 3} onClose={() => setOver(null)}
+          onConfirm={async () => { setBusy(true); try { await post(`/leave-requests/${over.id}/decide`, { decision: "approved", allowOverBalance: true, exceptionReason: exReason.trim() }); setOver(null); done("Đã duyệt ngoại lệ"); } catch { /* toast */ } finally { setBusy(false); } }}>
           <Banner><b>{over.employeeName}</b> xin nghỉ {days10(over.daysX10)} ngày, vượt số dư phép năm còn lại. Bạn xác nhận duyệt ngoại lệ?</Banner>
+          <TextArea label="Lý do ngoại lệ (bắt buộc)" rows={2} value={exReason} onChange={(e) => setExReason(e.target.value)} />
         </Confirm>
       )}
     </div>
