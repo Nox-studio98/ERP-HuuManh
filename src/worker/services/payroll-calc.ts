@@ -87,6 +87,8 @@ export interface Payslip {
   taxableIncome: number;
   pit: number;
   advances: number;
+  /** Tạm ứng chưa khấu trừ hết (do thực lĩnh không đủ) — chuyển sang kỳ sau, không mất. */
+  advancesCarried: number;
   net: number;
   lines: PayslipLine[];
 }
@@ -135,8 +137,10 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       note: `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (ngày có công ${workedDays}, phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`,
     });
   } else if (e.payType === "hourly") {
-    basePay = Math.round((e.hourlyRate * workedMinutes) / 60);
-    lines.push({ label: "Lương theo giờ", amount: basePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(workedMinutes / 60).toFixed(2)} giờ` });
+    // C-03: giờ tăng ca đã duyệt nằm trong workedMinutes (out − in) nhưng được trả riêng × hệ số → lương giờ chỉ tính giờ thường.
+    const regularMinutes = Math.max(0, sum(input.days.map((d) => Math.max(0, d.workedMinutes - d.overtimeMinutes))) + input.adjustMinutes.work);
+    basePay = Math.round((e.hourlyRate * regularMinutes) / 60);
+    lines.push({ label: "Lương theo giờ", amount: basePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(regularMinutes / 60).toFixed(2)} giờ thường (đã trừ giờ tăng ca, trả riêng)` });
   } else {
     basePay = Math.round(e.shiftRate * shifts);
     lines.push({ label: "Lương theo ca", amount: basePay, group: "income", note: `${fmt(e.shiftRate)} × ${shifts} ca` });
@@ -216,14 +220,19 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
   }
 
   // ---- Tạm ứng & thực lĩnh ----
-  const advances = sum(input.advances.map((a) => a.amount));
+  // C-05: khấu trừ tạm ứng không vượt thực lĩnh trước tạm ứng (net ≥ 0); phần dư chuyển kỳ sau.
+  const advancesDue = sum(input.advances.map((a) => a.amount));
+  const preNet = gross - insuranceEmployee - pit;
+  const advances = Math.min(advancesDue, Math.max(0, preNet));
+  const advancesCarried = advancesDue - advances;
   if (advances > 0) lines.push({ label: "Khấu trừ tạm ứng", amount: -advances, group: "deduction" });
-  const net = gross - insuranceEmployee - pit - advances;
+  if (advancesCarried > 0) lines.push({ label: "Tạm ứng chuyển kỳ sau", amount: advancesCarried, group: "info", note: "thực lĩnh không đủ trừ, phần còn lại khấu trừ ở kỳ lương kế tiếp" });
+  const net = preNet - advances;
   lines.push({ label: "Thực lĩnh", amount: net, group: "info" });
 
   return {
     payType: e.payType, workedMinutes, paidDaysX10, shifts, basePay, allowances, overtimePay, bonus, salesBonus, penalties, adjustments,
-    gross, insuranceEmployee, insuranceEmployer, taxableIncome, pit, advances, net, lines,
+    gross, insuranceEmployee, insuranceEmployer, taxableIncome, pit, advances, advancesCarried, net, lines,
   };
 }
 

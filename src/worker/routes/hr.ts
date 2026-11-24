@@ -9,6 +9,7 @@ import { hashPassword, randomToken } from "../lib/crypto";
 import { can, requirePerm } from "../lib/rbac";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { pageParams, parseBody } from "../services/http";
+import { getSettingInt } from "../services/settings";
 import {
   addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, leaveBalance, minutesBetween, shiftWindow,
 } from "../services/hr-common";
@@ -671,8 +672,19 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
 
   const now = new Date();
   const serverAt = now.toISOString();
-  const last = await db.prepare(`SELECT kind, server_at, assignment_id FROM attendance_punches WHERE employee_id=? AND status != 'rejected' ORDER BY server_at DESC, id DESC LIMIT 1`).bind(me.id).first<any>();
-  const lastIn = !!last && last.kind === "in" && minutesBetween(last.server_at, serverAt) <= MAX_SHIFT_MINUTES;
+  const last = await db.prepare(`SELECT kind, COALESCE(effective_at, server_at) AS eff_at, assignment_id FROM attendance_punches WHERE employee_id=? AND status != 'rejected' ORDER BY server_at DESC, id DESC LIMIT 1`).bind(me.id).first<any>();
+  // C-01: chấm offline dùng giờ máy NV (client_at) nếu hợp lý: ≤ giờ gửi (+5 phút lệch đồng hồ) và ≥ giờ gửi − hr.offline_max_hours
+  let effectiveAt = serverAt;
+  let offlineTrusted = false;
+  if (b.offline) {
+    const maxH = await getSettingInt(db, "hr.offline_max_hours", 48);
+    const ca = Date.parse(b.offline.clientAt);
+    if (ca <= now.getTime() + 5 * 60_000 && ca >= now.getTime() - maxH * 3600_000) {
+      effectiveAt = new Date(Math.min(ca, now.getTime())).toISOString();
+      offlineTrusted = true;
+    }
+  }
+  const lastIn = !!last && last.kind === "in" && minutesBetween(last.eff_at, effectiveAt) <= MAX_SHIFT_MINUTES;
   if (b.kind === "in" && lastIn) throw conflict("already_in", "Bạn đã chấm vào, hãy chấm ra trước");
   if (b.kind === "out" && !lastIn) throw conflict("not_in", "Chưa có lần chấm vào — gửi yêu cầu bổ sung công nếu quên chấm");
 
@@ -688,7 +700,8 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
 
   if (b.offline) {
     method = "offline";
-    status = "pending";
+    // giờ hợp lý → tính công ngay nhưng gắn cờ cho quản lý xem lại (có thể từ chối); không hợp lý → chờ duyệt, dùng giờ máy chủ
+    status = offlineTrusted ? "accepted" : "pending";
     clientAt = new Date(b.offline.clientAt).toISOString();
     distance = dist();
   } else if (me.location_exempt) {
@@ -712,23 +725,23 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
     qrWindow = v.window;
   }
 
-  const assignmentId = b.kind === "out" ? (last?.assignment_id ?? (await nearestAssignment(db, me.id, serverAt, "end"))) : await nearestAssignment(db, me.id, serverAt, "start");
+  const assignmentId = b.kind === "out" ? (last?.assignment_id ?? (await nearestAssignment(db, me.id, effectiveAt, "end"))) : await nearestAssignment(db, me.id, effectiveAt, "start");
   const keepPos = method === "gps" || method === "offline";
   let id: number;
   try {
     const r = await db
       .prepare(
-        `INSERT INTO attendance_punches(employee_id, kind, server_at, client_at, device_id, method, lat, lng, accuracy_m, distance_m, qr_window, status, assignment_id, created_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO attendance_punches(employee_id, kind, server_at, client_at, device_id, method, lat, lng, accuracy_m, distance_m, qr_window, status, assignment_id, created_by, effective_at, review_flag)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
-      .bind(me.id, b.kind, serverAt, clientAt, deviceId, method, keepPos ? (b.lat ?? null) : null, keepPos ? (b.lng ?? null) : null, keepPos ? (b.accuracyM ?? null) : null, distance, qrWindow, status, assignmentId, user.id)
+      .bind(me.id, b.kind, serverAt, clientAt, deviceId, method, keepPos ? (b.lat ?? null) : null, keepPos ? (b.lng ?? null) : null, keepPos ? (b.accuracyM ?? null) : null, distance, qrWindow, status, assignmentId, user.id, effectiveAt, offlineTrusted ? 1 : 0)
       .run();
     id = r.meta.last_row_id as number;
   } catch (e) {
     if (String((e as Error).message).includes("UNIQUE") && qrWindow !== null) throw conflict("qr_already_used", "Mã QR này đã được dùng, hãy đợi mã mới");
     throw e;
   }
-  return c.json({ punch: { id, kind: b.kind, serverAt, method, status, distanceM: distance } }, 201);
+  return c.json({ punch: { id, kind: b.kind, serverAt, effectiveAt, method, status, reviewFlag: offlineTrusted, distanceM: distance } }, 201);
 });
 
 hrRoutes.get("/attendance/qr", requirePerm("hr.schedule"), async (c) => {
@@ -816,8 +829,9 @@ hrRoutes.get("/attendance/punches", requirePerm("hr.view"), async (c) => {
   const params: unknown[] = [];
   if (q.employeeId) { conds.push(`p.employee_id = ?`); params.push(Number(q.employeeId)); }
   if (q.status) { conds.push(`p.status = ?`); params.push(q.status); }
-  if (q.from) { if (!isDate(q.from)) throw new AppError(422, "validation_error", "from không hợp lệ"); conds.push(`p.server_at >= ?`); params.push(vnDayRangeUtc(q.from).from); }
-  if (q.to) { if (!isDate(q.to)) throw new AppError(422, "validation_error", "to không hợp lệ"); conds.push(`p.server_at < ?`); params.push(vnDayRangeUtc(q.to).to); }
+  if (q.reviewFlag === "1") conds.push(`p.review_flag = 1 AND p.status = 'accepted'`);
+  if (q.from) { if (!isDate(q.from)) throw new AppError(422, "validation_error", "from không hợp lệ"); conds.push(`COALESCE(p.effective_at, p.server_at) >= ?`); params.push(vnDayRangeUtc(q.from).from); }
+  if (q.to) { if (!isDate(q.to)) throw new AppError(422, "validation_error", "to không hợp lệ"); conds.push(`COALESCE(p.effective_at, p.server_at) < ?`); params.push(vnDayRangeUtc(q.to).to); }
   const { limit, cursor } = pageParams(c);
   if (cursor) { conds.push(`p.id < ?`); params.push(cursor); }
   const { results } = await c.env.DB
@@ -827,7 +841,7 @@ hrRoutes.get("/attendance/punches", requirePerm("hr.view"), async (c) => {
   const rows = results.slice(0, limit);
   return c.json({
     items: rows.map((p) => ({
-      id: p.id, employeeId: p.employee_id, employeeName: p.full_name, kind: p.kind, serverAt: p.server_at, clientAt: p.client_at, method: p.method,
+      id: p.id, employeeId: p.employee_id, employeeName: p.full_name, kind: p.kind, serverAt: p.server_at, effectiveAt: p.effective_at ?? p.server_at, reviewFlag: !!p.review_flag, clientAt: p.client_at, method: p.method,
       status: p.status, distanceM: p.distance_m, accuracyM: p.accuracy_m, deviceId: p.device_id, assignmentId: p.assignment_id,
       correctionId: p.correction_id, note: p.note, createdBy: p.created_by, decidedBy: p.decided_by, decidedAt: p.decided_at,
     })),
@@ -841,14 +855,17 @@ hrRoutes.post("/attendance/punches/:id/decide", requirePerm("hr.schedule"), asyn
   const db = c.env.DB;
   const p = await db.prepare(`SELECT * FROM attendance_punches WHERE id=?`).bind(id).first<any>();
   if (!p) throw notFound("punch_not_found", "Không tìm thấy lần chấm công");
-  if (p.status !== "pending") throw conflict("already_decided", "Lần chấm công không ở trạng thái chờ duyệt");
-  await assertPeriodsOpen(db, [vnDate(new Date(p.server_at))]);
+  // C-01: chấm offline đã tính ngay (accepted + review_flag) vẫn xem lại được: xác nhận (bỏ cờ) hoặc từ chối
+  const flagged = p.status === "accepted" && !!p.review_flag;
+  if (p.status !== "pending" && !flagged) throw conflict("already_decided", "Lần chấm công không ở trạng thái chờ duyệt");
+  await assertPeriodsOpen(db, [vnDate(new Date(p.effective_at ?? p.server_at))]);
   await assertNotSelf(c, { requestedBy: p.created_by, employeeIds: [p.employee_id] });
   const status = b.decision === "rejected" ? "rejected" : "accepted";
+  const fromStatus = p.status;
   await db.batch([
-    assertStmt(db, "punch.decide", `SELECT status = 'pending' FROM attendance_punches WHERE id = ?`, [id]),
-    db.prepare(`UPDATE attendance_punches SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(status, c.get("user").id, nowIso(), id),
-    auditStmt(c, { action: `hr.punch.${status}`, entity: "attendance_punch", entityId: id, before: { status: "pending" }, after: { status }, reason: b.note }),
+    assertStmt(db, "punch.decide", `SELECT status = ? AND review_flag = ? FROM attendance_punches WHERE id = ?`, [fromStatus, flagged ? 1 : 0, id]),
+    db.prepare(`UPDATE attendance_punches SET status=?, review_flag=0, decided_by=?, decided_at=? WHERE id=? AND status=? AND review_flag=?`).bind(status, c.get("user").id, nowIso(), id, fromStatus, flagged ? 1 : 0),
+    auditStmt(c, { action: `hr.punch.${status}`, entity: "attendance_punch", entityId: id, before: { status: fromStatus, reviewFlag: flagged }, after: { status }, reason: b.note }),
   ]);
   return c.json({ id, status });
 });
@@ -960,7 +977,9 @@ hrRoutes.post("/me/leave-requests", requirePerm("hr.self"), async (c) => {
   let over = 0;
   if (lt.uses_balance) {
     const bal = await leaveBalance(db, me.id, Number(b.fromDate.slice(0, 4)));
-    over = daysX10 > bal.remainingX10 ? 1 : 0;
+    // C-08: tính cả các đơn đang chờ duyệt cùng năm (cờ chỉ mang tính cảnh báo, số dư được kiểm lại lúc duyệt)
+    const pend = await db.prepare(`SELECT COALESCE(SUM(lr.days_x10),0) n FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.leave_type_id WHERE lr.employee_id=? AND lr.status='pending' AND lt.uses_balance=1 AND substr(lr.from_date,1,4)=?`).bind(me.id, b.fromDate.slice(0, 4)).first<{ n: number }>();
+    over = daysX10 > bal.remainingX10 - (pend?.n ?? 0) ? 1 : 0;
   }
   const r = await db.prepare(`INSERT INTO leave_requests(employee_id, leave_type_id, from_date, to_date, half_day, days_x10, reason, over_balance, requested_by) VALUES (?,?,?,?,?,?,?,?,?)`)
     .bind(me.id, lt.id, b.fromDate, b.toDate, b.halfDay ? 1 : 0, daysX10, b.reason ?? null, over, c.get("user").id).run();
@@ -988,20 +1007,36 @@ hrRoutes.get("/leave-requests", requirePerm("hr.view"), async (c) => {
 
 hrRoutes.post("/leave-requests/:id/decide", requirePerm("hr.schedule"), async (c) => {
   const id = idOf(c);
-  const b = await parseBody(c, decideBody.extend({ allowOverBalance: z.boolean().optional() }));
+  const b = await parseBody(c, decideBody.extend({ allowOverBalance: z.boolean().optional(), exceptionReason: z.string().trim().min(3).max(300).optional() }));
   const db = c.env.DB;
   const r = await db.prepare(`SELECT * FROM leave_requests WHERE id=?`).bind(id).first<any>();
   if (!r) throw notFound("leave_not_found", "Không tìm thấy đơn nghỉ");
   if (r.status !== "pending") throw conflict("already_decided", "Đơn đã được xử lý");
   await assertNotSelf(c, { requestedBy: r.requested_by, employeeIds: [r.employee_id] });
+  let over = 0;
   if (b.decision === "approved") {
-    if (r.over_balance && !b.allowOverBalance) throw conflict("over_balance", "Đơn vượt số ngày phép còn lại — cần duyệt ngoại lệ (allowOverBalance: true)");
     await assertPeriodsOpen(db, eachDate(r.from_date, r.to_date));
+    // C-08: kiểm lại số dư TẠI LÚC DUYỆT (gồm mọi đơn khác đã duyệt sau khi đơn này được tạo), không tin cờ over_balance lúc tạo đơn
+    const lt = await db.prepare(`SELECT uses_balance FROM leave_types WHERE id=?`).bind(r.leave_type_id).first<{ uses_balance: number }>();
+    if (lt?.uses_balance) {
+      const bal = await leaveBalance(db, r.employee_id, Number(r.from_date.slice(0, 4)));
+      over = r.days_x10 > bal.remainingX10 ? 1 : 0;
+      if (over) {
+        if (!b.allowOverBalance) throw conflict("over_balance", `Đơn xin ${r.days_x10 / 10} ngày nhưng chỉ còn ${Math.max(0, bal.remainingX10) / 10} ngày phép — cần duyệt ngoại lệ (allowOverBalance: true kèm exceptionReason)`, { requestedX10: r.days_x10, remainingX10: bal.remainingX10 });
+        if (!b.exceptionReason) throw new AppError(422, "exception_reason_required", "Duyệt vượt số ngày phép phải ghi lý do ngoại lệ (exceptionReason)");
+      }
+    }
   }
   await db.batch([
-    assertStmt(db, "leave.decide", `SELECT status = 'pending' FROM leave_requests WHERE id = ?`, [id]),
-    db.prepare(`UPDATE leave_requests SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'`).bind(b.decision, c.get("user").id, nowIso(), id),
-    auditStmt(c, { action: `hr.leave.${b.decision}`, entity: "leave_request", entityId: id, before: { status: "pending" }, after: { status: b.decision, overBalanceException: !!(r.over_balance && b.allowOverBalance) }, reason: b.note }),
+    assertStmt(
+      db, "leave.decide",
+      `SELECT status = 'pending' AND (? = 0 OR (SELECT COALESCE(SUM(l2.days_x10),0) FROM leave_requests l2 JOIN leave_types t2 ON t2.id = l2.leave_type_id
+                  WHERE l2.employee_id = leave_requests.employee_id AND l2.status='approved' AND t2.uses_balance=1 AND substr(l2.from_date,1,4)=substr(leave_requests.from_date,1,4)) + days_x10
+             <= (SELECT annual_leave_days * 10 FROM employees WHERE id = leave_requests.employee_id) OR ? = 1 OR (SELECT uses_balance FROM leave_types WHERE id = leave_requests.leave_type_id) = 0) FROM leave_requests WHERE id = ?`,
+      [b.decision === "approved" ? 1 : 0, over, id],
+    ),
+    db.prepare(`UPDATE leave_requests SET status=?, decided_by=?, decided_at=?, over_balance=?, exception_reason=? WHERE id=? AND status='pending'`).bind(b.decision, c.get("user").id, nowIso(), b.decision === "approved" ? over : r.over_balance, over ? b.exceptionReason ?? null : null, id),
+    auditStmt(c, { action: `hr.leave.${b.decision}`, entity: "leave_request", entityId: id, before: { status: "pending" }, after: { status: b.decision, overBalanceException: !!over, exceptionReason: over ? b.exceptionReason : undefined }, reason: b.note }),
   ]);
   return c.json({ id, status: b.decision });
 });
@@ -1141,4 +1176,49 @@ hrRoutes.post("/timesheets/adjustments", requirePerm("hr.manage"), async (c) => 
   const r = await db.prepare(`INSERT INTO timesheet_adjustments(employee_id, source_period, target_period, minutes, kind, reason, created_by) VALUES (?,?,?,?,?,?,?)`).bind(b.employeeId, b.sourcePeriod, target, b.minutes, b.kind, b.reason, c.get("user").id).run();
   await auditStmt(c, { action: "hr.timesheet.adjust", entity: "timesheet", entityId: b.sourcePeriod, after: { ...b, targetPeriod: target, adjustmentId: r.meta.last_row_id }, reason: b.reason }).run();
   return c.json({ id: r.meta.last_row_id, employeeId: b.employeeId, sourcePeriod: b.sourcePeriod, targetPeriod: target, minutes: b.minutes, kind: b.kind }, 201);
+});
+
+// ----- Cấu hình cửa hàng: toạ độ + bán kính chấm công (C-07) -----
+const canStoreCfg = (c: Ctx) => {
+  const role = c.get("user").role;
+  if (!can(role, "users.manage") && !can(role, "hr.manage")) throw forbidden();
+};
+const mapStore = (s: any) => ({ id: s.id, code: s.code, name: s.name, address: s.address, lat: s.lat, lng: s.lng, geofenceM: s.geofence_m ?? 100, active: !!s.active });
+
+hrRoutes.get("/stores", async (c) => {
+  canStoreCfg(c);
+  const { results } = await c.env.DB.prepare(`SELECT id, code, name, address, lat, lng, geofence_m, active FROM stores ORDER BY id`).all<any>();
+  return c.json({ items: results.map(mapStore) });
+});
+
+hrRoutes.get("/stores/:id", async (c) => {
+  canStoreCfg(c);
+  const s = await c.env.DB.prepare(`SELECT id, code, name, address, lat, lng, geofence_m, active FROM stores WHERE id=?`).bind(Number(c.req.param("id"))).first<any>();
+  if (!s) throw notFound("store_not_found", "Không tìm thấy cửa hàng");
+  return c.json(mapStore(s));
+});
+
+const storePut = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  address: z.string().trim().max(300).nullable().optional(),
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lng: z.number().min(-180).max(180).nullable().optional(),
+  geofenceM: z.number().int().min(10).max(2000).optional(),
+});
+hrRoutes.put("/stores/:id", async (c) => {
+  canStoreCfg(c);
+  const id = Number(c.req.param("id"));
+  const b = await parseBody(c, storePut);
+  const db = c.env.DB;
+  const s = await db.prepare(`SELECT id, code, name, address, lat, lng, geofence_m, active FROM stores WHERE id=?`).bind(id).first<any>();
+  if (!s) throw notFound("store_not_found", "Không tìm thấy cửa hàng");
+  const lat = b.lat !== undefined ? b.lat : s.lat;
+  const lng = b.lng !== undefined ? b.lng : s.lng;
+  if ((lat == null) !== (lng == null)) throw new AppError(422, "validation_error", "Phải nhập cả vĩ độ và kinh độ (hoặc để trống cả hai)");
+  const next = { name: b.name ?? s.name, address: b.address !== undefined ? b.address : s.address, lat, lng, geofenceM: b.geofenceM ?? s.geofence_m ?? 100 };
+  await db.batch([
+    db.prepare(`UPDATE stores SET name=?, address=?, lat=?, lng=?, geofence_m=? WHERE id=?`).bind(next.name, next.address, next.lat, next.lng, next.geofenceM, id),
+    auditStmt(c, { action: "store.update", entity: "store", entityId: id, before: { name: s.name, address: s.address, lat: s.lat, lng: s.lng, geofenceM: s.geofence_m }, after: next }),
+  ]);
+  return c.json(mapStore({ ...s, name: next.name, address: next.address, lat, lng, geofence_m: next.geofenceM }));
 });

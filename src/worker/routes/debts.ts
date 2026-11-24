@@ -760,7 +760,8 @@ debtRoutes.post("/bank-transactions/import", requirePerm("debt.write"), async (c
   return c.json({ imported, duplicates, matched, unmatched: imported - matched, invalid, items: out }, 201);
 });
 
-debtRoutes.get("/bank-transactions", requirePerm("debt.view"), async (c) => {
+// C-22: sao kê ngân hàng thuộc M6 (tài chính) — thủ kho (chỉ có debt.view, M6 = "Không") không xem
+debtRoutes.get("/bank-transactions", requirePerm("debt.view", "finance.view"), async (c) => {
   const q = c.req.query();
   const conds: string[] = [];
   const params: unknown[] = [];

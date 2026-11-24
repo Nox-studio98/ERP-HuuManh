@@ -61,18 +61,8 @@ payrollRoutes.get("/payroll/periods", requirePerm("hr.sensitive"), async (c) => 
   });
 });
 
-// ---------------------------------------------------------------- tính lương
-async function calculatePeriod(c: Ctx, period: string) {
-  const db = c.env.DB;
-  const user = c.get("user");
-  const ts = await db.prepare(`SELECT status FROM timesheets WHERE period = ?`).bind(period).first<{ status: string }>();
-  if (!ts || ts.status !== "closed") throw conflict("timesheet_open", "Bảng công kỳ này chưa chốt");
-  let pp = await getPeriodRow(db, period);
-  if (pp && (pp.status === "approved" || pp.status === "paid")) throw conflict("payroll_locked", "Kỳ lương đã duyệt/đã chi, không được tính lại");
-  if (!pp) {
-    await db.prepare(`INSERT OR IGNORE INTO payroll_periods(period, status) VALUES (?, 'draft')`).bind(period).run();
-    pp = await getPeriodRow(db, period);
-  }
+/** Toàn bộ dữ liệu đầu vào của một kỳ lương (dùng cho cả tính lương lẫn dấu vân tay kiểm tra "dữ liệu đã đổi sau khi tính"). */
+async function loadPayrollInputs(db: D1Database, period: string) {
   const { first, last, fromIso, toIso } = periodDates(period);
   const settings = await loadPayrollSettings(db);
 
@@ -83,9 +73,9 @@ async function calculatePeriod(c: Ctx, period: string) {
       .all<any>()
   ).results;
 
-  const days = (await db.prepare(`SELECT * FROM timesheet_days WHERE period = ?`).bind(period).all<any>()).results;
-  const adjs = (await db.prepare(`SELECT employee_id, kind, SUM(minutes) AS m FROM timesheet_adjustments WHERE target_period = ? GROUP BY employee_id, kind`).bind(period).all<any>()).results;
-  const allw = (await db.prepare(`SELECT * FROM employee_allowances WHERE active = 1`).all<any>()).results;
+  const days = (await db.prepare(`SELECT * FROM timesheet_days WHERE period = ? ORDER BY employee_id, work_date`).bind(period).all<any>()).results;
+  const adjs = (await db.prepare(`SELECT employee_id, kind, SUM(minutes) AS m FROM timesheet_adjustments WHERE target_period = ? GROUP BY employee_id, kind ORDER BY employee_id, kind`).bind(period).all<any>()).results;
+  const allw = (await db.prepare(`SELECT * FROM employee_allowances WHERE active = 1 ORDER BY id`).all<any>()).results;
   const entries = (await db.prepare(`SELECT * FROM payroll_entries WHERE period = ? ORDER BY id`).bind(period).all<any>()).results;
   const advs = (await db.prepare(`SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'paid' AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted')) ORDER BY id`).bind(period).all<any>()).results;
   const sales = (
@@ -109,6 +99,33 @@ async function calculatePeriod(c: Ctx, period: string) {
   const salesBy = new Map<number, number>();
   for (const s of sales) salesBy.set(s.uid, (salesBy.get(s.uid) ?? 0) + s.t);
   for (const r of returns) salesBy.set(r.uid, (salesBy.get(r.uid) ?? 0) - r.t);
+  const hrSettingRows = (await db.prepare(`SELECT key, value FROM settings WHERE key LIKE 'hr.%' ORDER BY key`).all<any>()).results;
+  return { period, first, last, settings, emps, days, adjs, allw, entries, advs, salesBy, hrSettingRows };
+}
+type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
+
+/** SHA-256 của mọi đầu vào ảnh hưởng phiếu lương (hồ sơ NV, bảng công, điều chỉnh, phụ cấp, thưởng/phạt, tạm ứng, tham số hr.*, doanh số nếu có thưởng doanh số). */
+async function inputsHash(inp: PayrollInputs): Promise<string> {
+  const payload = JSON.stringify([inp.emps, inp.days, inp.adjs, inp.allw, inp.entries, inp.advs, inp.hrSettingRows, inp.settings.salesBonusBp > 0 ? [...inp.salesBy.entries()] : null]);
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---------------------------------------------------------------- tính lương
+async function calculatePeriod(c: Ctx, period: string) {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const ts = await db.prepare(`SELECT status FROM timesheets WHERE period = ?`).bind(period).first<{ status: string }>();
+  if (!ts || ts.status !== "closed") throw conflict("timesheet_open", "Bảng công kỳ này chưa chốt");
+  let pp = await getPeriodRow(db, period);
+  if (pp && (pp.status === "approved" || pp.status === "paid")) throw conflict("payroll_locked", "Kỳ lương đã duyệt/đã chi, không được tính lại");
+  if (!pp) {
+    await db.prepare(`INSERT OR IGNORE INTO payroll_periods(period, status) VALUES (?, 'draft')`).bind(period).run();
+    pp = await getPeriodRow(db, period);
+  }
+  const inp = await loadPayrollInputs(db, period);
+  const { first, last, settings, emps, days, adjs, allw, entries, advs, salesBy } = inp;
+  const hash = await inputsHash(inp);
 
   const stmts: D1PreparedStatement[] = [
     db.prepare(`DELETE FROM payroll_items WHERE payroll_period_id = ?`).bind(pp.id),
@@ -142,17 +159,17 @@ async function calculatePeriod(c: Ctx, period: string) {
       db
         .prepare(
           `INSERT INTO payroll_items(payroll_period_id, employee_id, pay_type, worked_minutes, paid_days_x10, shifts, base_pay, allowances, overtime_pay, bonus, sales_bonus,
-             penalties, adjustments, gross, insurance_employee, insurance_employer, taxable_income, pit, advances, net, detail_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             penalties, adjustments, gross, insurance_employee, insurance_employer, taxable_income, pit, advances, advances_carried, net, detail_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .bind(pp.id, e.id, p.payType, p.workedMinutes, p.paidDaysX10, p.shifts, p.basePay, p.allowances, p.overtimePay, p.bonus, p.salesBonus, p.penalties, p.adjustments,
-          p.gross, p.insuranceEmployee, p.insuranceEmployer, p.taxableIncome, p.pit, p.advances, p.net, JSON.stringify(p.lines)),
+          p.gross, p.insuranceEmployee, p.insuranceEmployer, p.taxableIncome, p.pit, p.advances, p.advancesCarried, p.net, JSON.stringify(p.lines)),
     );
   }
   stmts.push(
     db
-      .prepare(`UPDATE payroll_periods SET status='calculated', calculated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), total_net=?, total_cost=? WHERE id=? AND status IN ('draft','calculated')`)
-      .bind(totalNet, totalCost, pp.id),
+      .prepare(`UPDATE payroll_periods SET status='calculated', calculated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), total_net=?, total_cost=?, inputs_hash=? WHERE id=? AND status IN ('draft','calculated')`)
+      .bind(totalNet, totalCost, hash, pp.id),
     auditStmt(c, { action: "payroll.calculate", entity: "payroll_period", entityId: period, after: { employees: emps.length, totalNet, totalCost } }, user.id),
   );
   try {
@@ -168,6 +185,12 @@ payrollRoutes.post("/payroll/periods/:period/calculate", requirePerm("payroll.wr
 });
 
 // ---------------------------------------------------------------- chi tiết kỳ
+/** Kỳ đã tính nhưng đầu vào đã đổi (hoặc chưa có dấu vân tay) → phải tính lại trước khi duyệt. */
+async function isStale(db: D1Database, pp: any): Promise<boolean> {
+  if (!pp.inputs_hash) return true;
+  return (await inputsHash(await loadPayrollInputs(db, pp.period))) !== pp.inputs_hash;
+}
+
 async function loadPeriodDetail(db: D1Database, period: string) {
   const pp = await getPeriodRow(db, period);
   if (!pp) throw notFound("payroll_period_not_found", "Chưa có bảng lương kỳ này");
@@ -179,7 +202,7 @@ async function loadPeriodDetail(db: D1Database, period: string) {
     employeeId: i.employee_id, code: i.code, name: i.full_name, position: i.position, payType: i.pay_type, workedMinutes: i.worked_minutes, paidDaysX10: i.paid_days_x10,
     shifts: i.shifts, basePay: i.base_pay, allowances: i.allowances, overtimePay: i.overtime_pay, bonus: i.bonus, salesBonus: i.sales_bonus, penalties: i.penalties,
     adjustments: i.adjustments, gross: i.gross, insuranceEmployee: i.insurance_employee, insuranceEmployer: i.insurance_employer, taxableIncome: i.taxable_income,
-    pit: i.pit, advances: i.advances, net: i.net, lines: i.detail_json ? JSON.parse(i.detail_json) : [],
+    pit: i.pit, advances: i.advances, advancesCarried: i.advances_carried ?? 0, net: i.net, lines: i.detail_json ? JSON.parse(i.detail_json) : [],
   }));
   const s = (f: (x: (typeof items)[number]) => number) => items.reduce((a, x) => a + f(x), 0);
   const gross = s((x) => x.gross);
@@ -187,7 +210,7 @@ async function loadPeriodDetail(db: D1Database, period: string) {
   return {
     pp,
     body: {
-      period, status: pp.status, calculatedAt: pp.calculated_at, approvedAt: pp.approved_at, paidAt: pp.paid_at,
+      period, status: pp.status, stale: pp.status === "calculated" ? await isStale(db, pp) : false, calculatedAt: pp.calculated_at, approvedAt: pp.approved_at, paidAt: pp.paid_at,
       totals: { gross, net: s((x) => x.net), insuranceEmployee: s((x) => x.insuranceEmployee), insuranceEmployer, pit: s((x) => x.pit), cost: gross + insuranceEmployer },
       items,
     },
@@ -209,9 +232,13 @@ payrollRoutes.post("/payroll/periods/:period/approve", requirePerm("payroll.appr
   const pp = await getPeriodRow(db, period);
   if (!pp) throw notFound("payroll_period_not_found", "Chưa có bảng lương kỳ này");
   if (pp.status !== "calculated") throw conflict("invalid_state", pp.status === "draft" ? "Chưa tính lương kỳ này" : "Kỳ lương đã được duyệt");
+  // C-04: đầu vào (hồ sơ, bảng công, thưởng/phạt, tạm ứng, phụ cấp, tham số) đã đổi kể từ lần tính cuối → bắt tính lại
+  const curHash = await inputsHash(await loadPayrollInputs(db, period));
+  if (!pp.inputs_hash || curHash !== pp.inputs_hash) throw conflict("payroll_stale", "Dữ liệu đầu vào đã thay đổi sau lần tính lương cuối, hãy tính lại trước khi duyệt");
   const n = await db.prepare(`SELECT COUNT(*) AS n FROM payroll_items WHERE payroll_period_id = ?`).bind(pp.id).first<{ n: number }>();
   try {
     await db.batch([
+      assertStmt(db, "payroll.approve", `SELECT status = 'calculated' AND inputs_hash = ? FROM payroll_periods WHERE id = ?`, [curHash, pp.id]),
       db.prepare(`UPDATE payroll_periods SET status='approved', approved_by=?, approved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='calculated'`).bind(user.id, pp.id),
       auditStmt(c, { action: "payroll.approve", entity: "payroll_period", entityId: period, before: { status: pp.status }, after: { status: "approved", totalNet: pp.total_net, employees: n?.n } }),
     ]);
@@ -259,19 +286,60 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
         .bind(code, fundId, cat.id, it.net, it.code, it.id, curPeriod, `Lương kỳ ${period}`, user.id, user.id),
     );
   }
-  stmts.push(
-    db
+  // C-05: phân bổ khấu trừ tạm ứng theo thứ tự id, mỗi khoản chỉ bị trừ đúng một lần; phần chưa trừ hết chuyển sang kỳ sau (tách dòng nếu trừ một phần)
+  let nextPeriod = addMonth(period, 1);
+  for (let i = 0; i < 24; i++) {
+    const np = await getPeriodRow(db, nextPeriod);
+    if (!np || np.status === "draft") break;
+    nextPeriod = addMonth(nextPeriod, 1);
+  }
+  const advRows = (
+    await db
       .prepare(
-        `UPDATE salary_advances SET status='deducted' WHERE deduct_period = ? AND status='paid' AND created_at <= ?
-            AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted'))
-            AND employee_id IN (SELECT employee_id FROM payroll_items WHERE payroll_period_id = ? AND advances > 0 AND net > 0)`,
+        `SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'paid' AND created_at <= ?
+            AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted')) ORDER BY id`,
       )
-      .bind(period, pp.calculated_at, pp.id),
+      .bind(period, pp.calculated_at)
+      .all<any>()
+  ).results;
+  let carriedTotal = 0;
+  for (const it of items) {
+    let remaining: number = it.advances;
+    for (const a of advRows.filter((x) => x.employee_id === it.employee_id)) {
+      if (remaining >= a.amount) {
+        stmts.push(db.prepare(`UPDATE salary_advances SET status='deducted' WHERE id=? AND status='paid'`).bind(a.id));
+        remaining -= a.amount;
+      } else if (remaining > 0) {
+        const rest = a.amount - remaining;
+        stmts.push(
+          db.prepare(`UPDATE salary_advances SET amount=?, status='deducted' WHERE id=? AND status='paid'`).bind(remaining, a.id),
+          db
+            .prepare(
+              `INSERT INTO salary_advances(employee_id, amount, advance_date, deduct_period, fund_id, cash_voucher_id, status, reason, created_by, carried_from_id)
+               VALUES (?,?,?,?,?,?,'paid',?,?,?)`,
+            )
+            .bind(a.employee_id, rest, a.advance_date, nextPeriod, a.fund_id, a.cash_voucher_id, `Chuyển từ kỳ ${period}${a.reason ? ": " + a.reason : ""}`.slice(0, 300), a.created_by, a.id),
+        );
+        carriedTotal += rest;
+        remaining = 0;
+      } else {
+        stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, a.id));
+        carriedTotal += a.amount;
+      }
+    }
+  }
+  const itemEmps = new Set(items.map((i) => i.employee_id));
+  for (const a of advRows) {
+    if (itemEmps.has(a.employee_id)) continue; // NV không có phiếu lương kỳ này → khoản tạm ứng sang kỳ sau, không bị bỏ sót
+    stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, a.id));
+    carriedTotal += a.amount;
+  }
+  stmts.push(
     db.prepare(`UPDATE payroll_periods SET status='paid', paid_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), paid_fund_id=? WHERE id=? AND status='approved'`).bind(fundId, pp.id),
-    auditStmt(c, { action: "payroll.pay", entity: "payroll_period", entityId: period, after: { fundId, vouchers: vouchers.length, total: vouchers.reduce((a, v) => a + v.amount, 0) } }),
+    auditStmt(c, { action: "payroll.pay", entity: "payroll_period", entityId: period, after: { fundId, vouchers: vouchers.length, total: vouchers.reduce((a, v) => a + v.amount, 0), advancesCarried: carriedTotal, carriedTo: carriedTotal > 0 ? nextPeriod : null } }),
   );
   await db.batch(stmts);
-  return c.json({ period, status: "paid", vouchers });
+  return c.json({ period, status: "paid", vouchers, advancesCarried: carriedTotal, carriedTo: carriedTotal > 0 ? nextPeriod : null });
 });
 
 // ---------------------------------------------------------------- entries
@@ -314,7 +382,7 @@ payrollRoutes.post("/payroll/entries", requirePerm("payroll.write"), async (c) =
     .bind(b.employeeId, b.period, b.kind, b.amount, b.taxable === false ? 0 : 1, b.reason, b.sourcePeriod ?? null, user.id)
     .first<{ id: number }>();
   await audit(c, { action: "payroll.entry.create", entity: "payroll_entry", entityId: r!.id, after: b });
-  return c.json({ id: r!.id, ...b, taxable: b.taxable !== false }, 201);
+  return c.json({ id: r!.id, ...b, taxable: b.taxable !== false, requiresRecalculation: pp?.status === "calculated" }, 201);
 });
 
 // ---------------------------------------------------------------- tạm ứng
@@ -424,7 +492,7 @@ payrollRoutes.get("/me/payslips/:period", requirePerm("hr.self"), async (c) => {
     period, status: i.status, employee: { id: e.id, code: e.code, name: e.full_name, position: e.position }, payType: i.pay_type, workedMinutes: i.worked_minutes,
     paidDaysX10: i.paid_days_x10, shifts: i.shifts, basePay: i.base_pay, allowances: i.allowances, overtimePay: i.overtime_pay, bonus: i.bonus, salesBonus: i.sales_bonus,
     penalties: i.penalties, adjustments: i.adjustments, gross: i.gross, insuranceEmployee: i.insurance_employee, taxableIncome: i.taxable_income, pit: i.pit,
-    advances: i.advances, net: i.net, lines: i.detail_json ? JSON.parse(i.detail_json) : [],
+    advances: i.advances, advancesCarried: i.advances_carried ?? 0, net: i.net, lines: i.detail_json ? JSON.parse(i.detail_json) : [],
   });
 });
 
