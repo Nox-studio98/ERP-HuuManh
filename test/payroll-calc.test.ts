@@ -89,15 +89,17 @@ describe("calculatePayslip", () => {
     expect(calculatePayslip(base()).insuranceEmployee).toBe(0);
   });
 
-  it("PIT progressive with dependents", () => {
+  it("PIT progressive with dependents (Luật 109/2025/QH15 — 5 bậc)", () => {
     // lương 50tr, không BH, 2 người phụ thuộc: taxable = 50 − 15,5 − 2×6,2 = 22.100.000
-    // 5tr×5% = 250k; 5tr×10% = 500k; 8tr×15% = 1.200k; 4,1tr×20% = 820k → 2.770.000
+    // 10tr×5% = 500k; 12,1tr×10% = 1.210k → 1.710.000
     const p = calculatePayslip(base({ emp: { baseSalary: 50_000_000, dependents: 2 }, days: work(26) }));
     expect(p.taxableIncome).toBe(22_100_000);
-    expect(p.pit).toBe(2_770_000);
-    expect(p.net).toBe(47_230_000);
-    // đầy đủ các bậc: 100tr = 250k+500k+1.200k+2.800k+5.000k+8.400k+7.000k = 25.150.000
-    expect(progressiveTax(100_000_000, S.pitBrackets)).toBe(25_150_000);
+    expect(p.pit).toBe(1_710_000);
+    expect(p.net).toBe(48_290_000);
+    // đủ các bậc: 100tr = 500k + 2.000k + 6.000k + 12.000k = 20.500.000; 120tr thêm 20tr × 35% = 7.000k
+    expect(progressiveTax(100_000_000, S.pitBrackets)).toBe(20_500_000);
+    expect(progressiveTax(120_000_000, S.pitBrackets)).toBe(27_500_000);
+    expect(progressiveTax(10_000_000, S.pitBrackets)).toBe(500_000);
     expect(progressiveTax(0, S.pitBrackets)).toBe(0);
     // NV tắt TNCN
     expect(calculatePayslip(base({ emp: { baseSalary: 50_000_000, pitEnabled: false } })).pit).toBe(0);
@@ -131,5 +133,17 @@ describe("calculatePayslip", () => {
     const input = base({ salesRevenue: 25_000_000 });
     expect(calculatePayslip(input, { ...S, salesBonusBp: 200 }).salesBonus).toBe(500_000);
     expect(calculatePayslip(input, S).salesBonus).toBe(0);
+  });
+
+  it("overtime premium above normal pay is exempt from PIT", () => {
+    // lương 20,8tr → đơn giá giờ 100.000; tăng ca ngày thường 120' ×1,5 = 300.000, phần chênh 100.000 miễn thuế
+    // gross 21.100.000; taxable = 21,1 − 0,1 − 15,5 = 5.500.000 → 275.000
+    const days = work(26);
+    days[0] = day({ overtimeMinutes: 120, overtimeMultiplierBp: S.otWeekdayBp });
+    const p = calculatePayslip(base({ emp: { baseSalary: 20_800_000 }, days }));
+    expect(p.overtimePay).toBe(300_000);
+    expect(p.gross).toBe(21_100_000);
+    expect(p.taxableIncome).toBe(5_500_000);
+    expect(p.pit).toBe(275_000);
   });
 });

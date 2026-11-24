@@ -78,7 +78,7 @@ CSP/HSTS cho cả API lẫn HTML, cookie `__Host-` + chống CSRF, rate limit/Tu
 
 ### 3.3 Còn lại sau Đợt 4
 - **Không còn đợt phát triển** theo tài liệu nghiệp vụ. Tiếp theo là **tuần 10**: đào tạo, chạy song song, nghiệm thu, go-live.
-- **Biểu thuế TNCN mặc định** (`hr.pit_brackets_json`, 7 bậc) đi kèm mức giảm trừ 15,5 tr/6,2 tr — **phải đối chiếu luật thuế TNCN hiện hành** (đã có thay đổi về số bậc) trước khi trả lương thật; tất cả là tham số cấu hình.
+- **Biểu thuế TNCN**: đã cập nhật theo Luật Thuế TNCN 109/2025/QH15 (tiền lương áp dụng từ kỳ tính thuế 2026): 5 bậc 5/10/20/30/35% với ngưỡng 10/30/60/100 tr; giảm trừ 15,5 tr/6,2 tr theo NQ 110/2025/UBTVQH15 (migration 0013 chỉ ghi đè khi còn giá trị mặc định cũ). Phần tiền tăng ca cao hơn giờ thường được trừ khỏi thu nhập chịu thuế. Kế toán vẫn nên đối chiếu nghị định/thông tư hướng dẫn khi ban hành; tất cả là tham số cấu hình.
 - Máy chấm công vân tay / khuôn mặt (M9-24, Could) — chưa làm (cần thiết bị, [Cần xác nhận]).
 - Đổi ca: NV gửi/nhận được, nhưng chưa có kịch bản E2E đầy đủ; hợp đồng lao động thêm được nhưng chưa sửa trên giao diện; loại nghỉ phép cố định 3 loại.
 - Website chưa tích/đổi điểm (chỉ POS); voucher/điểm chưa in trên hoá đơn điện tử.
