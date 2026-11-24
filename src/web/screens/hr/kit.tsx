@@ -1,6 +1,6 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import qrcode from "qrcode-generator";
-import { ApiError } from "../../api";
+import { ApiError, get, items } from "../../api";
 import { Button, Sheet } from "../../components/ui";
 import { todayVN } from "../../format";
 
@@ -32,6 +32,19 @@ export const REQ_STATUS: Record<string, string> = { pending: "Chờ duyệt", ap
 export const reqTone = (s: string) => ({ pending: "warn", approved: "ok", accepted: "ok", rejected: "danger", cancelled: "danger" } as any)[s];
 export const CORR_TYPE: Record<string, string> = { missing_in: "Quên chấm vào", missing_out: "Quên chấm ra", out_of_area: "Ngoài vùng / GPS lỗi", other: "Khác" };
 export const LEAVE_TYPE: Record<string, string> = { annual: "Phép năm", sick: "Nghỉ ốm", unpaid: "Nghỉ không lương" };
+export type LeaveTypeRow = { id: number; code: string; name: string; paid: boolean; usesBalance: boolean; active: boolean };
+/** Loại nghỉ cấu hình từ API (mặc định rơi về 3 loại cứng nếu chưa tải được) */
+export function useLeaveTypes(all = false) {
+  const [rows, setRows] = useState<LeaveTypeRow[] | null>(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    get("/leave-types", all ? { all: 1 } : undefined, { silent: true }).then((r) => live && setRows(items<LeaveTypeRow>(r))).catch(() => live && setRows(null));
+    return () => { live = false; };
+  }, [all, tick]);
+  const label = (code: string) => rows?.find((t) => t.code === code)?.name ?? LEAVE_TYPE[code] ?? code;
+  return { types: rows ?? Object.entries(LEAVE_TYPE).map(([code, name], i) => ({ id: i, code, name, paid: code !== "unpaid", usesBalance: code === "annual", active: true })), loaded: rows !== null, label, reload: () => setTick((t) => t + 1) };
+}
 export const PERIOD_STATUS: Record<string, string> = { draft: "Nháp", calculated: "Đã tính", approved: "Đã duyệt", paid: "Đã chi" };
 export const periodTone = (s: string) => ({ draft: "info", calculated: "warn", approved: "info", paid: "ok" } as any)[s];
 export const ENTRY_KIND: Record<string, string> = { bonus: "Thưởng", penalty: "Phạt", allowance: "Phụ cấp", adjustment: "Điều chỉnh" };

@@ -4,7 +4,7 @@ import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, Segmented, Se
 import { Scanner } from "../../components/Scanner";
 import { toast } from "../../components/toast";
 import { money, todayVN } from "../../format";
-import { CORR_TYPE, KIND, LEAVE_TYPE, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, addDaysS, days10, dm, dmy, errCode, hm, periodLabel, reqTone, vnIso, vnTime, WD_SHORT, wdOf } from "./kit";
+import { CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, addDaysS, days10, dm, dmy, errCode, hm, periodLabel, reqTone, useLeaveTypes, vnIso, vnTime, WD_SHORT, wdOf } from "./kit";
 
 type Tab = "today" | "schedule" | "swap" | "leave" | "ot" | "corr" | "payslip";
 const TABS: { v: Tab; label: string }[] = [
@@ -232,14 +232,16 @@ function MySchedule() {
 
 /* ================= Nghỉ phép ================= */
 function Leave() {
+  const lt = useLeaveTypes();
   const l = useAsync(() => get("/me/leave-requests"), []);
   const [f, setF] = useState({ leaveTypeCode: "annual", fromDate: todayVN(1), toDate: todayVN(1), halfDay: false, reason: "" });
   const [busy, setBusy] = useState(false);
   const bal = l.data?.leaveBalance;
+  const code = lt.types.some((t) => t.code === f.leaveTypeCode) ? f.leaveTypeCode : lt.types[0]?.code ?? f.leaveTypeCode;
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await post("/me/leave-requests", { ...f, toDate: f.halfDay ? f.fromDate : f.toDate, reason: f.reason.trim() || undefined });
+      const r = await post("/me/leave-requests", { ...f, leaveTypeCode: code, toDate: f.halfDay ? f.fromDate : f.toDate, reason: f.reason.trim() || undefined });
       toast(r.overBalance ? "Đã gửi đơn — vượt số ngày phép còn lại, quản lý sẽ xem xét ngoại lệ" : "Đã gửi đơn xin nghỉ", "ok");
       setF({ ...f, reason: "" }); l.reload();
     } catch { /* toast */ } finally { setBusy(false); }
@@ -251,8 +253,8 @@ function Leave() {
       </Card>
       <Card title="Xin nghỉ">
         <div className="stack">
-          <Select label="Loại nghỉ" value={f.leaveTypeCode} onChange={(e) => setF({ ...f, leaveTypeCode: e.target.value })}>
-            {Object.entries(LEAVE_TYPE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          <Select label="Loại nghỉ" value={code} onChange={(e) => setF({ ...f, leaveTypeCode: e.target.value })}>
+            {lt.types.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
           </Select>
           <div className="grid2">
             <Input label="Từ ngày" type="date" value={f.fromDate} onChange={(e) => setF({ ...f, fromDate: e.target.value, toDate: e.target.value > f.toDate ? e.target.value : f.toDate })} />
@@ -268,7 +270,7 @@ function Leave() {
           <div className="stack" style={{ gap: 8 }}>
             {l.data.items.map((r: any) => (
               <div key={r.id} className="row between" style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-                <span><b>{LEAVE_TYPE[r.leaveTypeCode] ?? r.leaveTypeCode}</b> · {dmy(r.fromDate)}{r.toDate !== r.fromDate ? ` – ${dmy(r.toDate)}` : ""} · {days10(r.daysX10)} ngày{r.overBalance && <> <Badge tone="warn">Vượt phép</Badge></>}</span>
+                <span><b>{lt.label(r.leaveTypeCode)}</b> · {dmy(r.fromDate)}{r.toDate !== r.fromDate ? ` – ${dmy(r.toDate)}` : ""} · {days10(r.daysX10)} ngày{r.overBalance && <> <Badge tone="warn">Vượt phép</Badge></>}</span>
                 <Badge tone={reqTone(r.status)}>{REQ_STATUS[r.status] ?? r.status}</Badge>
               </div>
             ))}
