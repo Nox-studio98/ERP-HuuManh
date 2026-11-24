@@ -109,6 +109,12 @@ adminRoutes.get("/users", requirePerm("users.manage"), async (c) => {
   return c.json({ items: results });
 });
 
+// Danh sách gọn người có thể làm phụ trách khách sỉ — không cần quyền quản trị người dùng.
+adminRoutes.get("/users/assignable", requirePerm("b2b.write"), async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT id, full_name AS fullName FROM users WHERE active = 1 AND role IN ('owner','manager') ORDER BY full_name, id`).all();
+  return c.json({ items: results });
+});
+
 adminRoutes.post("/users", requirePerm("users.manage"), async (c) => {
   const body = await parseBody(
     c,

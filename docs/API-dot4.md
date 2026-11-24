@@ -139,3 +139,16 @@ Hook cron có sẵn (điền nội dung, KHÔNG sửa `scheduled.ts`): `services
 | competitors.view / write | ✓ | ✓ | | | | | |
 | purchasing.view | ✓ | ✓ | | ✓ | | | |
 | promotions.write / approve, loyalty.adjust | ✓ | ✓ | | | | | |
+
+## Bổ sung (gaps-2)
+
+| Method | Đường dẫn | Quyền | Ghi chú |
+|---|---|---|---|
+| PUT | `/price-lists/:id` | `prices.write` | Sửa tên/kênh/nhóm khách/loại/ưu tiên/`active`; không cho tắt bảng giá nền cuối cùng (409 `last_base_price_list`); audit `price_list.update`. |
+| GET | `/debts/payments` | `debt.view` | Thêm lọc `direction`, `status`, `from`/`to` (YYYY-MM-DD); trả thêm `partnerName`. |
+| GET | `/users/assignable` | `b2b.write` | `[{id, fullName}]` người dùng hoạt động vai trò owner/manager. |
+| GET | `/leave-types` | `hr.view` hoặc `hr.self` | Mặc định chỉ loại đang dùng; `?all=1` (cần `hr.view`) gồm cả đã tắt. |
+| POST | `/leave-types` | `hr.manage` | `{code, name, paid, usesBalance, active?}`, `code` duy nhất. Không có DELETE: tắt bằng `active=false`. |
+| PUT | `/leave-types/:id` | `hr.manage` | Sửa `name/paid/usesBalance/active`. Loại đã tắt không xin nghỉ được. |
+
+Migration `0012_leave_types_active.sql` thêm cột `leave_types.active`. `GET /b2b/recurring` trả thêm `productName` mỗi dòng.

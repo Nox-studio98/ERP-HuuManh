@@ -37,6 +37,38 @@ priceRoutes.post("/price-lists", requirePerm("prices.write"), async (c) => {
   return c.json({ ...row, active: !!row.active }, 201);
 });
 
+priceRoutes.put("/price-lists/:id", requirePerm("prices.write"), async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) throw notFound("price_list_not_found", "Không tìm thấy bảng giá");
+  const b = await parseBody(
+    c,
+    z.object({
+      name: z.string().trim().min(1).max(100),
+      channel: z.enum(["pos", "online", "b2b", "all"]),
+      customerGroupId: z.number().int().positive().nullish(),
+      kind: z.enum(["base", "group", "promo", "customer"]),
+      priority: z.number().int().min(0).max(1000),
+      active: z.boolean(),
+    }),
+  );
+  const cur = await db.prepare(`${listSel} WHERE id = ?`).bind(id).first<any>();
+  if (!cur) throw notFound("price_list_not_found", "Không tìm thấy bảng giá");
+  if (cur.kind === "base" && cur.active && (!b.active || b.kind !== "base")) {
+    const other = await db.prepare(`SELECT COUNT(*) n FROM price_lists WHERE kind='base' AND active=1 AND id<>?`).bind(id).first<{ n: number }>();
+    if (!other?.n) throw conflict("last_base_price_list", "Phải còn ít nhất một bảng giá nền đang dùng");
+  }
+  await guarded(() =>
+    db.batch([
+      db.prepare(`UPDATE price_lists SET name=?, channel=?, customer_group_id=?, kind=?, priority=?, active=? WHERE id=?`)
+        .bind(b.name, b.channel, b.customerGroupId ?? null, b.kind, b.priority, b.active ? 1 : 0, id),
+      auditStmt(c, { action: "price_list.update", entity: "price_list", entityId: id, before: { ...cur, active: !!cur.active }, after: b }),
+    ]),
+  );
+  const row = await db.prepare(`${listSel} WHERE id = ?`).bind(id).first<any>();
+  return c.json({ ...row, active: !!row.active });
+});
+
 const priceSel = `SELECT p.id, p.price_list_id AS priceListId, pl.name AS priceListName, pl.kind, pl.priority, p.product_id AS productId,
                          pr.name AS productName, p.unit_price AS unitPrice, p.effective_from AS effectiveFrom, p.effective_to AS effectiveTo,
                          p.status, p.created_by AS createdBy, p.approved_by AS approvedBy, p.created_at AS createdAt, p.note
