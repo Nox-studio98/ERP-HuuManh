@@ -6,6 +6,7 @@ import { enqueueJobStmt, kickJobs } from "./outbox";
 import { transitionStmts } from "./online-orders";
 import { releaseOrderStmts } from "./reservations";
 import { sysAuditStmt } from "./sysaudit";
+import { assertStmt } from "./guard";
 
 /** Chuẩn hoá để so khớp nội dung chuyển khoản: bỏ ký tự không phải chữ/số, in hoa. */
 export const normTransfer = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -59,6 +60,8 @@ export async function markOrderPaid(
   if (order.payment_method !== "transfer" && order.payment_method !== "gateway") throw conflict("not_prepaid", "Đơn không thanh toán trước (COD)");
   if (!["awaiting_payment", "new", "confirmed", "preparing"].includes(order.status)) throw conflict("not_payable", "Đơn đã huỷ/đã giao, không ghi nhận thanh toán");
   const amount = o.amount ?? order.total;
+  // Chốt chặn (audit #4): hai lần ghi nhận tiền đồng thời không được cộng paid_total hai lần
+  const notPaidYet = assertStmt(db, "order.mark_paid", `SELECT payment_status <> 'paid' AND status = ? FROM orders WHERE id = ?`, [order.status, order.id]);
   const payIns = db
     .prepare(
       `INSERT INTO payments(order_id, method, amount, fund_id, ref, status)
@@ -70,14 +73,18 @@ export async function markOrderPaid(
     notifyJob(db, order.id, { status: "new", event: "paid" }),
     o.audit,
   ];
-  if (o.bankTxnId) rest.unshift(db.prepare(`UPDATE bank_transactions SET status='matched', matched_type='order', matched_id=? WHERE id=? AND status='unmatched'`).bind(order.id, o.bankTxnId));
+  if (o.bankTxnId) {
+    rest.unshift(db.prepare(`UPDATE bank_transactions SET status='matched', matched_type='order', matched_id=? WHERE id=? AND status='unmatched'`).bind(order.id, o.bankTxnId));
+    rest.unshift(assertStmt(db, "bank.match", `SELECT status = 'unmatched' FROM bank_transactions WHERE id = ?`, [o.bankTxnId]));
+  }
   const paidSet = `payment_status = ?3, paid_total = paid_total + ?4`;
   let stmts: D1PreparedStatement[];
   if (order.status === "awaiting_payment") {
     const t = transitionStmts(db, order.id, "awaiting_payment", "new", { type: "staff", id: o.userId }, { note: "Đã nhận thanh toán", extraSet: paidSet, extraBinds: ["paid", amount] });
-    stmts = [t[0], payIns, ...t.slice(1), ...rest];
+    stmts = [notPaidYet, t[0], payIns, ...t.slice(1), ...rest];
   } else {
     stmts = [
+      notPaidYet,
       ...guardStmts(db, order.id, order.status).slice(0, 1),
       payIns,
       db.prepare(`UPDATE orders SET payment_status='paid', paid_total = paid_total + ?2 WHERE id=?1`).bind(order.id, amount),
@@ -139,6 +146,8 @@ export async function refundPlan(db: D1Database, orderId: number, total: number,
   const full = amount >= p.net;
   return {
     amount,
+    // Chốt chặn (audit #4): tiền còn lại (đã trả − đã hoàn) phải còn đủ tại lúc ghi; hoàn đôi → state_changed 409
+    guard: assertStmt(db, "order.refund", `SELECT COALESCE(SUM(amount), 0) >= ? FROM payments WHERE order_id = ? AND status = 'confirmed'`, [p.net, orderId]),
     stmt: db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(orderId, p.method, -amount, p.fundId, "refund"),
     status: full ? "refunded" : "partially_refunded",
     totalRef: total,

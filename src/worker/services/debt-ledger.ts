@@ -4,6 +4,7 @@ import { auditStmt } from "../lib/audit";
 import { AppError, notFound } from "../lib/errors";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnPeriod } from "../lib/time";
+import { assertStmt, onceStmt } from "./guard";
 import { BILL_OUTSTANDING_SQL, INVOICE_OUTSTANDING_SQL } from "./debt";
 
 type Ctx = Context<AppBindings>;
@@ -146,6 +147,8 @@ export interface PaymentInput {
   note?: string | null;
   allocations?: AllocInput[];
   bankTxnId?: number | null;
+  /** Khoá idempotency do client gửi: gửi lại cùng khoá → 409 already_done, không tạo phiếu thứ hai. */
+  idempotencyKey?: string | null;
 }
 
 export async function paymentResult(db: D1Database, paymentId: number) {
@@ -173,6 +176,9 @@ export async function createPayment(c: Ctx, input: PaymentInput) {
   const pCode = await nextCode(db, input.direction === "in" ? "TNK" : "TTN");
   const paidAt = input.paidAt || new Date().toISOString();
   const stmts: D1PreparedStatement[] = [
+    // Chốt chặn đồng thời (audit #5): khoá idempotency + giao dịch ngân hàng phải còn 'unmatched'. Gạch vượt nợ do trigger 0008 chặn → rollback cả batch (không còn phiếu mồ côi).
+    ...(input.idempotencyKey ? [onceStmt(db, "debt.payment", input.idempotencyKey)] : []),
+    ...(input.bankTxnId ? [assertStmt(db, "bank.match", `SELECT status = 'unmatched' FROM bank_transactions WHERE id = ?`, [input.bankTxnId])] : []),
     voucherStmt(db, {
       code: vCode, direction: input.direction, fundId: input.fundId, categoryId: catId, amount: input.amount, counterparty: partner.name,
       refType: "debt_payment", note: input.note ?? (input.direction === "in" ? `Thu nợ ${partner.name}` : `Trả nợ ${partner.name}`), userId: user.id,
@@ -242,7 +248,9 @@ export function parseCsv(input: string): string[][] {
 }
 
 export const csvCell = (v: unknown) => {
-  const s = v == null ? "" : String(v);
+  let s = v == null ? "" : String(v);
+  // chống CSV/formula injection (cùng quy tắc reports.ts): chuỗi bắt đầu = + - @ tab CR → thêm ' ở đầu. Số âm thật (number) giữ nguyên.
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\r\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 export const toCsv = (rows: unknown[][]) => "﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";

@@ -6,7 +6,8 @@ import { nextCode } from "../lib/codes";
 import { lineAmount } from "../lib/money";
 import { vnDate } from "../lib/time";
 import { can } from "../lib/rbac";
-import { checkCredit, customerDebtStatus } from "./debt";
+import { checkCredit, customerDebtStatus, openB2bExposure } from "./debt";
+import { assertStmt } from "./guard";
 import { planReservations, reserveStmts } from "./reservations";
 import { currentAvgCost, resolvePrice } from "./pricing";
 import { unitFactor } from "./http";
@@ -204,11 +205,11 @@ async function findOverride(db: D1Database, order: { id: number; customer_id: nu
 export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApprovalId?: number | null) {
   const db = c.env.DB;
   const user = c.get("user");
-  const o = await db.prepare(`SELECT * FROM orders WHERE id = ? AND channel = 'b2b'`).bind(orderId).first<any>();
+  const o = await db.prepare(`SELECT * FROM orders WHERE id = ? AND channel = 'b2b' AND kind = 'sale'`).bind(orderId).first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn sỉ");
   if (o.status !== "new" && o.status !== "delivery_failed") throw conflict("invalid_status", `Đơn đang ở trạng thái ${o.status}`, { status: o.status });
 
-  const chk = await checkCredit(db, o.customer_id, o.total);
+  const chk = await checkCredit(db, o.customer_id, o.total, orderId);
   let override: number | null = null;
   if (!chk.ok) {
     override = await findOverride(db, o, overrideApprovalId);
@@ -235,8 +236,25 @@ export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApproval
 
   const lines = (await db.prepare(`SELECT id, product_id, qty_milli FROM order_lines WHERE order_id = ? ORDER BY id`).bind(orderId).all<any>()).results;
   const plans = await planReservations(db, lines.map((l) => ({ orderLineId: l.id, productId: l.product_id, qtyMilli: l.qty_milli })), o.store_id);
+  // Chốt chặn đồng thời (audit #7/#9): trạng thái đơn còn như đã đọc; và khi KHÔNG có duyệt vượt hạn mức, tổng các đơn đã
+  // cam kết (confirmed/preparing/shipping) của khách chưa đổi so với lúc kiểm hạn mức — hai đơn cùng confirm song song không
+  // thể cùng lọt hạn mức (đơn thứ hai nhận 409 state_changed, thử lại sẽ tính lại). Đơn 'new' không đổi bất biến này nên không gây xung đột.
+  const committed = override ? null : await openB2bExposure(db, o.customer_id, orderId, ["confirmed", "preparing", "shipping"]);
   try {
     await db.batch([
+      assertStmt(db, "b2b.confirm", `SELECT status = ? FROM orders WHERE id = ?`, [o.status, orderId]),
+      ...(committed == null
+        ? []
+        : [
+            assertStmt(
+              db,
+              "b2b.credit",
+              `SELECT COALESCE(SUM(o.total), 0) = ? FROM orders o
+                WHERE o.customer_id = ? AND o.channel = 'b2b' AND o.kind = 'sale' AND o.status IN ('confirmed','preparing','shipping') AND o.id <> ?
+                  AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND i.kind = 'sale' AND i.status = 'open')`,
+              [committed, o.customer_id, orderId],
+            ),
+          ]),
       ...reserveStmts(db, orderId, plans),
       db.prepare(`UPDATE orders SET status='confirmed', credit_override_approval_id = COALESCE(?, credit_override_approval_id) WHERE id = ? AND status IN ('new','delivery_failed')`).bind(override, orderId),
       auditStmt(c, { action: "b2b_order.confirm", entity: "b2b_order", entityId: o.code, before: { status: o.status }, after: { status: "confirmed", creditOverrideApprovalId: override } }),
@@ -254,7 +272,7 @@ export async function loadOrderDetail(db: D1Database, id: number) {
     .prepare(
       `SELECT o.*, cu.name AS customer_name, a.label AS address_label, a.address AS address_text
          FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id LEFT JOIN customer_addresses a ON a.id = o.address_id
-        WHERE o.id = ? AND o.channel = 'b2b'`,
+        WHERE o.id = ? AND o.channel = 'b2b' AND o.kind = 'sale'`,
     )
     .bind(id)
     .first<any>();

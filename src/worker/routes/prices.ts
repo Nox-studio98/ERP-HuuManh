@@ -122,9 +122,17 @@ const bulkBody = z.object({
 });
 
 priceRoutes.post("/prices/bulk", requirePerm("prices.write"), async (c) => {
+  const r = await applyBulkPrices(c, await parseBody(c, bulkBody));
+  return c.json(r, r.status === "active" ? 201 : 202);
+});
+
+/**
+ * Đổi giá hàng loạt theo quy tắc M3 (giữ lịch sử, thời điểm hiệu lực không lùi về quá khứ,
+ * người thiếu prices.approve → giá pending + approval 'price.activate'). Dùng lại cho M7 (chấp nhận gợi ý giá).
+ */
+export async function applyBulkPrices(c: Ctx, b: z.infer<typeof bulkBody>) {
   const db = c.env.DB;
   const u = c.get("user");
-  const b = await parseBody(c, bulkBody);
   const now = new Date().toISOString();
   let from = now;
   if (b.effectiveFrom) {
@@ -173,11 +181,8 @@ priceRoutes.post("/prices/bulk", requirePerm("prices.write"), async (c) => {
   stmts.push(auditStmt(c, { action: autoApprove ? "price.bulk_update" : "price.bulk_request", entity: "price_list", entityId: b.priceListId, after: { items: b.items, effectiveFrom: from, belowCost }, reason: b.note }));
   const res = await guarded(() => db.batch(stmts));
   const priceIds = res.filter((r, idx) => idx < stmts.length - 1 && r.meta.last_row_id && (autoApprove ? idx % 2 === 1 : idx % 2 === 0)).map((r) => r.meta.last_row_id as number);
-  return c.json(
-    { status: autoApprove ? "active" : "pending_approval", effectiveFrom: from, priceIds, belowCost },
-    autoApprove ? 201 : 202,
-  );
-});
+  return { status: autoApprove ? ("active" as const) : ("pending_approval" as const), effectiveFrom: from, priceIds, belowCost };
+}
 
 // ---------------------------------------------------------------- duyệt giá
 function activateStmts(c: Ctx, price: any, approverId: number, effectiveFrom: string) {

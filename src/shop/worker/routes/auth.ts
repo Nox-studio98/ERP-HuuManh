@@ -7,6 +7,7 @@ import { nextCode } from "../../../worker/lib/codes";
 import { sysAuditStmt } from "../../../worker/services/sysaudit";
 import type { ShopBindings, ShopAccount } from "../env";
 import { SESSION_COOKIE, SESSION_DAYS, loadAccount, sessionTokenOf } from "../lib/session";
+import { mailAllowed } from "../lib/mailguard";
 import { verifyTurnstile } from "../lib/turnstile";
 import { baseUrl, clientIp, enqueueByRef, normalizePhone, parseBody, type SCtx } from "../lib/util";
 
@@ -63,6 +64,7 @@ authRoutes.post("/register", async (c) => {
   const passHash = await hashPassword(b.password);
   const token = randomToken(32);
   const tokenId = await sha256(token);
+  const sendMail = await mailAllowed(db, "notify.email", "verify_email", b.email);
   try {
     await db.batch([
       db
@@ -74,7 +76,7 @@ authRoutes.post("/register", async (c) => {
       db
         .prepare(`INSERT INTO shop_tokens(id, account_id, purpose, expires_at) VALUES (?, (SELECT id FROM shop_accounts WHERE email = ?), 'verify_email', ?)`)
         .bind(tokenId, b.email, new Date(Date.now() + TOKEN_TTL_MS).toISOString()),
-      enqueueByRef(db, "notify.email", "shop_account", b.email, { to: b.email, template: "verify_email", link: `${baseUrl(c)}/verify-email?token=${token}` }),
+      ...(sendMail ? [enqueueByRef(db, "notify.email", "shop_account", b.email, { to: b.email, template: "verify_email", link: `${baseUrl(c)}/verify-email?token=${token}` })] : []),
     ]);
   } catch (e) {
     if (/UNIQUE constraint failed/i.test(String((e as Error)?.message))) return c.json(GENERIC_OK, 201); // đăng ký trùng đồng thời
@@ -83,28 +85,48 @@ authRoutes.post("/register", async (c) => {
   return c.json(GENERIC_OK, 201);
 });
 
+/** Băm (SHA-256) IP để làm khoá khoá-theo-IP mà không lưu IP thô trong cột reason. */
+const ipKey = async (c: SCtx) => (await sha256(`shop-login|${clientIp(c)}`)).slice(0, 24);
+
 authRoutes.post("/login", async (c) => {
   await verifyTurnstile(c);
   const b = await parseBody(c, z.object({ email: Email, password: z.string().min(1).max(128) }));
   const db = c.env.DB;
   const u = await db
-    .prepare(`SELECT id, pass_hash, active, failed_logins, locked_until FROM shop_accounts WHERE email = ? AND deleted_at IS NULL`)
+    .prepare(`SELECT id, pass_hash, active FROM shop_accounts WHERE email = ? AND deleted_at IS NULL`)
     .bind(b.email)
-    .first<{ id: number; pass_hash: string; active: number; failed_logins: number; locked_until: string | null }>();
+    .first<{ id: number; pass_hash: string; active: number }>();
   const now = new Date();
-  if (u?.locked_until && u.locked_until > now.toISOString()) throw new AppError(429, "account_locked", "Đăng nhập sai quá nhiều lần, vui lòng thử lại sau 15 phút");
+  // Khoá theo (tài khoản + IP): kẻ tấn công không khoá được chủ tài khoản từ IP khác (chống DoS). Khoá KHÔNG bị lộ:
+  // phản hồi y hệt sai mật khẩu và vẫn luôn băm mật khẩu để thời gian không phân biệt được.
+  const ip = await ipKey(c);
+  let locked = false;
+  if (u) {
+    const since = new Date(now.getTime() - LOCK_MINUTES * 60_000).toISOString();
+    const r = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM audit_log WHERE action = 'shop.login_failed' AND entity_id = ?1 AND reason = ?2 AND at >= ?3
+            AND at > COALESCE((SELECT MAX(at) FROM audit_log WHERE action = 'shop.login_ok' AND entity_id = ?1 AND reason = ?2), '')`,
+      )
+      .bind(String(u.id), ip, since)
+      .first<{ n: number }>();
+    locked = (r?.n ?? 0) >= MAX_FAILS;
+  }
   const ok = await verifyPassword(b.password, u?.pass_hash ?? DUMMY_HASH);
-  if (!u || !ok || !u.active) {
-    if (u) {
-      const fails = u.failed_logins + 1;
-      const lock = fails >= MAX_FAILS ? new Date(now.getTime() + LOCK_MINUTES * 60_000).toISOString() : null;
-      await db.prepare(`UPDATE shop_accounts SET failed_logins = ?, locked_until = ? WHERE id = ?`).bind(lock ? 0 : fails, lock, u.id).run();
-    }
+  if (!u || !ok || !u.active || locked) {
+    if (u)
+      await db
+        .prepare(`INSERT INTO audit_log(action, entity, entity_id, reason, ip, after_json) VALUES ('shop.login_failed','shop_account',?,?,?,?)`)
+        .bind(String(u.id), ip, clientIp(c), JSON.stringify({ why: locked ? "locked" : !ok ? "bad_password" : "inactive" }))
+        .run();
     throw new AppError(401, "invalid_credentials", "Email hoặc mật khẩu không đúng");
   }
   // xoay vòng: thu hồi phiên đang dùng (nếu có) rồi cấp phiên mới
   const old = sessionTokenOf(c);
-  const stmts = [db.prepare(`UPDATE shop_accounts SET failed_logins = 0, locked_until = NULL WHERE id = ?`).bind(u.id)];
+  const stmts = [
+    db.prepare(`UPDATE shop_accounts SET failed_logins = 0, locked_until = NULL WHERE id = ?`).bind(u.id),
+    db.prepare(`INSERT INTO audit_log(action, entity, entity_id, reason, ip) SELECT 'shop.login_ok','shop_account',?1,?2,?3 WHERE EXISTS (SELECT 1 FROM audit_log WHERE action='shop.login_failed' AND entity_id=?1 AND reason=?2)`).bind(String(u.id), ip, clientIp(c)),
+  ];
   if (old) stmts.push(db.prepare(`UPDATE shop_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`).bind(now.toISOString(), await sha256(old)));
   await db.batch(stmts);
   const token = await startSession(c, u.id);
@@ -125,10 +147,10 @@ authRoutes.post("/forgot", async (c) => {
   const b = await parseBody(c, z.object({ email: Email }));
   const db = c.env.DB;
   const u = await db.prepare(`SELECT id FROM shop_accounts WHERE email = ? AND active = 1 AND deleted_at IS NULL`).bind(b.email).first<{ id: number }>();
-  if (u) {
+  if (u && (await mailAllowed(db, "notify.email", "reset_password", b.email))) {
     const { token, stmt } = await issueToken(db, u.id, "reset_password");
     await db.batch([stmt, enqueueByRef(db, "notify.email", "shop_account", b.email, { to: b.email, template: "reset_password", link: `${baseUrl(c)}/reset-password?token=${token}` })]);
-  } else await hashPassword("x"); // cân bằng thời gian
+  } else await hashPassword("x"); // cân bằng thời gian (cũng khi bị giới hạn gửi thư: phản hồi giữ nguyên)
   return c.json(GENERIC_OK);
 });
 

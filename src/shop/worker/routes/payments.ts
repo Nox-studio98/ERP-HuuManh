@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { AppError } from "../../../worker/lib/errors";
+import { AppError, conflict } from "../../../worker/lib/errors";
 import { timingSafeEqual } from "../../../worker/lib/crypto";
 import { transitionStmts } from "../../../worker/services/online-orders";
 import { kickJobs } from "../../../worker/services/outbox";
@@ -46,7 +46,7 @@ const FakeEventSchema = z.object({
   status: z.enum(["succeeded", "failed"]),
 });
 
-/** Cổng giả lập cho dev/staging: HMAC-SHA256 (hex) của body thô bằng PAYMENT_WEBHOOK_SECRET; header x-signature + x-timestamp (giây). */
+/** Cổng giả lập CHỈ cho dev/demo: HMAC-SHA256 (hex) của `${timestamp}.${bodyThô}` bằng PAYMENT_WEBHOOK_SECRET; header x-signature + x-timestamp (giây). */
 const fakeGateway: GatewayAdapter = {
   provider: FAKE,
   async verifyWebhook(raw, headers, env) {
@@ -54,7 +54,7 @@ const fakeGateway: GatewayAdapter = {
     const ts = Number(headers.get("x-timestamp"));
     if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > TOLERANCE_S) throw httpError(401, "bad_timestamp", "Timestamp webhook không hợp lệ hoặc quá hạn");
     const sig = fromHex((headers.get("x-signature") ?? "").trim());
-    const want = fromHex(await hmacHex(env.PAYMENT_WEBHOOK_SECRET, raw));
+    const want = fromHex(await hmacHex(env.PAYMENT_WEBHOOK_SECRET, `${ts}.${raw}`)); // timestamp nằm trong phần được ký
     if (!sig.length || !timingSafeEqual(sig, want)) throw httpError(401, "bad_signature", "Chữ ký webhook không hợp lệ");
     let json: unknown;
     try {
@@ -68,8 +68,12 @@ const fakeGateway: GatewayAdapter = {
 
 const GATEWAYS: Record<string, GatewayAdapter> = { [FAKE]: fakeGateway };
 
+/** Cổng giả lập chỉ tồn tại ở dev/demo — không bao giờ ở production/staging. */
+const gatewayFor = (provider: string, env: ShopBindingsEnv): GatewayAdapter | undefined =>
+  provider === FAKE && env.APP_ENV !== "dev" && env.APP_ENV !== "demo" ? undefined : GATEWAYS[provider];
+
 paymentRoutes.post("/payments/gateway/:provider/webhook", async (c) => {
-  const adapter = GATEWAYS[c.req.param("provider")];
+  const adapter = gatewayFor(c.req.param("provider"), c.env);
   if (!adapter) throw new AppError(501, "gateway_not_supported", "Cổng thanh toán chưa được hỗ trợ");
   const db = c.env.DB;
   const raw = await c.req.text();
@@ -88,7 +92,8 @@ paymentRoutes.post("/payments/gateway/:provider/webhook", async (c) => {
     : null;
   let result = "processed";
   const stmts: D1PreparedStatement[] = [];
-  if (!o || !intent) result = "ignored:no_intent";
+  // Sự kiện đến TRƯỚC khi đơn/intent tồn tại: 409 để cổng thanh toán gửi lại (không ghi 'ignored' làm mất tiền)
+  if (!o || !intent) throw conflict("intent_not_found", "Chưa có đơn/intent tương ứng, vui lòng gửi lại");
   else if (intent.status !== "pending" || o.status !== "awaiting_payment") {
     result = "ignored:not_pending";
     stmts.push(sysAuditStmt(db, { action: "shop.payment_late", entity: "order", entityId: o.code, after: { eventId: ev.eventId, orderStatus: o.status, intentStatus: intent.status, amount: ev.amount } }));
@@ -129,7 +134,7 @@ paymentRoutes.post("/payments/gateway/:provider/webhook", async (c) => {
 
 /** Người dùng quay lại từ cổng: chỉ báo trạng thái (không đổi gì); trạng thái thật do webhook quyết định. */
 paymentRoutes.all("/payments/gateway/:provider/return", async (c) => {
-  if (!GATEWAYS[c.req.param("provider")]) throw new AppError(501, "gateway_not_supported", "Cổng thanh toán chưa được hỗ trợ");
+  if (!gatewayFor(c.req.param("provider"), c.env)) throw new AppError(501, "gateway_not_supported", "Cổng thanh toán chưa được hỗ trợ");
   const code = c.req.query("order") ?? "";
   const token = c.req.query("token") ?? "";
   const o = await c.env.DB.prepare(`SELECT code, payment_status, status FROM orders WHERE code = ? AND tracking_token = ? AND channel = 'online'`).bind(code, token).first<any>();

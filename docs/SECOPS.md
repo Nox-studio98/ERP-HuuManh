@@ -109,3 +109,16 @@ Mục tiêu: bảo vệ **tiền** (đơn, thu chi, công nợ), **tồn kho**, 
 | T21 | Lộ dữ liệu cá nhân khách (NĐ 13/2023) | Khách tự xoá tài khoản → ẩn danh hoá; email/push chỉ chứa mã đơn + trạng thái + link; NV không có `customers.view_pii` thấy SĐT đã che. |
 
 Secrets thêm cho shop: `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRIVATE_KEY` (ERP + shop), var `VAPID_PUBLIC_KEY`, `SHOP_BASE_URL`.
+
+## 10. Bổ sung Đợt 4 — nhân sự, lương, giá đối thủ, khuyến mãi
+
+| # | Mối đe doạ | Biện pháp |
+|---|---|---|
+| T22 | Lộ lương, CCCD, tài khoản ngân hàng nhân viên (dữ liệu cá nhân nhạy cảm — NĐ 13/2023) | Quyền `hr.sensitive` chỉ chủ + kế toán; trường nhạy cảm bị **loại khỏi response** (không chỉ che) khi thiếu quyền; **mọi lần xem/sửa** ghi `audit_log` (`hr.view_sensitive`, `payroll.view`); NV chỉ xem phiếu lương của mình và chỉ kỳ đã duyệt. |
+| T23 | Chấm công hộ / giả vị trí / tái dùng mã QR | Giờ = giờ máy chủ; thiết bị đăng ký, đổi máy cần quản lý duyệt; GPS kiểm sai số + bán kính cửa hàng; QR HMAC xoay vòng 30s (`ATTENDANCE_QR_SECRET`), mỗi cửa sổ dùng 1 lần (unique index); chấm offline → chờ duyệt; nhật ký chấm công **bất biến** (trigger), sửa chỉ qua yêu cầu bổ sung có duyệt. Vị trí chỉ ghi lúc bấm, không theo dõi di chuyển. |
+| T24 | Sửa số công / lương sau khi chốt | Trigger DB khoá `timesheet_days` của kỳ đã chốt và `payroll_items` của kỳ đã duyệt/chi; sai sót → dòng điều chỉnh kỳ sau có lý do; chỉ chủ duyệt bảng lương (`payroll.approve`); chi lương sinh phiếu chi M6 (kỳ khoá sổ → 423). |
+| T25 | Thu thập giá đối thủ vi phạm điều khoản / bị coi là tấn công | Chỉ trang công khai, tôn trọng `robots.txt` (+ Crawl-delay), giới hạn tốc độ & số trang, User-Agent nhận diện có liên hệ, không đăng nhập/vượt captcha; bị chặn → dừng và cảnh báo, chuyển nhập tay (M7-06); chỉ URL công khai (chặn IP nội bộ/localhost — chống SSRF). **Phải xác nhận danh sách nguồn với chủ cửa hàng và kiểm tra điều khoản từng site trước khi bật.** |
+| T26 | Lạm dụng voucher / điểm (dùng quá lượt, đổi âm điểm khi đặt đồng thời) | `CHECK used_count <= max_uses`, unique voucher/đơn, trigger chặn điểm âm, sổ điểm bất biến; mã voucher ngẫu nhiên 10 ký tự base32; huỷ/trả đơn hoàn lượt voucher bằng trigger ở mọi đường huỷ; khuyến mãi không đẩy giá dưới giá vốn. |
+| T27 | Gợi ý giá tự động làm đổi giá ngoài ý muốn | M7 chỉ gợi ý; chấp nhận gợi ý đi qua đúng luồng M3 (`applyBulkPrices`: lịch sử + duyệt), có sàn giá vốn + biên mục tiêu. |
+
+Secret thêm: `ATTENDANCE_QR_SECRET` (ERP).

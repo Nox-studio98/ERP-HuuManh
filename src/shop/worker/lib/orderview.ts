@@ -99,7 +99,7 @@ const ORDER_COLS = `o.*`;
 /** Đơn thuộc về khách đang đăng nhập (đơn online của tài khoản; khách sỉ đã duyệt còn thấy đơn sỉ của hồ sơ khách). */
 export function ownedWhere(a: ShopAccount) {
   return {
-    sql: `(o.channel = 'online' AND o.shop_account_id = ?1) OR (o.channel = 'b2b' AND ?3 = 'approved' AND o.customer_id = ?2)`,
+    sql: `o.kind = 'sale' AND ((o.channel = 'online' AND o.shop_account_id = ?1) OR (o.channel = 'b2b' AND ?3 = 'approved' AND o.customer_id = ?2))`,
     binds: [a.id, a.customerId, a.kind === "b2b" ? a.b2bStatus ?? "" : ""] as unknown[],
   };
 }

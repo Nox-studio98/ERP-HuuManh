@@ -8,6 +8,7 @@ import { METHODS, money, qtyText, unitLabel, uuid, withShown } from "../format";
 import { enqueue, useQueue, syncQueue } from "../offline";
 import { navigate } from "../router";
 import { useCan } from "../store";
+import { reasonText } from "./d4/voucher-text";
 
 export type Unit = { unit: string; factorMilli: number; barcode?: string };
 export type Product = { id: number; sku: string; name: string; baseUnit: string; sellByWeight: boolean | number; barcode?: string; units?: Unit[]; availableMilli?: number; price?: number | { unitPrice: number } | null; avgCost?: number; [k: string]: any };
@@ -16,7 +17,8 @@ const factor = (p: Product, unit: string) => (unit === p.baseUnit ? 1000 : p.uni
 const unitPrice = (p: Product, unit: string) => Math.round((priceOf(p) * factor(p, unit)) / 1000);
 
 type Line = { key: string; product: Product; unit: string; qty: number; discount: number };
-let saved = { lines: [] as Line[], cartId: uuid(), discount: 0, note: "" };
+type Cust = { id: number; name: string; phone?: string | null };
+let saved = { lines: [] as Line[], cartId: uuid(), discount: 0, note: "", customer: null as Cust | null };
 
 export default function Pos() {
   const can = useCan();
@@ -52,7 +54,9 @@ function Sell({ shift }: { shift: any }) {
   const [cartId, setCartId] = useState(saved.cartId);
   const [discount, setDiscount] = useState(saved.discount);
   const [note, setNote] = useState(saved.note);
-  useEffect(() => { saved = { lines, cartId, discount, note }; }, [lines, cartId, discount, note]);
+  const [customer, setCustomer] = useState<Cust | null>(saved.customer);
+  const [pickCustomer, setPickCustomer] = useState(false);
+  useEffect(() => { saved = { lines, cartId, discount, note, customer }; }, [lines, cartId, discount, note, customer]);
   const [q, setQ] = useState("");
   const dq = useDebounced(q);
   const prods = useAsync(() => get("/products", { q: dq, limit: 60, active: 1 }).then((r) => items<Product>(r)), [dq]);
@@ -86,11 +90,12 @@ function Sell({ shift }: { shift: any }) {
     } catch { /* toast từ api */ }
   };
 
-  const reset = () => { setLines([]); setDiscount(0); setNote(""); setCartId(uuid()); setView("products"); };
+  const reset = () => { setLines([]); setDiscount(0); setNote(""); setCustomer(null); setCartId(uuid()); setView("products"); };
   const names = Object.fromEntries(lines.map((l) => [l.product.id, l.product.name]));
   const payloadBase = () => ({
     clientUuid: cartId,
     lines: lines.map((l) => ({ productId: l.product.id, unit: l.unit, qty: l.qty, ...(l.discount ? { discount: l.discount } : {}) })),
+    ...(customer ? { customerId: customer.id } : {}),
     ...(discount ? { discount } : {}),
     ...(note ? { note } : {}),
   });
@@ -146,6 +151,10 @@ function Sell({ shift }: { shift: any }) {
                 })}
               </div>
               <div className="stack" style={{ marginTop: 12 }}>
+                <div className="row between" data-testid="pos-customer">
+                  {customer ? <span><b>{customer.name}</b>{customer.phone ? <span className="small muted"> · {customer.phone}</span> : null}</span> : <span className="muted">Khách lẻ</span>}
+                  <div className="row"><Button size="sm" variant="soft" onClick={() => setPickCustomer(true)}>{customer ? "Đổi khách" : "Gắn khách"}</Button>{customer && <Button size="sm" variant="ghost" aria-label="Bỏ khách" onClick={() => setCustomer(null)}>✕</Button>}</div>
+                </div>
                 <MoneyInput label="Giảm giá cả đơn (₫)" value={discount} onChange={setDiscount} />
                 <div className="totals">
                   <div><span className="muted">Tạm tính</span><span className="money">{money(subtotal)}</span></div>
@@ -170,10 +179,11 @@ function Sell({ shift }: { shift: any }) {
       <Sheet open={scan} onClose={() => setScan(false)} title="Quét mã sản phẩm"><Scanner onCode={onScan} continuous /><div className="hint" style={{ marginTop: 8 }}>Đã có {count} dòng trong giỏ.</div></Sheet>
       {weighing && <WeightSheet p={weighing.p} unit={weighing.unit ?? weighing.p.baseUnit} onClose={() => setWeighing(null)} onAdd={(n) => { add(weighing.p, weighing.unit, n); setWeighing(null); }} />}
       {checkout && (
-        <CheckoutSheet total={total} payloadBase={payloadBase} onClose={() => setCheckout(false)} noteValue={note} onNote={setNote}
+        <CheckoutSheet total={total} payloadBase={payloadBase} customer={customer} onClose={() => setCheckout(false)} noteValue={note} onNote={setNote}
           onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); reset(); }}
           onQueued={() => { setCheckout(false); reset(); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
       )}
+      {pickCustomer && <CustomerSheet onClose={() => setPickCustomer(false)} onPick={(c) => { setCustomer(c); setPickCustomer(false); }} />}
       <Sheet open={!!receipt} onClose={() => setReceipt(null)} title="Hoá đơn" footer={<Button block onClick={() => setReceipt(null)}>Đơn mới</Button>}>
         {receipt && <Receipt order={receipt.order} names={receipt.names} />}
       </Sheet>
@@ -196,12 +206,91 @@ function WeightSheet({ p, unit, onAdd, onClose }: { p: Product; unit: string; on
 }
 
 type Pay = { method: string; amount: number };
-function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValue, onNote }: { total: number; payloadBase: () => any; onClose: () => void; onDone: (o: any, change: number) => void; onQueued: () => void; noteValue: string; onNote: (s: string) => void }) {
-  const [pays, setPays] = useState<Pay[]>([{ method: "cash", amount: total }]);
-  const [active, setActive] = useState(0);
+type Preview = { discounts: { promotionId: number; voucherId: number | null; amount: number; description: string }[]; discount: number; pointsRedeemed: number; pointsAmount: number; rejected: { code: string; reason: string }[] };
+
+function CustomerSheet({ onClose, onPick }: { onClose: () => void; onPick: (c: Cust) => void }) {
+  const [q, setQ] = useState("");
+  const dq = useDebounced(q);
+  const res = useAsync(async () => {
+    if (dq.trim().length < 2) return { list: [] as any[], denied: false };
+    try { return { list: items<any>(await get("/pos/customers", { q: dq.trim() }, { silent: true })), denied: false }; }
+    catch (e) { if (e instanceof ApiError && e.status === 403) return { list: [], denied: true }; throw e; }
+  }, [dq]);
+  return (
+    <Sheet open onClose={onClose} title="Gắn khách hàng">
+      <div className="stack">
+        <Input label="Tên, mã hoặc số điện thoại" type="search" autoFocus value={q} onChange={(e) => setQ(e.target.value)} />
+        {res.data?.denied && <div className="banner">Tài khoản này không có quyền tra cứu khách — nhờ quản lý gắn khách.</div>}
+        {res.loading ? <Spinner /> : res.data?.list.map((c) => <button key={c.id} className="dt-card" onClick={() => onPick({ id: c.id, name: c.name, phone: c.phone })}><div className="ttl">{c.name}</div><div className="small muted">{c.code}{c.phone ? " · " + c.phone : ""}</div></button>)}
+        {!res.loading && dq.trim().length >= 2 && !res.data?.denied && !res.data?.list.length && <div className="muted">Không tìm thấy khách.</div>}
+        <QuickCustomer seed={q} onCreated={onPick} />
+      </div>
+    </Sheet>
+  );
+}
+
+/** Tạo nhanh khách lẻ tại quầy để tích điểm (tên + SĐT); SĐT đã có → dùng khách cũ. */
+function QuickCustomer({ seed, onCreated }: { seed: string; onCreated: (c: Cust) => void }) {
+  const [open, setOpen] = useState(false);
+  const isPhone = /^[0-9+ ]{8,15}$/.test(seed.trim());
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!open) return <Button variant="ghost" onClick={() => { setOpen(true); if (isPhone) setPhone(seed.trim()); else setName(seed.trim()); }}>+ Khách mới</Button>;
+  return (
+    <div className="stack" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+      <Input label="Tên khách" value={name} onChange={(e) => setName(e.target.value)} />
+      <Input label="Số điện thoại" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+      <Button disabled={busy || !name.trim()} onClick={async () => {
+        setBusy(true);
+        try {
+          const r: any = await post("/pos/customers", { name: name.trim(), ...(phone.trim() ? { phone: phone.trim() } : {}) });
+          onCreated({ id: r.id, name: r.name, phone: r.phone });
+        } finally { setBusy(false); }
+      }}>Lưu và gắn khách</Button>
+    </div>
+  );
+}
+
+function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDone, onQueued, noteValue, onNote }: { total: number; payloadBase: () => any; customer: Cust | null; onClose: () => void; onDone: (o: any, change: number) => void; onQueued: () => void; noteValue: string; onNote: (s: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: number; message: string } | null>(null);
   const [stockErr, setStockErr] = useState("");
+  // Đợt 4: khuyến mãi tự động, voucher, đổi điểm — engine tính ở máy chủ (xem trước), đơn thật tính lại trong cùng giao dịch
+  const [voucherIn, setVoucherIn] = useState("");
+  const [voucher, setVoucher] = useState("");
+  const [redeem, setRedeem] = useState(0);
+  const [prev, setPrev] = useState<Preview | null>(null);
+  const [promoErr, setPromoErr] = useState("");
+  const [serverTotal, setServerTotal] = useState<number | null>(null);
+  const loy = useAsync(() => (customer ? get(`/customers/${customer.id}/loyalty`, undefined, { silent: true }).catch(() => null) : Promise.resolve(null)), [customer?.id]);
+  const lbody = payloadBase();
+  const lkey = JSON.stringify([lbody.lines, customer?.id, voucher, redeem]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r: Preview = await post("/promotions/preview", { channel: "pos", lines: lbody.lines.map((l: any) => ({ productId: l.productId, unit: l.unit, qty: l.qty })), ...(customer ? { customerId: customer.id } : {}), ...(voucher ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}) }, { silent: true });
+        if (live) { setPrev(r); setPromoErr(""); setServerTotal(null); }
+      } catch (e) {
+        if (!live) return;
+        setPrev(null);
+        if (e instanceof ApiError && e.code === "redeem_too_high") { setPromoErr(`Chỉ đổi tối đa ${e.details?.maxPoints ?? 0} điểm cho đơn này.`); setRedeem(Math.max(0, e.details?.maxPoints ?? 0)); }
+        else if (e instanceof ApiError && e.code === "points_insufficient") { setPromoErr("Khách không đủ điểm để đổi."); setRedeem(0); }
+        else if (e instanceof ApiError && e.code !== "network") setPromoErr(e.message);
+      }
+    })();
+    return () => { live = false; };
+  }, [lkey]); // eslint-disable-line
+  const voucherDiscount = prev?.discounts.find((d) => d.voucherId != null);
+  const voucherApplied = !!voucher && !!voucherDiscount;
+  const voucherRejected = voucher && prev && !voucherApplied ? prev.rejected.find((r) => r.reason !== "not_best_promotion") ?? prev.rejected[0] : undefined;
+  const promoOnly = (prev?.discounts ?? []).filter((d) => d.voucherId == null);
+  const total = serverTotal ?? Math.max(0, localTotal - (prev?.discount ?? 0));
+
+  const [pays, setPays] = useState<Pay[]>([{ method: "cash", amount: total }]);
+  const [active, setActive] = useState(0);
+  useEffect(() => { setPays((ps) => (ps.length === 1 ? [{ ...ps[0], amount: total }] : ps)); }, [total]);
   const paid = pays.reduce((s, p) => s + p.amount, 0);
   const cash = pays.filter((p) => p.method === "cash").reduce((s, p) => s + p.amount, 0);
   const over = paid - total, remaining = total - paid;
@@ -209,10 +298,12 @@ function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValu
   const valid = paid >= total && (over === 0 || cash >= over) && pays.every((p) => p.amount > 0);
   const setAmt = (i: number, n: number) => setPays((ps) => ps.map((p, j) => (j === i ? { ...p, amount: n } : p)));
   const quick = Array.from(new Set([total, ...[50000, 100000, 200000, 500000].map((s) => Math.ceil(total / s) * s)])).filter((v) => v >= total).slice(0, 4);
+  const pointVal = loy.data?.pointValueVnd ?? 0;
+  const maxByBalance = loy.data?.points ?? 0;
 
   const submit = async () => {
-    setBusy(true); setStockErr("");
-    const payload = { ...payloadBase(), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount })) };
+    setBusy(true); setStockErr(""); setPromoErr("");
+    const payload = { ...payloadBase(), ...(voucherApplied ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount })) };
     try {
       const order = await post("/pos/orders", payload, { silent: true });
       toast("Thanh toán thành công", "ok");
@@ -222,6 +313,11 @@ function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValu
         if (e.code === "network") { await enqueue(payload); onQueued(); }
         else if (e.code === "approval_required") setApproval({ id: e.details?.approvalId, message: e.message });
         else if (e.code === "insufficient_stock") setStockErr(`${e.message}${e.details?.productName ? " — " + e.details.productName : ""}`);
+        else if (e.code === "voucher_exhausted") { setPromoErr("Voucher đã hết lượt sử dụng — đã bỏ voucher khỏi đơn."); setVoucher(""); setVoucherIn(""); }
+        else if (e.code === "voucher_invalid") { setPromoErr(`Voucher không áp dụng được: ${reasonText(e.details?.reason ?? "")}.`); setVoucher(""); }
+        else if (e.code === "points_insufficient") { setPromoErr("Khách không đủ điểm để đổi — đã bỏ phần đổi điểm."); setRedeem(0); loy.reload(); }
+        else if (e.code === "redeem_too_high") { setPromoErr(`Số điểm đổi vượt mức cho phép (tối đa ${e.details?.maxPoints ?? 0} điểm).`); setRedeem(Math.max(0, e.details?.maxPoints ?? 0)); }
+        else if (e.code === "payment_mismatch" && e.details?.total != null) { setServerTotal(e.details.total); setPromoErr(`Tổng tiền thực tế là ${money(e.details.total)} — đã cập nhật, kiểm tra lại thanh toán.`); setPays([{ method: "cash", amount: e.details.total }]); }
         else toast(e.message, "error");
       }
     } finally { setBusy(false); }
@@ -229,7 +325,34 @@ function CheckoutSheet({ total, payloadBase, onClose, onDone, onQueued, noteValu
   return (
     <Sheet open onClose={onClose} title="Thanh toán" footer={<Button block size="lg" loading={busy} disabled={!valid} onClick={submit}>{approval ? "Thử lại" : "Hoàn tất"} · {money(total)}</Button>}>
       <div className="stack">
-        <div className="totals"><div className="grand" style={{ borderTop: 0, marginTop: 0 }}><span>Cần thanh toán</span><span className="money">{money(total)}</span></div></div>
+        <div className="totals">
+          {(prev?.discount ?? 0) > 0 && <div><span className="muted">Tạm tính</span><span className="money">{money(localTotal)}</span></div>}
+          {promoOnly.map((d, i) => <div key={i} data-testid="pos-discount"><span>{d.description}</span><span className="money">-{money(d.amount)}</span></div>)}
+          {voucherDiscount && <div data-testid="pos-discount"><span>{voucherDiscount.description || `Voucher ${voucher}`}</span><span className="money">-{money(voucherDiscount.amount)}</span></div>}
+          {(prev?.pointsAmount ?? 0) > 0 && <div data-testid="pos-discount"><span>Đổi {prev!.pointsRedeemed} điểm</span><span className="money">-{money(prev!.pointsAmount)}</span></div>}
+          <div className="grand" style={(prev?.discount ?? 0) > 0 ? undefined : { borderTop: 0, marginTop: 0 }}><span>Cần thanh toán</span><span className="money" data-testid="pos-total">{money(total)}</span></div>
+        </div>
+        <div className="card flat" style={{ padding: 12 }}>
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <div className="grow"><Input label="Mã voucher" value={voucherIn} onChange={(e) => setVoucherIn(e.target.value.toUpperCase())} placeholder="Nhập mã giảm giá" autoCapitalize="characters" /></div>
+            {voucher ? <Button variant="ghost" onClick={() => { setVoucher(""); setVoucherIn(""); }}>Bỏ</Button> : <Button variant="soft" disabled={!voucherIn.trim()} onClick={() => setVoucher(voucherIn.trim())}>Áp dụng</Button>}
+          </div>
+          {voucherApplied && <div className="small" style={{ color: "var(--accent)", marginTop: 6 }}>Đã áp dụng voucher {voucher}.</div>}
+          {voucherRejected && <div className="small err" role="alert" style={{ marginTop: 6 }}>Voucher {voucher} không áp dụng: {reasonText(voucherRejected.reason)}.</div>}
+          {customer && loy.data?.enabled && (
+            <div className="stack" style={{ marginTop: 10 }}>
+              <div className="row between"><span>Điểm của {customer.name}</span><b data-testid="pos-points">{(loy.data.points ?? 0).toLocaleString("vi-VN")} điểm</b></div>
+              {maxByBalance > 0 && (
+                <div className="row" style={{ alignItems: "flex-end" }}>
+                  <div className="grow"><Input label={`Đổi điểm (1 điểm = ${money(pointVal)})`} type="number" min={0} max={maxByBalance} value={redeem || ""} onChange={(e) => setRedeem(Math.max(0, Math.min(maxByBalance, Math.floor(Number(e.target.value) || 0))))} /></div>
+                  <Button variant="soft" onClick={() => setRedeem(Math.min(maxByBalance, Math.floor((Math.max(0, localTotal - (promoOnly.reduce((s, d) => s + d.amount, 0) + (voucherDiscount?.amount ?? 0))) * 0.5) / (pointVal || 1))))}>Tối đa</Button>
+                </div>)}
+            </div>
+          )}
+          {customer && loy.data && !loy.data.enabled && <div className="hint" style={{ marginTop: 6 }}>Chương trình tích điểm đang tắt.</div>}
+          {!customer && <div className="hint" style={{ marginTop: 6 }}>Gắn khách hàng ở giỏ hàng để tích / đổi điểm.</div>}
+        </div>
+        {promoErr && <Banner tone="danger">{promoErr}</Banner>}
         {approval && (
           <div className="banner" role="alert">
             <b>Cần quản lý duyệt</b>

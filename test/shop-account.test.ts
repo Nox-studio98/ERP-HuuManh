@@ -105,11 +105,12 @@ describe("login, sessions, CSRF, lockout", () => {
     expect(wrong.status).toBe(401);
     expect(wrong.body.error).toEqual(unknown.body.error);
     for (let i = 0; i < 4; i++) await call("POST", "/api/auth/login", { email: "lock@example.com", password: "Sai-mat-khau" });
+    // Khoá theo (tài khoản + IP) và KHÔNG lộ: IP bị khoá nhận y hệt 401 invalid_credentials dù mật khẩu đúng
     const locked = await call("POST", "/api/auth/login", { email: "lock@example.com", password: "Matkhau-123" });
-    expect(locked.status).toBe(429);
-    expect(locked.body.error.code).toBe("account_locked");
-    await db().prepare(`UPDATE shop_accounts SET locked_until=? WHERE email='lock@example.com'`).bind(new Date(Date.now() - 1000).toISOString()).run();
-    expect((await call("POST", "/api/auth/login", { email: "lock@example.com", password: "Matkhau-123" })).status).toBe(200);
+    expect(locked.status).toBe(401);
+    expect(locked.body.error).toEqual(wrong.body.error);
+    // IP khác (chủ tài khoản) vẫn đăng nhập được: kẻ tấn công không khoá được nạn nhân
+    expect((await call("POST", "/api/auth/login", { email: "lock@example.com", password: "Matkhau-123" }, { headers: { "cf-connecting-ip": "9.9.9.9" } })).status).toBe(200);
   });
 
   it("forgot/reset: generic response, one-time token, sessions revoked, new password works", async () => {
@@ -128,7 +129,8 @@ describe("login, sessions, CSRF, lockout", () => {
     expect((await call("GET", "/api/me", undefined, { headers: s.headers })).status).toBe(401); // phiên cũ bị thu hồi
     expect((await call("POST", "/api/auth/login", { email: "reset@example.com", password: "Matkhau-123" })).status).toBe(401);
     expect((await call("POST", "/api/auth/login", { email: "reset@example.com", password: "Mat-khau-moi-1" })).status).toBe(200);
-    // token hết hạn
+    // token hết hạn (quá thời gian chờ giữa hai thư cùng mẫu → lùi mốc thời gian của thư cũ)
+    await db().prepare(`UPDATE integration_jobs SET created_at='2020-01-01T00:00:00.000Z' WHERE type='notify.email'`).run();
     await call("POST", "/api/auth/forgot", { email: "reset@example.com" });
     const t2 = tokenOf((await mailJob("reset@example.com", "reset_password"))!.link);
     await db().prepare(`UPDATE shop_tokens SET expires_at=? WHERE purpose='reset_password' AND used_at IS NULL`).bind(new Date(Date.now() - 1000).toISOString()).run();

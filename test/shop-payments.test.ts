@@ -16,7 +16,7 @@ afterAll(async () => {
 async function hook(payload: Record<string, unknown>, o: { secret?: string; ts?: number; sig?: string; env?: Record<string, unknown> } = {}) {
   const raw = JSON.stringify(payload);
   const ts = o.ts ?? Math.floor(Date.now() / 1000);
-  const sig = o.sig ?? (await hmacHex(o.secret ?? SECRET, raw));
+  const sig = o.sig ?? (await hmacHex(o.secret ?? SECRET, `${ts}.${raw}`));
   return call("POST", "/api/payments/gateway/fake_gateway/webhook", undefined, {
     raw,
     headers: { "content-type": "application/json", "x-signature": sig, "x-timestamp": String(ts) },
@@ -73,7 +73,9 @@ describe("fake gateway webhook", () => {
     expect((await db().prepare(`SELECT status, payment_status FROM orders WHERE code=?`).bind(o.code).first<any>())).toMatchObject({ status: "awaiting_payment", payment_status: "pending" });
     const failed = await hook({ eventId: "evt-" + uuid(), orderCode: o.code, amount: 170000, status: "failed" });
     expect(failed.body.result).toBe("failed");
-    expect((await hook({ eventId: "evt-" + uuid(), orderCode: "DH-NOPE", amount: 1, status: "succeeded" })).body.result).toBe("ignored:no_intent");
+    // sự kiện đến trước khi đơn/intent tồn tại → 409 để cổng gửi lại (không ghi 'ignored' làm mất tiền)
+    const early = await hook({ eventId: "evt-" + uuid(), orderCode: "DH-NOPE", amount: 1, status: "succeeded" });
+    expect(early.status).toBe(409);
     expect((await call("POST", "/api/payments/gateway/vnpay/webhook", {})).status).toBe(501);
   });
 

@@ -51,7 +51,7 @@ describe("auth", () => {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ username: "online_staff", password: PASSWORD }),
     }, testEnv);
-    expect(res.status).toBe(429);
+    expect(res.status).toBe(401); // khoá không lộ khác biệt với sai mật khẩu (chống dò tài khoản)
   });
 
   it("audit_log is append-only", async () => {

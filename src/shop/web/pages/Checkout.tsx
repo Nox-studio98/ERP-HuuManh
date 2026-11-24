@@ -7,6 +7,7 @@ import { Link, navigate, usePageMeta } from "../lib/router";
 import { announce, cartActions, prefs, ss, unitPriceOf, useAuth, useCart } from "../lib/store";
 import { useTurnstile } from "../lib/turnstile";
 import { Empty, Field, Icon, Img, Loading, Modal, Notice } from "../ui";
+import { DiscountRows, VoucherBox, useVoucher, voucherReason, voucherStore } from "../lib/voucher";
 
 const PAY = [
   { v: "cod", t: "Thanh toán khi nhận hàng (COD)", d: "Trả tiền mặt cho nhân viên giao hàng." },
@@ -71,7 +72,8 @@ export function CheckoutPage() {
     if (slotKey && dl.slots.length && !dl.slots.some((s) => s.date === slotKey.date && s.id === slotKey.id && s.available)) setSlotKey(null);
   }, [dl.slots, slotKey]);
 
-  const { quote, loading: ql } = useQuote(cart, { district: saved ? undefined : district, addressId: saved?.id ?? null, slotDate: slotKey?.date, slotId: slotKey?.id });
+  const vc = useVoucher();
+  const { quote, loading: ql } = useQuote(cart, { district: saved ? undefined : district, addressId: saved?.id ?? null, slotDate: slotKey?.date, slotId: slotKey?.id, voucherCode: vc.code || undefined });
   const preLines = quote?.lines.filter((l) => l.preorderMilli > 0) ?? [];
   const needAccept = preLines.length > 0;
   const subtotal = quote?.subtotal ?? cartSubtotalEst(cart);
@@ -124,12 +126,14 @@ export function CheckoutPage() {
         : { receiverName: f.receiverName.trim(), receiverPhone: f.receiverPhone.trim(), addressLine: f.addressLine.trim(), ward: f.ward.trim() || undefined, district: f.district, province: f.province.trim() || PROVINCE },
       slotDate: slotKey!.date, slotId: slotKey!.id, paymentMethod: pay, note: f.note.trim() || undefined,
       acceptPreorder: needAccept ? accept : undefined, email: !me && f.email.trim() ? f.email.trim() : undefined,
+      voucherCode: vc.code && quote?.voucher?.applied ? vc.code : undefined,
     };
     try {
       const o = await api<OrderView>("/checkout", { body, turnstile: me ? null : ts.token });
       const phone = (saved?.receiverPhone ?? f.receiverPhone).replace(/\D/g, "");
       if (o.trackingToken) ss.set(`hm_track_${o.trackingToken}`, phone.slice(-4));
       cartActions.clear();
+      voucherStore.set("");
       uid.current = null;
       navigate(`/track/${o.trackingToken}?placed=1`);
     } catch (err) {
@@ -140,6 +144,8 @@ export function CheckoutPage() {
         uid.current = null;
         if (a.code === "price_changed") setPriceChange(a.details?.lines ?? []);
         else if (a.code === "insufficient_stock") setStockProblem(a.details?.productId ? { productId: a.details.productId, availableMilli: a.details.availableMilli ?? 0 } : null);
+        else if (a.code === "voucher_exhausted") { vc.set(""); setFormErr("Mã giảm giá vừa hết lượt sử dụng — đã bỏ mã khỏi đơn, bạn kiểm tra lại tổng tiền rồi đặt lại nhé."); }
+        else if (a.code === "voucher_invalid") { vc.set(""); setFormErr(`Mã giảm giá không áp dụng được: ${voucherReason(a.details?.reason)}. Đã bỏ mã khỏi đơn.`); }
         else if (a.code === "slot_full" || a.code === "slot_cutoff") { setSlotKey(null); setSlotTick((t) => t + 1); setFormErr(a.message); }
         else setFormErr(a.message);
         if (!me) ts.reset();
@@ -293,8 +299,10 @@ export function CheckoutPage() {
               );
             })}
           </ul>
+          <VoucherBox code={vc.code} onChange={vc.set} quote={quote} loading={ql} idSuffix="-co" />
           <dl className="totals" aria-live="polite">
             <div><dt>Tạm tính</dt><dd>{money(subtotal)}</dd></div>
+            <DiscountRows quote={quote} />
             <div><dt>Phí giao hàng{quote?.zone ? ` (${quote.zone.name})` : ""}</dt><dd data-testid="ship-fee">{!district ? "—" : quote?.zone ? (quote.shippingFee === 0 ? "Miễn phí" : money(quote.shippingFee)) : ql ? "…" : "—"}</dd></div>
             <div className="grand"><dt>Tổng cộng</dt><dd data-testid="grand-total">{money(quote?.total ?? subtotal)}</dd></div>
           </dl>

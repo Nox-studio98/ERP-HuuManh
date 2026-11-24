@@ -25,7 +25,7 @@ beforeAll(async () => {
     db.prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) VALUES (601,601,10000,20000,'receipt','test',1,1),(601,601,-2000,20000,'sale','test',1,1)`),
     db.prepare(`INSERT INTO orders(code, channel, kind, store_id, status, subtotal, discount, total, completed_at) VALUES ('HD-X-1','pos','sale',1,'completed',150000,10000,140000,?)`).bind(today),
     db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id) SELECT id,'cash',140000,1 FROM orders WHERE code='HD-X-1'`),
-    db.prepare(`INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, period, created_by) VALUES ('PC-X-1','out',1,2,40000,'Mua túi',?,1)`).bind(vnDate().slice(0, 7)),
+    db.prepare(`INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, period, created_by) VALUES ('PC-X-1','out',1,(SELECT id FROM cash_categories WHERE code='TIEN_HANG'),40000,'Mua túi',?,1)`).bind(vnDate().slice(0, 7)),
   ]);
   const cid = (await db.prepare(`SELECT id FROM customers WHERE code='KH-X1'`).first<{ id: number }>())!.id;
   await insertInvoice({ customerId: cid, due: "2026-01-01", total: 1234567 });
