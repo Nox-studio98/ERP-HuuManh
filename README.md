@@ -217,6 +217,10 @@ npx wrangler secret put VAPID_PRIVATE_KEY
 - Khuyến nghị: đặt ERP sau **Cloudflare Access** (chỉ nhân viên), website để công khai.
 - Dữ liệu mẫu: `seed/seed-dot3.sql` (khu vực giao lấy TP.HCM làm ví dụ — [Cần xác nhận]).
 
+## Cài đặt (màn hình quản trị)
+
+Menu **Quản trị → Cài đặt** (chủ sửa được; quản lý chỉ xem) gồm 3 tab: **Tham số** (~60 tham số theo 9 nhóm, sửa tại chỗ, hiển thị %/₫, bảng thuế TNCN, xem diff rồi xác nhận mới lưu; huy hiệu "Cần xác nhận" biến mất khi chủ lưu hoặc bấm "Xác nhận" — lưu ở bảng `settings_confirmations`, migration 0018), **Khoá sổ** (khoá kỳ đã kết thúc, mở khoá cần lý do) và **Nhật ký** (lọc người dùng/hành động/đối tượng/ngày, xem trước–sau). Khi thêm khoá mới vào bảng `settings`, phải khai báo trong `src/worker/services/settings-registry.ts` (test `settings-ui` sẽ báo thiếu). E2E: `node e2e/settings.mjs` (DB mới, build, wrangler dev cổng 8798, chụp `docs/screenshots/settings-*.png`).
+
 ## Sao lưu R2 và khôi phục
 
 Cron 00:00 giờ VN (`0 17 * * *`) ghi toàn bộ bảng nghiệp vụ vào R2: `backups/YYYY-MM-DD/<bảng>.part-NNNN.ndjson.gz` và `manifest.json` (số dòng + sha256 từng phần; có manifest = bản sao lưu đủ). Giữ `settings.backup.retention_days` ngày (mặc định 30). Bản sao lưu không chứa `users.pass_hash` và `sessions`.

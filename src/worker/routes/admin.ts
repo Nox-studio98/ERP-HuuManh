@@ -10,6 +10,8 @@ import { hashPassword, randomToken } from "../lib/crypto";
 import { approveVoucher } from "../services/vouchers";
 import { applyStockDocPost } from "./inventory";
 import { activatePrice } from "./prices";
+import { DEF_BY_KEY, GROUPS, SETTING_DEFS, isInternalKey, isSensitive, needsConfirmNote, validateSetting } from "../services/settings-registry";
+import { misaConfigured } from "../services/einvoice";
 
 export const adminRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -193,6 +195,16 @@ adminRoutes.put("/users/:id", requirePerm("users.manage"), async (c) => {
 
 // ===================== Nhật ký & cài đặt =====================
 
+adminRoutes.get("/audit/facets", requirePerm("audit.view"), async (c) => {
+  const db = c.env.DB;
+  const [actions, entities, users] = await Promise.all([
+    db.prepare(`SELECT DISTINCT action AS v FROM audit_log ORDER BY action`).all<{ v: string }>(),
+    db.prepare(`SELECT DISTINCT entity AS v FROM audit_log WHERE entity IS NOT NULL ORDER BY entity`).all<{ v: string }>(),
+    db.prepare(`SELECT id, username, full_name FROM users ORDER BY full_name`).all(),
+  ]);
+  return c.json({ actions: actions.results.map((r) => r.v), entities: entities.results.map((r) => r.v), users: users.results });
+});
+
 adminRoutes.get("/audit", requirePerm("audit.view"), async (c) => {
   const q = c.req.query();
   const conds: string[] = [];
@@ -200,6 +212,7 @@ adminRoutes.get("/audit", requirePerm("audit.view"), async (c) => {
   if (q.entity) { conds.push(`a.entity = ?`); params.push(q.entity); }
   if (q.entityId) { conds.push(`a.entity_id = ?`); params.push(q.entityId); }
   if (q.action) { conds.push(`a.action = ?`); params.push(q.action); }
+  if (q.userId) { conds.push(`a.user_id = ?`); params.push(Number(q.userId)); }
   if (q.from) { conds.push(`a.at >= ?`); params.push(q.from); }
   if (q.to) { conds.push(`a.at < ?`); params.push(q.to); }
   if (q.cursor) { conds.push(`a.id < ?`); params.push(Number(q.cursor)); }
@@ -219,22 +232,83 @@ adminRoutes.get("/audit", requirePerm("audit.view"), async (c) => {
   return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
 });
 
-adminRoutes.get("/settings", requirePerm("users.manage"), async (c) => {
-  const { results } = await c.env.DB.prepare(`SELECT key, value, note FROM settings ORDER BY key`).all();
-  return c.json({ items: results });
-});
+// ----- Cài đặt (registry: services/settings-registry.ts) -----
 
-adminRoutes.put("/settings", requirePerm("users.manage"), async (c) => {
-  const body = await parseBody(c, z.object({ settings: z.record(z.string().regex(/^[a-z0-9_.]{1,64}$/), z.union([z.string().max(500), z.number()])) }));
+async function settingsView(c: Ctx) {
   const db = c.env.DB;
+  const rows = (await db.prepare(`SELECT key, value, note FROM settings ORDER BY key`).all<{ key: string; value: string; note: string | null }>()).results;
+  const conf = new Map(
+    (await db.prepare(`SELECT c.key, c.confirmed_at, c.confirmed_by, u.full_name AS by_name FROM settings_confirmations c LEFT JOIN users u ON u.id = c.confirmed_by`).all<any>()).results.map((r) => [r.key as string, r]),
+  );
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const mask = (k: string, v: string | null) => (isSensitive(k) ? (v ? "***" : "") : v);
+  const groups = GROUPS.map((g) => ({
+    group: g,
+    items: SETTING_DEFS.filter((d) => d.group === g).map((d) => {
+      const r = byKey.get(d.key);
+      const cf = conf.get(d.key);
+      const needs = needsConfirmNote(r?.note);
+      return {
+        key: d.key, label: d.label, help: d.help, type: d.type, unit: d.unit ?? null, min: d.min ?? null, max: d.max ?? null,
+        options: d.options ?? null, maxLen: d.maxLen ?? null, sensitive: !!d.sensitive,
+        value: r ? mask(d.key, r.value) : null, note: r?.note ?? null,
+        needsConfirm: needs, confirmed: !!cf, confirmedAt: cf?.confirmed_at ?? null, confirmedByName: cf?.by_name ?? null,
+        pending: needs && !cf,
+      };
+    }),
+  }));
+  const unknown = rows.filter((r) => !DEF_BY_KEY.has(r.key) && !isInternalKey(r.key)).map((r) => ({ key: r.key, value: mask(r.key, r.value), note: r.note }));
+  return {
+    groups,
+    unknown,
+    pendingCount: groups.reduce((n, g) => n + g.items.filter((i) => i.pending).length, 0),
+    canWrite: can(c.get("user").role, "settings.manage"),
+    items: rows.filter((r) => !isInternalKey(r.key)).map((r) => ({ key: r.key, value: mask(r.key, r.value), note: r.note })), // tương thích cũ
+  };
+}
+
+adminRoutes.get("/settings", requirePerm("settings.view"), async (c) => c.json(await settingsView(c)));
+
+adminRoutes.put("/settings", requirePerm("settings.manage"), async (c) => {
+  const body = await parseBody(
+    c,
+    z.object({
+      settings: z.record(z.string().regex(/^[a-z0-9_.]{1,64}$/), z.union([z.string().max(2000), z.number(), z.boolean()])).default({}),
+      confirm: z.array(z.string().max(64)).max(100).optional(), // xác nhận giữ nguyên giá trị (không đổi)
+    }),
+  );
+  const db = c.env.DB;
+  const me = c.get("user");
   const keys = Object.keys(body.settings);
-  if (!keys.length) throw new AppError(422, "validation_error", "Không có cài đặt nào");
-  const beforeRows = (await db.prepare(`SELECT key, value FROM settings WHERE key IN (${keys.map(() => "?").join(",")})`).bind(...keys).all<{ key: string; value: string }>()).results;
-  const before = Object.fromEntries(beforeRows.map((r) => [r.key, r.value]));
-  await db.batch([
-    ...keys.map((k) => db.prepare(`INSERT INTO settings(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(k, String(body.settings[k]))),
-    auditStmt(c, { action: "settings.update", entity: "settings", before, after: body.settings }),
-  ]);
-  const { results } = await db.prepare(`SELECT key, value, note FROM settings ORDER BY key`).all();
-  return c.json({ items: results });
+  const confirmKeys = [...new Set(body.confirm ?? [])];
+  if (!keys.length && !confirmKeys.length) throw new AppError(422, "validation_error", "Không có cài đặt nào");
+  const cur = new Map((await db.prepare(`SELECT key, value FROM settings`).all<{ key: string; value: string }>()).results.map((r) => [r.key, r.value]));
+  const errors: Record<string, string> = {};
+  const next: Record<string, string> = {};
+  for (const k of keys) {
+    const def = DEF_BY_KEY.get(k);
+    if (!def) { errors[k] = "Khoá cài đặt không tồn tại"; continue; }
+    const r = validateSetting(def, body.settings[k]);
+    if ("error" in r) { errors[k] = r.error; continue; }
+    if (k === "einvoice.provider" && r.value === "misa" && !misaConfigured(c.env)) { errors[k] = "Chưa cấu hình kết nối MISA (secrets)"; continue; }
+    next[k] = r.value;
+  }
+  for (const k of confirmKeys) if (!DEF_BY_KEY.has(k)) errors[k] = "Khoá cài đặt không tồn tại";
+  if (Object.keys(errors).length) throw new AppError(422, "validation_error", "Một số giá trị chưa hợp lệ", { fields: errors });
+
+  const changed = Object.keys(next).filter((k) => cur.get(k) !== next[k]);
+  const show = (k: string, v: string | undefined) => (isSensitive(k) ? "***" : v ?? null);
+  const before = Object.fromEntries(changed.map((k) => [k, show(k, cur.get(k))]));
+  const after = Object.fromEntries(changed.map((k) => [k, show(k, next[k])]));
+  // Lưu một khoá (kể cả giữ nguyên giá trị) hoặc bấm "Xác nhận" = chủ đã xem và xác nhận khoá đó
+  const toConfirm = [...new Set([...keys, ...confirmKeys])];
+  const stmts: D1PreparedStatement[] = [
+    ...changed.map((k) => db.prepare(`INSERT INTO settings(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(k, next[k])),
+    ...toConfirm.map((k) => db.prepare(`INSERT INTO settings_confirmations(key, confirmed_by) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET confirmed_by = excluded.confirmed_by, confirmed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`).bind(k, me.id)),
+  ];
+  if (changed.length) stmts.push(auditStmt(c, { action: "settings.update", entity: "settings", before, after }));
+  const onlyConfirmed = toConfirm.filter((k) => !changed.includes(k));
+  if (onlyConfirmed.length) stmts.push(auditStmt(c, { action: "settings.confirm", entity: "settings", after: { confirmed: onlyConfirmed } }));
+  await db.batch(stmts);
+  return c.json(await settingsView(c));
 });
