@@ -236,6 +236,10 @@ describe("transfer, alerts, trace", () => {
     await api("manager", "POST", `${V}/stock-docs/${d.body.id}/lines`, { lotId: lot.id, qty: 5, unit: "kg" });
     const p = await api("manager", "POST", `${V}/stock-docs/${d.body.id}/post`);
     expect(p.body.status).toBe("posted");
+    expect(p.body.transferStatus).toBe("in_transit"); // B-19: chuyển kho 2 bước — hàng đang đi đường, chưa có lô ở đích
+    expect((await db().prepare(`SELECT COUNT(*) n FROM lots WHERE product_id=?`).bind(productId).first<any>()).n).toBe(1);
+    const rc = await api("manager", "POST", `${V}/stock-docs/${d.body.id}/receive`, {});
+    expect(rc.status).toBe(200);
     const lots = await db().prepare(`SELECT * FROM lots WHERE product_id=? ORDER BY id`).bind(productId).all<any>();
     expect(lots.results.map((l) => [l.location_id, l.qty_on_hand_milli])).toEqual([[1, 15000], [2, 5000]]);
     expect(lots.results[1]).toMatchObject({ unit_cost: 50000, expires_at: lot.expires_at });

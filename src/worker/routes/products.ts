@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { AppBindings } from "../env";
 import { requirePerm, can } from "../lib/rbac";
 import { auditStmt } from "../lib/audit";
-import { AppError, conflict, notFound } from "../lib/errors";
+import { AppError, conflict, forbidden, notFound } from "../lib/errors";
+import { assertStmt, onceStmt } from "../services/guard";
 import { nextCode } from "../lib/codes";
 import { currentAvgCost, resolvePrice } from "../services/pricing";
 import { deviceIdOf, guarded, pageParams, parseBody } from "../services/http";
@@ -73,6 +74,7 @@ function shape(p: any, units: any[]) {
     shelfLifeDays: p.shelf_life_days,
     minStockMilli: p.min_stock_milli,
     active: !!p.active,
+    mergedInto: p.merged_into ?? null,
     version: p.version,
     updatedAt: p.updated_at,
     units,
@@ -138,10 +140,11 @@ productRoutes.get("/products/lookup", requirePerm("inventory.view"), async (c) =
     lot = lotRow;
     productId = lotRow.product_id;
   } else {
-    const pr = await db.prepare(`SELECT id FROM products WHERE barcode = ? OR sku = ?`).bind(code, code).first<{ id: number }>();
+    // EC-22: mã đã gộp → trỏ về mã đích
+    const pr = await db.prepare(`SELECT COALESCE(merged_into, id) AS id FROM products WHERE barcode = ? OR sku = ?`).bind(code, code).first<{ id: number }>();
     if (pr) productId = pr.id;
     else {
-      const un = await db.prepare(`SELECT product_id, unit, factor_milli FROM product_units WHERE barcode = ?`).bind(code).first<any>();
+      const un = await db.prepare(`SELECT COALESCE(p.merged_into, pu.product_id) AS product_id, pu.unit, pu.factor_milli FROM product_units pu JOIN products p ON p.id = pu.product_id WHERE pu.barcode = ?`).bind(code).first<any>();
       if (un) {
         productId = un.product_id;
         unit = { unit: un.unit, factorMilli: un.factor_milli };
@@ -174,6 +177,67 @@ productRoutes.get("/products/lookup", requirePerm("inventory.view"), async (c) =
       }
     : undefined;
   return c.json({ product: shape(p, units), unit, lot: lotOut });
+});
+
+// ---- Gộp mã trùng (EC-22 / B-20) ----
+const mergeBody = z.object({ reason: z.string().trim().min(3).max(300) });
+
+productRoutes.post("/products/:id/merge-into/:targetId", requirePerm("products.write"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  if (u.role !== "owner" && u.role !== "manager") throw forbidden("forbidden", "Chỉ chủ/quản lý được gộp mã hàng");
+  const src = Number(c.req.param("id"));
+  const tgt = Number(c.req.param("targetId"));
+  const b = await parseBody(c, mergeBody);
+  if (!src || !tgt || src === tgt) throw new AppError(422, "validation_error", "Hai mã hàng phải khác nhau");
+  const [s, t] = await Promise.all([src, tgt].map((id) => db.prepare(`SELECT * FROM products WHERE id = ?`).bind(id).first<any>()));
+  if (!s || !t) throw notFound("not_found", "Không tìm thấy mặt hàng");
+  if (s.merged_into != null) throw conflict("already_merged", "Mã nguồn đã được gộp vào mã khác");
+  if (t.merged_into != null || !t.active) throw conflict("target_invalid", "Mã đích đã bị gộp hoặc đã ngừng kinh doanh");
+  if (s.base_unit !== t.base_unit) throw new AppError(422, "units_incompatible", "Hai mã khác đơn vị chính, không thể gộp", { source: s.base_unit, target: t.base_unit });
+  const su = (await loadUnits(db, [src])).get(src) ?? [];
+  const tu = (await loadUnits(db, [tgt])).get(tgt) ?? [];
+  for (const x of su) {
+    const y = tu.find((z) => z.unit === x.unit);
+    if (y && y.factorMilli !== x.factorMilli) throw new AppError(422, "units_incompatible", `Đơn vị "${x.unit}" quy đổi khác nhau giữa hai mã`, { unit: x.unit, source: x.factorMilli, target: y.factorMilli });
+  }
+  const now = new Date().toISOString();
+  const cnt = async (sql: string) => (await db.prepare(sql).bind(src).first<{ n: number }>())?.n ?? 0;
+  const moved = {
+    lots: await cnt(`SELECT COUNT(*) n FROM lots WHERE product_id = ?`),
+    prices: await cnt(`SELECT COUNT(*) n FROM prices WHERE product_id = ?`),
+    externalProducts: await cnt(`SELECT COUNT(*) n FROM external_products WHERE product_id = ?`),
+    openOrderLines: await cnt(`SELECT COUNT(*) n FROM order_lines WHERE product_id = ? AND order_id IN (SELECT id FROM orders WHERE status IN ('draft','new','confirmed','preparing','shipping','awaiting_payment'))`),
+  };
+  const openStatuses = `'draft','new','confirmed','preparing','shipping','awaiting_payment'`;
+  await guarded(() =>
+    db.batch([
+      assertStmt(db, "product.merge", `SELECT (SELECT merged_into IS NULL FROM products WHERE id = ?) AND (SELECT merged_into IS NULL AND active = 1 FROM products WHERE id = ?)`, [src, tgt]),
+      onceStmt(db, "product.merge", src),
+      // đơn vị quy đổi/mã vạch đơn vị chưa có ở mã đích → chuyển sang mã đích
+      db.prepare(`UPDATE product_units SET product_id = ?2 WHERE product_id = ?1 AND unit NOT IN (SELECT unit FROM product_units WHERE product_id = ?2)`).bind(src, tgt),
+      // lô + giữ tồn (reservations trỏ theo lô nên đi theo lô)
+      db.prepare(`UPDATE lots SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      // giá: bảng giá đã có giá ở mã đích thì dòng của mã nguồn bị thay thế/từ chối, còn lại chuyển sang mã đích
+      db.prepare(`UPDATE prices SET status = 'superseded', effective_to = COALESCE(effective_to, ?3) WHERE product_id = ?1 AND status = 'active' AND price_list_id IN (SELECT price_list_id FROM prices WHERE product_id = ?2 AND status = 'active')`).bind(src, tgt, now),
+      db.prepare(`UPDATE prices SET status = 'rejected' WHERE product_id = ?1 AND status = 'pending' AND price_list_id IN (SELECT price_list_id FROM prices WHERE product_id = ?2 AND status = 'active')`).bind(src, tgt),
+      db.prepare(`UPDATE prices SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE external_products SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE order_lines SET product_id = ?2 WHERE product_id = ?1 AND order_id IN (SELECT id FROM orders WHERE status IN (${openStatuses}))`).bind(src, tgt),
+      db.prepare(`UPDATE stock_doc_lines SET product_id = ?2 WHERE product_id = ?1 AND doc_id IN (SELECT id FROM stock_docs WHERE status IN ('draft','pending_approval'))`).bind(src, tgt),
+      db.prepare(`UPDATE quote_lines SET product_id = ?2 WHERE product_id = ?1 AND quote_id IN (SELECT id FROM quotes WHERE status IN ('draft','pending_approval','sent'))`).bind(src, tgt),
+      db.prepare(`UPDATE promotion_items SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE OR IGNORE bundle_components SET bundle_product_id = ?2 WHERE bundle_product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE OR IGNORE bundle_components SET component_product_id = ?2 WHERE component_product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE OR IGNORE product_matches SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE OR IGNORE product_suppliers SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`UPDATE products SET merged_into = ?2, active = 0, published_online = 0, version = version + 1, updated_at = ?3 WHERE id = ?1 AND merged_into IS NULL`).bind(src, tgt, now),
+      db.prepare(`INSERT INTO product_merges(source_id, target_id, reason, moved_json, merged_by) VALUES (?,?,?,?,?)`).bind(src, tgt, b.reason, JSON.stringify(moved), u.id),
+      auditStmt(c, { action: "product.merge", entity: "product", entityId: src, before: { sku: s.sku, name: s.name }, after: { mergedInto: tgt, targetSku: t.sku, moved }, reason: b.reason }),
+    ]),
+  );
+  const row = await db.prepare(`SELECT * FROM products WHERE id = ?`).bind(tgt).first<any>();
+  return c.json({ source: src, target: shape(row, (await loadUnits(db, [tgt])).get(tgt) ?? []), moved });
 });
 
 productRoutes.get("/products/:id", requirePerm("inventory.view"), async (c) => {

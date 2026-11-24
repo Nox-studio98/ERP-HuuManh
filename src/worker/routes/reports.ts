@@ -151,7 +151,8 @@ async function inventoryReport(c: Ctx) {
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli * m.unit_cost / 1000 END),0) AS wasteValue,
          COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS stockValue
-         FROM products p JOIN stock_moves m ON m.product_id = p.id AND m.at < ?2
+         FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
+        WHERE p.merged_into IS NULL
         GROUP BY p.id ORDER BY p.name`,
     )
     .bind(start, end)

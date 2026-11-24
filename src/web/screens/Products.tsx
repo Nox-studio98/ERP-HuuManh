@@ -43,6 +43,8 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
   const [units, setUnits] = useState<UnitRow[]>((p?.units ?? []).filter((u) => u.unit !== p?.baseUnit).map((u) => ({ unit: u.unit, factor: u.factorMilli / 1000, barcode: u.barcode ?? "" })));
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"info" | "online">("info");
+  const can = useCan();
+  const [merging, setMerging] = useState(false);
   const set = (k: string, v: any) => setF((x) => ({ ...x, [k]: v }));
   const save = async () => {
     setBusy(true);
@@ -88,6 +90,34 @@ function ProductForm({ p, onClose, onSaved }: { p: Product | null; onClose: () =
         ))}
         <datalist id="unit-list">{["thung", "khay", "hop", "tui"].map((u) => <option key={u} value={u} />)}</datalist>
         <Button variant="soft" onClick={() => setUnits([...units, { unit: "thung", factor: "", barcode: "" }])}>+ Thêm đơn vị quy đổi</Button>
+        {p && can("products.write") && <Button variant="ghost" onClick={() => setMerging(true)}>Gộp mã trùng vào mã khác…</Button>}
+        </>}
+        {merging && p && <MergeSheet p={p} onClose={() => setMerging(false)} onDone={() => { setMerging(false); onSaved(); }} />}
+      </div>
+    </Sheet>
+  );
+}
+
+/** EC-22: gộp mã trùng — lô, giá, mapping online, đơn đang mở chuyển sang mã đích; lịch sử giữ nguyên. */
+function MergeSheet({ p, onClose, onDone }: { p: Product; onClose: () => void; onDone: () => void }) {
+  const [q, setQ] = useState("");
+  const dq = useDebounced(q);
+  const r = useAsync(() => (dq.length < 1 ? Promise.resolve([] as Product[]) : get("/products", { q: dq, limit: 8, active: 1 }).then((x) => items<Product>(x))), [dq]);
+  const [target, setTarget] = useState<Product | null>(null);
+  const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  return (
+    <Sheet open onClose={onClose} title={`Gộp "${p.name}" vào mã khác`} footer={target ? <Button block variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={async () => {
+      setBusy(true);
+      try { await post(`/products/${p.id}/merge-into/${target.id}`, { reason: reason.trim() }); toast("Đã gộp mã hàng", "ok"); onDone(); } catch {} finally { setBusy(false); }
+    }}>Xác nhận gộp</Button> : undefined}>
+      <div className="stack">
+        {!target ? <>
+          <Input label="Tìm mã đích" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên, SKU, mã vạch…" />
+          {(r.data ?? []).filter((x) => x.id !== p.id).map((x) => <button key={x.id} className="dt-card" onClick={() => setTarget(x)}><b>{x.name}</b> <span className="muted small">· {x.sku} · {unitLabel(x.baseUnit)}</span></button>)}
+        </> : <>
+          <div className="banner danger" role="alert">Mã <b>{p.name}</b> ({p.sku}) sẽ bị ngừng và gộp vào <b>{target.name}</b> ({target.sku}). Lô tồn, giá, liên kết bán online và các đơn đang mở chuyển sang mã đích. Lịch sử bán/thẻ kho giữ nguyên. Không thể hoàn tác.</div>
+          <Input label="Lý do gộp (bắt buộc)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="vd: nhập trùng mã Táo Envy" />
+          <Button variant="ghost" onClick={() => setTarget(null)}>Chọn mã khác</Button>
         </>}
       </div>
     </Sheet>
