@@ -230,10 +230,55 @@ debtRoutes.post("/bills/:id/finalize", requirePerm("debt.write"), async (c) => {
   // B-08: chốt hoá đơn mua đổi AP/VAT của kỳ phát hành → kỳ đã khoá thì không được chốt (và hôm nay cũng không được ghi vào kỳ khoá)
   await assertPeriodOpen(db, b.issue_date, "chốt hoá đơn mua");
   await assertPeriodOpen(db, new Date(), "chốt hoá đơn mua");
+  // B-09 (EC-30): chênh lệch giá chốt phân bổ theo tỉ lệ thành tiền các dòng của phiếu nhập → giá vốn lô còn tồn + chênh lệch giá mua (đã bán)
+  const diff = newTotal - b.total;
+  const costStmts: D1PreparedStatement[] = [];
+  const costDetail: unknown[] = [];
+  if (diff !== 0 && b.stock_doc_id) {
+    const lines = (
+      await db
+        .prepare(
+          `SELECT l.id AS line_id, l.lot_id, COALESCE(l.amount, CAST(ROUND(l.unit_cost * l.qty_milli / 1000.0) AS INTEGER)) AS amt,
+                  lo.unit_cost AS unit_cost, lo.qty_in_milli AS qty_in, lo.qty_on_hand_milli AS on_hand
+             FROM stock_doc_lines l JOIN lots lo ON lo.id = l.lot_id WHERE l.doc_id = ? AND l.lot_id IS NOT NULL ORDER BY l.id`,
+        )
+        .bind(b.stock_doc_id)
+        .all<{ line_id: number; lot_id: number; amt: number; unit_cost: number; qty_in: number; on_hand: number }>()
+    ).results;
+    const weight = lines.reduce((n, l) => n + Math.max(0, l.amt), 0);
+    let left = diff;
+    lines.forEach((l, i) => {
+      const last = i === lines.length - 1;
+      const share = last ? left : weight > 0 ? Number((BigInt(diff) * BigInt(Math.max(0, l.amt))) / BigInt(weight)) : 0; // cắt về 0, phần dư dồn dòng cuối
+      left -= share;
+      if (share === 0) return;
+      // phần còn tồn → đổi đơn giá lô (nguyên đồng/đơn vị); phần đã bán + làm tròn → chênh lệch giá mua vào giá vốn
+      let newUnit = l.unit_cost;
+      let reval = 0;
+      if (l.on_hand > 0 && l.qty_in > 0) {
+        const onhandShare = Math.round((share * l.on_hand) / l.qty_in);
+        newUnit = Math.max(0, l.unit_cost + Math.round((onhandShare * 1000) / l.on_hand));
+        reval = Math.round(((newUnit - l.unit_cost) * l.on_hand) / 1000);
+      }
+      const cogs = share - reval;
+      costDetail.push({ lotId: l.lot_id, share, reval, cogs, oldUnitCost: l.unit_cost, newUnitCost: newUnit });
+      costStmts.push(
+        assertStmt(db, "bill.finalize.lot", `SELECT qty_on_hand_milli = ? AND unit_cost = ? FROM lots WHERE id = ?`, [l.on_hand, l.unit_cost, l.lot_id]),
+        db.prepare(`UPDATE lots SET unit_cost = ? WHERE id = ?`).bind(newUnit, l.lot_id),
+        db
+          .prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) SELECT id, product_id, 0, ?, 'cost_adjust', 'supplier_bill', ?, ? FROM lots WHERE id = ?`)
+          .bind(newUnit, id, c.get("user").id, l.lot_id),
+        db
+          .prepare(`INSERT INTO purchase_cost_adjustments(bill_id, lot_id, diff_amount, onhand_amount, cogs_amount, old_unit_cost, new_unit_cost, reason, created_by) VALUES (?,?,?,?,?,?,?,?,?)`)
+          .bind(id, l.lot_id, share, reval, cogs, l.unit_cost, newUnit, body.reason ?? null, c.get("user").id),
+      );
+    });
+  }
   const r = await db.batch([
     assertStmt(db, "bill.finalize", `SELECT is_provisional = 1 AND status = 'open' FROM supplier_bills WHERE id = ?`, [id]),
     db.prepare(`UPDATE supplier_bills SET supplier_ref = ?, total = ?, vat_amount = ?, is_provisional = 0 WHERE id = ? AND is_provisional = 1`).bind(body.supplierRef, newTotal, newVat, id),
-    auditStmt(c, { action: "bill.finalize", entity: "supplier_bill", entityId: id, before: { total: b.total, vat: b.vat_amount ?? 0, supplierRef: b.supplier_ref, provisional: true }, after: { total: newTotal, vat: newVat, supplierRef: body.supplierRef, provisional: false }, reason: body.reason }),
+    ...costStmts,
+    auditStmt(c, { action: "bill.finalize", entity: "supplier_bill", entityId: id, before: { total: b.total, vat: b.vat_amount ?? 0, supplierRef: b.supplier_ref, provisional: true }, after: { total: newTotal, vat: newVat, supplierRef: body.supplierRef, provisional: false, costAdjustments: costDetail }, reason: body.reason }),
   ]);
   if (!r[1].meta.changes) throw conflict("not_provisional", "Hoá đơn đã được chốt");
   return c.json(camel(await db.prepare(`SELECT * FROM supplier_bills WHERE id = ?`).bind(id).first()));

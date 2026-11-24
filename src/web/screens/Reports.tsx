@@ -14,7 +14,7 @@ export default function Reports() {
   );
 }
 
-const EXP_LABEL: Record<string, string> = { opex: "Chi phí vận hành", shrinkage: "Hao hụt / huỷ hàng", other: "Chi phí khác", payroll: "Lương", marketing: "Marketing", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê" };
+const EXP_LABEL: Record<string, string> = { opex: "Chi phí vận hành", shrinkage: "Hao hụt / huỷ hàng", other: "Chi phí khác", payroll: "Lương", marketing: "Marketing", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
 function Pnl() {
   const [from, setFrom] = useState(todayVN(-6)), [to, setTo] = useState(todayVN()), [by, setBy] = useState("day");
   const r = useAsync(() => get("/reports/pnl", { from, to, groupBy: by }), [from, to, by]);
@@ -46,6 +46,7 @@ function Pnl() {
               ["Cọc không hoàn", d.otherIncome?.forfeitedDeposits ?? 0],
               ["Chiết khấu / xoá nợ nhà cung cấp", d.otherIncome?.payableDiscounts ?? 0],
               ["Chênh lệch đối soát thừa", d.otherIncome?.settlementSurplus ?? 0],
+              ["Thu khác (phiếu thu)", d.otherIncome?.otherReceipts ?? 0],
             ].filter((x) => Number(x[1]) !== 0) as [string, number][]} rowKey={(x) => x[0]} cols={[{ key: "k", label: "Khoản", title: true, render: (x) => x[0] }, { key: "v", label: "Số tiền", right: true, render: (x) => money(x[1]) }]} /></Card>
           )}
           {expRows.length > 0 && <Card title="Chi phí"><DataTable rows={expRows} rowKey={(x) => x[0]} cols={[{ key: "k", label: "Khoản", title: true, render: (x) => EXP_LABEL[x[0]] ?? x[0] }, { key: "v", label: "Số tiền", right: true, render: (x) => money(x[1]) }]} /></Card>}

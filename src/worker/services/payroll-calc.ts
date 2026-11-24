@@ -15,6 +15,8 @@ export interface PayrollSettings {
   /** [[trần thu nhập tính thuế, bp]], trần null = không giới hạn. */
   pitBrackets: [number | null, number][];
   salesBonusBp: number;
+  /** C-14: 'proportional' = theo giờ làm thực tế (mặc định) | 'day_present' = kiểu cũ (≥1 phút công = 1 ngày). */
+  monthlyPayMode: "proportional" | "day_present";
 }
 
 export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
@@ -31,6 +33,7 @@ export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
   // Giảm trừ 15,5tr/6,2tr theo NQ 110/2025/UBTVQH15 (từ 01/01/2026).
   pitBrackets: [[10_000_000, 500], [30_000_000, 1000], [60_000_000, 2000], [100_000_000, 3000], [null, 3500]],
   salesBonusBp: 0,
+  monthlyPayMode: "proportional",
 };
 
 export interface TimesheetDayInput {
@@ -41,6 +44,10 @@ export interface TimesheetDayInput {
   shiftsWorked: number;
   leavePaidX10: number;
   holiday: boolean;
+  /** C-09: ngày lễ nghỉ hưởng lương (holidays.paid_off=1). Thiếu → coi theo `holiday`. */
+  holidayPaid?: boolean;
+  /** C-14: số phút ca theo lịch của ngày (0/thiếu → 480). */
+  scheduledMinutes?: number;
 }
 
 export interface PayslipInput {
@@ -118,12 +125,21 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
   // ---- Công ----
   const workedDays = input.days.filter((d) => d.workedMinutes > 0 || d.shiftsWorked > 0).length;
   const leaveX10 = sum(input.days.map((d) => d.leavePaidX10));
-  // Lễ nghỉ hưởng lương: ngày lễ không đi làm và không có phép đã tính
-  const holidayOff = input.days.filter((d) => d.holiday && d.workedMinutes === 0 && d.shiftsWorked === 0 && d.leavePaidX10 === 0).length;
+  // Lễ nghỉ hưởng lương: chỉ ngày lễ có paid_off (C-09), không đi làm và không có phép đã tính
+  const holidayOff = input.days.filter((d) => (d.holidayPaid ?? d.holiday) && d.workedMinutes === 0 && d.shiftsWorked === 0 && d.leavePaidX10 === 0).length;
   const workedMinutes = sum(input.days.map((d) => d.workedMinutes)) + input.adjustMinutes.work;
   const shifts = sum(input.days.map((d) => d.shiftsWorked));
+  // C-14: ngày công theo giờ làm = min(1, phút làm thường / phút ca) làm tròn 0,1 ngày; tối đa 1 ngày công+phép mỗi ngày
+  const proportional = s.monthlyPayMode === "proportional";
+  const dayWorkX10 = (d: TimesheetDayInput) => {
+    const sched = d.scheduledMinutes && d.scheduledMinutes > 0 ? d.scheduledMinutes : 480;
+    const regular = Math.max(0, d.workedMinutes - d.overtimeMinutes);
+    return Math.round(Math.min(1, regular / sched) * 10);
+  };
+  const propDaysX10 = sum(input.days.map((d) => Math.min(10, dayWorkX10(d) + d.leavePaidX10)));
+  const propWorkX10 = sum(input.days.map((d) => Math.min(10, dayWorkX10(d) + d.leavePaidX10) - Math.min(10, d.leavePaidX10)));
 
-  let paidDaysX10 = Math.min(std * 10, workedDays * 10 + leaveX10 + holidayOff * 10);
+  let paidDaysX10 = Math.min(std * 10, (e.payType === "monthly" && proportional ? propDaysX10 : workedDays * 10 + leaveX10) + holidayOff * 10);
   let basePay = 0;
   if (e.payType === "monthly") {
     // phút điều chỉnh công quy đổi 480 phút = 1 ngày
@@ -134,7 +150,9 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       label: "Lương cơ bản",
       amount: basePay,
       group: "income",
-      note: `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (ngày có công ${workedDays}, phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`,
+      note: proportional
+        ? `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (công theo giờ làm thực tế: mỗi ngày = phút làm / phút ca, tối đa 1, làm tròn 0,1 → ${propWorkX10 / 10} ngày trên ${workedDays} ngày có công, đi muộn/về sớm bị trừ theo giờ; phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`
+        : `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (ngày có công ${workedDays}, phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`,
     });
   } else if (e.payType === "hourly") {
     // C-03: giờ tăng ca đã duyệt nằm trong workedMinutes (out − in) nhưng được trả riêng × hệ số → lương giờ chỉ tính giờ thường.
@@ -263,5 +281,6 @@ export async function loadPayrollSettings(db: D1Database): Promise<PayrollSettin
     pitDependentDeduction: num("hr.pit_dependent_deduction", d.pitDependentDeduction),
     pitBrackets: brackets,
     salesBonusBp: num("hr.sales_bonus_bp", d.salesBonusBp),
+    monthlyPayMode: m.get("hr.monthly_pay_mode")?.trim() === "day_present" ? "day_present" : "proportional",
   };
 }

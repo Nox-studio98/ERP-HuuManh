@@ -52,6 +52,30 @@ export interface HrSettings {
   methods: string[];
   gpsMaxAccuracyM: number;
   qrWindowSeconds: number;
+  /** C-15: ngày nghỉ hằng tuần (1 = Thứ Hai … 7 = Chủ nhật) — không tính vào số ngày phép. */
+  weeklyOffDays: number[];
+}
+
+/** "6,7" → [6,7]; bỏ giá trị ngoài 1..7. */
+export const parseWeeklyOff = (v: string | undefined | null): number[] =>
+  [...new Set((v ?? "").split(/[,\s]+/).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7))];
+
+/** Thứ trong tuần kiểu ISO: 1 = Thứ Hai … 7 = Chủ nhật. */
+export const isoWeekday = (date: string) => ((dayOfWeek(date) + 6) % 7) + 1;
+/** Ngày Thứ Hai của tuần chứa `date`. */
+export const weekStart = (date: string) => addDays(date, -(isoWeekday(date) - 1));
+
+/**
+ * C-15: các ngày của đơn nghỉ phép được tính là ngày nghỉ — bỏ ngày lễ, ngày nghỉ hằng tuần,
+ * và ngày không có ca khi nhân viên CÓ lịch ca trong tuần đó (không có lịch cả tuần → coi như chưa xếp lịch, tính ngày thường).
+ */
+export function leaveCountableDates(dates: string[], holidays: Set<string>, weeklyOff: number[], assignmentDates: Set<string>): string[] {
+  const scheduledWeeks = new Set([...assignmentDates].map(weekStart));
+  return dates.filter((d) => {
+    if (holidays.has(d) || weeklyOff.includes(isoWeekday(d))) return false;
+    if (scheduledWeeks.has(weekStart(d)) && !assignmentDates.has(d)) return false;
+    return true;
+  });
 }
 
 export async function hrSettings(db: D1Database): Promise<HrSettings> {
@@ -70,6 +94,7 @@ export async function hrSettings(db: D1Database): Promise<HrSettings> {
     methods: (m.get("hr.attendance_methods") ?? "gps,qr").split(",").map((s) => s.trim()).filter(Boolean),
     gpsMaxAccuracyM: num("hr.gps_max_accuracy_m", 100),
     qrWindowSeconds: Math.max(5, num("hr.qr_window_seconds", 30)),
+    weeklyOffDays: parseWeeklyOff(m.get("hr.weekly_off_days")),
   };
 }
 
