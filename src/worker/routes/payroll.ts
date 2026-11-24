@@ -138,6 +138,7 @@ async function calculatePeriod(c: Ctx, period: string) {
       .map((d) => ({
         workDate: d.work_date, workedMinutes: d.worked_minutes, overtimeMinutes: d.overtime_minutes, overtimeMultiplierBp: d.overtime_multiplier_bp,
         shiftsWorked: d.shifts_worked, leavePaidX10: d.leave_paid_x10, holiday: !!d.holiday,
+        holidayPaid: !!d.holiday && d.note === "holiday_paid_off", scheduledMinutes: d.scheduled_minutes,
       }));
     const adj = (k: string) => adjs.find((a) => a.employee_id === e.id && a.kind === k)?.m ?? 0;
     const input: PayslipInput = {

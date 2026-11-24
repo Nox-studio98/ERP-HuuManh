@@ -1,6 +1,6 @@
 import { vnDate } from "../lib/time";
 import {
-  addDays, eachDate, hrSettings, isWeekend, minutesBetween, monthBounds, vnRangeUtc,
+  addDays, eachDate, hrSettings, isWeekend, leaveCountableDates, minutesBetween, monthBounds, vnRangeUtc,
   type HrSettings,
 } from "./hr-common";
 
@@ -21,7 +21,7 @@ export interface TsData {
   leaves: TsLeave[];
   holidays: TsHoliday[];
 }
-export type TsSettings = Pick<HrSettings, "lateGraceMinutes" | "roundingMinutes" | "otWeekdayBp" | "otWeekendBp" | "otHolidayBp">;
+export type TsSettings = Pick<HrSettings, "lateGraceMinutes" | "roundingMinutes" | "otWeekdayBp" | "otWeekendBp" | "otHolidayBp"> & { weeklyOffDays?: number[] };
 
 export interface TimesheetDay {
   workDate: string;
@@ -171,14 +171,15 @@ export function computeEmployeeTimesheet(period: string, emp: TsEmployee, data: 
     day(a.workDate).scheduledMinutes += Math.max(0, minutesBetween(a.startAt, a.endAt) - a.breakMinutes);
   }
 
-  // 4) nghỉ phép đã duyệt: bỏ ngày lễ (không bỏ Chủ nhật)
+  // 4) nghỉ phép đã duyệt: chỉ tính ngày làm việc theo lịch (C-15) — bỏ ngày lễ, ngày nghỉ hằng tuần,
+  //    và ngày không có ca khi tuần đó nhân viên có lịch ca
+  const assignDates = new Set(assignments.map((a) => a.workDate));
   for (const l of data.leaves) {
     if (l.status !== "approved") continue;
     const from = l.fromDate > lo ? l.fromDate : lo;
     const to = l.toDate < hi ? l.toDate : hi;
     if (from > to) continue;
-    for (const d of eachDate(from, to)) {
-      if (holidays.has(d)) continue;
+    for (const d of leaveCountableDates(eachDate(from, to), new Set(holidays.keys()), s.weeklyOffDays ?? [], assignDates)) {
       const r = day(d);
       r.leaveCode = l.code;
       if (l.paid) r.leavePaidX10 += l.halfDay ? 5 : 10;
@@ -247,7 +248,7 @@ export async function computeTimesheetLive(db: D1Database, period: string, emplo
   const [pu, as, ot, lv, ho] = await Promise.all([
     // C-01: giờ hiệu lực = effective_at (chấm offline dùng giờ máy NV đã kiểm tra), bản ghi cũ chưa có thì server_at
     db.prepare(`SELECT id, employee_id, kind, COALESCE(effective_at, server_at) AS server_at, status, assignment_id FROM attendance_punches WHERE COALESCE(effective_at, server_at) >= ? AND COALESCE(effective_at, server_at) < ? AND status = 'accepted'${eq}`).bind(range.from, range.to, ...ebind).all<any>(),
-    db.prepare(`SELECT id, employee_id, work_date, start_at, end_at, break_minutes, status FROM shift_assignments WHERE work_date >= ? AND work_date <= ? AND status != 'cancelled'${eq}`).bind(addDays(first, -1), last, ...ebind).all<any>(),
+    db.prepare(`SELECT id, employee_id, work_date, start_at, end_at, break_minutes, status FROM shift_assignments WHERE work_date >= ? AND work_date <= ? AND status != 'cancelled'${eq}`).bind(addDays(first, -7), addDays(last, 7), ...ebind).all<any>(),
     db.prepare(`SELECT employee_id, work_date, minutes, multiplier_bp, status FROM overtime_requests WHERE work_date >= ? AND work_date <= ? AND status = 'approved'${eq}`).bind(first, last, ...ebind).all<any>(),
     db.prepare(`SELECT lr.employee_id, lr.from_date, lr.to_date, lr.half_day, lr.status, lt.code, lt.paid FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.leave_type_id WHERE lr.status = 'approved' AND lr.from_date <= ? AND lr.to_date >= ?${eq.replace("employee_id", "lr.employee_id")}`).bind(last, first, ...ebind).all<any>(),
     db.prepare(`SELECT day, name, multiplier_bp, paid_off FROM holidays WHERE day >= ? AND day <= ?`).bind(first, last).all<any>(),
