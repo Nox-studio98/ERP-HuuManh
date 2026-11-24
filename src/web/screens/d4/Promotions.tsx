@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PageHeader } from "../../components/list";
+import { ExportButton, FilterBar, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Field, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, when } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -20,7 +20,7 @@ export default function Promotions() {
   return (
     <div className="stack d4">
       <PageHeader subtitle="Khuyến mãi, mã giảm giá và tích điểm khách hàng" />
-      <Segmented value={tab} onChange={setTab} options={[{ v: "promo", label: "Khuyến mãi" }, { v: "voucher", label: "Voucher" }, { v: "preview", label: "Tính thử" }, { v: "loyalty", label: "Tích điểm" }]} />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "promo", label: "Khuyến mãi" }, { v: "voucher", label: "Voucher" }, { v: "preview", label: "Tính thử" }, { v: "loyalty", label: "Tích điểm" }]} />
       {tab === "promo" && <PromoList canWrite={can("promotions.write")} />}
       {tab === "voucher" && <Vouchers canWrite={can("promotions.write")} />}
       {tab === "preview" && <Preview />}
@@ -44,33 +44,42 @@ const fromApi = (p: any): Form => ({
 });
 
 function PromoList({ canWrite }: { canWrite: boolean }) {
-  const [status, setStatus] = useState("");
-  const list = useAsync(() => get("/promotions", { status }).then((r) => items<any>(r)), [status]);
+  const [status, setStatus] = useState(""), [q, setQ] = useState("");
+  const list = useAsync(() => get("/promotions").then((r) => items<any>(r)), []);
   const [edit, setEdit] = useState<Form | null>(null);
   const [view, setView] = useState<any | null>(null);
   const open = async (p: any) => {
     const full = await get(`/promotions/${p.id}`);
     if (full.status === "draft" && canWrite) setEdit(fromApi(full)); else setView(full);
   };
-  const rows = list.data ?? [];
-  const pending = rows.filter((p) => p.status === "pending_approval").length;
+  const all = list.data ?? [];
+  const n = (s: string) => all.filter((p) => p.status === s).length;
+  const rows = all.filter((p) => (!status || p.status === status) && (!q.trim() || `${p.name} ${p.code}`.toLowerCase().includes(q.trim().toLowerCase())));
+  const pending = n("pending_approval");
   return (
     <div className="stack">
-      <div className="row between wrap">
+      <KpiRow items={[
+        { label: "Đang chạy", value: n("active"), tone: "ok", onClick: () => setStatus("active") }, { label: "Chờ duyệt", value: pending, tone: pending ? "warn" : undefined, onClick: () => setStatus("pending_approval") },
+        { label: "Nháp", value: n("draft"), onClick: () => setStatus("draft") }, { label: "Đã kết thúc", value: n("ended"), onClick: () => setStatus("ended") },
+      ]} />
+      <FilterBar dirty={!!(status || q)} onReset={() => { setStatus(""); setQ(""); }}>
         <div className="chips scroll" role="group" aria-label="Lọc trạng thái">
           {[["", "Tất cả"], ["draft", "Nháp"], ["pending_approval", "Chờ duyệt"], ["active", "Đang chạy"], ["ended", "Đã kết thúc"]].map(([v, l]) => <button key={v} className="chip" aria-pressed={status === v} onClick={() => setStatus(v)}>{l}</button>)}
         </div>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên, mã khuyến mãi…" label="Tìm khuyến mãi" />
+        <ExportButton className="fb-end" filename="khuyen-mai" rows={rows} columns={[{ label: "Mã", value: (p) => p.code }, { label: "Tên", value: (p) => p.name }, { label: "Loại", value: (p) => KIND[p.kind] ?? p.kind }, { label: "Bắt đầu", value: (p) => fmtDate(p.startsAt) }, { label: "Kết thúc", value: (p) => fmtDate(p.endsAt) }, { label: "Trạng thái", value: (p) => STATUS[p.status]?.l ?? p.status }]} />
         {canWrite && <Button onClick={() => setEdit(blank())}>+ Khuyến mãi mới</Button>}
-      </div>
+      </FilterBar>
       {pending > 0 && <Banner>{pending} khuyến mãi đang chờ quản lý duyệt — vào mục “Duyệt” để kích hoạt.</Banner>}
       {list.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(p) => p.id} onRowClick={open} empty="Chưa có khuyến mãi" cols={[
-          { key: "n", label: "Khuyến mãi", title: true, render: (p) => <span><b>{p.name}</b><div className="small muted">{p.code} · {KIND[p.kind] ?? p.kind}</div></span> },
-          { key: "v", label: "Giá trị", render: (p) => (p.valueBp ? bpPct(p.valueBp) : p.valueAmount != null ? money(p.valueAmount) : "—") },
-          { key: "t", label: "Thời gian", render: (p) => `${fmtDate(p.startsAt)} – ${fmtDate(p.endsAt)}` },
+        <DataTable rows={rows} rowKey={(p) => p.id} onRowClick={open}
+          emptyState={<EmptyState title={status || q ? "Không có khuyến mãi nào khớp bộ lọc" : "Chưa có khuyến mãi"} hint="Tạo khuyến mãi giảm %, giảm tiền, combo hoặc xả cuối ngày." action={<div className="row wrap" style={{ justifyContent: "center" }}>{(status || q) && <Button variant="soft" onClick={() => { setStatus(""); setQ(""); }}>Xoá lọc</Button>}{canWrite && <Button onClick={() => setEdit(blank())}>+ Khuyến mãi mới</Button>}</div>} />} cols={[
+          { key: "n", label: "Khuyến mãi", title: true, sort: (p) => p.name, render: (p) => <span><b>{p.name}</b><div className="small muted">{p.code} · {KIND[p.kind] ?? p.kind}</div></span> },
+          { key: "v", label: "Giá trị", num: true, sort: (p) => p.valueBp ?? p.valueAmount ?? 0, render: (p) => (p.valueBp ? bpPct(p.valueBp) : p.valueAmount != null ? money(p.valueAmount) : "—") },
+          { key: "t", label: "Thời gian", sort: (p) => p.startsAt, render: (p) => `${fmtDate(p.startsAt)} – ${fmtDate(p.endsAt)}` },
           { key: "c", label: "Kênh", hideMobile: true, render: (p) => p.channels.map((c: string) => CHANNELS[c] ?? c).join(", ") },
-          { key: "vc", label: "Voucher", right: true, render: (p) => (p.requiresVoucher ? `${p.voucherCount} mã` : "Tự động") },
-          { key: "s", label: "Trạng thái", render: (p) => statusBadge(p.status) },
+          { key: "vc", label: "Voucher", num: true, render: (p) => (p.requiresVoucher ? `${p.voucherCount} mã` : "Tự động") },
+          { key: "s", label: "Trạng thái", sort: (p) => p.status, render: (p) => statusBadge(p.status) },
         ]} />
       )}
       {edit && <PromoForm init={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); }} />}

@@ -92,6 +92,18 @@ posRoutes.get("/shifts/current", requirePerm("pos.shift"), async (c) => {
   return c.json({ shift: shift ?? null });
 });
 
+/** Ca đã chốt gần nhất của chính người dùng (hiện ở màn "Mở ca"). */
+posRoutes.get("/shifts/last", requirePerm("pos.shift"), async (c) => {
+  const db = c.env.DB;
+  const s = await db.prepare(`SELECT * FROM shifts WHERE user_id = ? AND status = 'closed' ORDER BY id DESC LIMIT 1`).bind(c.get("user").id).first<any>();
+  if (!s) return c.json({ shift: null });
+  const t = await db
+    .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS rev FROM orders WHERE shift_id = ? AND kind='sale' AND status = 'completed'`)
+    .bind(s.id)
+    .first<{ n: number; rev: number }>();
+  return c.json({ shift: { id: s.id, openedAt: s.opened_at, closedAt: s.closed_at, openingCash: s.opening_cash, expectedCash: s.expected_cash, countedCash: s.counted_cash, diffCash: s.diff_cash, orderCount: t?.n ?? 0, revenue: t?.rev ?? 0 } });
+});
+
 posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
   const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0).max(MAX_VND) }));
   const db = c.env.DB;

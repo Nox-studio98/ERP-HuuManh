@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ApiError, get, post, put } from "../api";
 import { Badge, Banner, Button, DecInput, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
+import { DetailPanel, PageHeader, SplitLayout } from "../components/list";
 import { toast } from "../components/toast";
 import { fmtDateTime, money, num } from "../format";
 import { useCan } from "../store";
@@ -173,8 +174,19 @@ function Params() {
     setBusy(key);
     try { const r = await put<Data>("/settings", { settings: {}, confirm: [key] }); d.setData(r); toast("Đã xác nhận", "ok"); } catch {} finally { setBusy(null); }
   };
+  const goGroup = (g: string) => {
+    setOpen((p) => new Set(p).add(g));
+    setTimeout(() => document.getElementById("grp-" + g.replace(/\s+/g, "-"))?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
+  };
   return (
-    <div className="stack">
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Nhóm cài đặt">
+        {data.groups.map((g) => {
+          const pend = g.items.filter((i) => i.pending).length;
+          return <button key={g.group} type="button" aria-current={open.has(g.group) ? "true" : undefined} onClick={() => goGroup(g.group)}><span>{g.group}</span>{pend > 0 ? <Badge tone="warn">{pend}</Badge> : <span className="muted small">{g.items.length}</span>}</button>;
+        })}
+      </nav>
+    <div className="stack" style={{ minWidth: 0 }}>
       {!canWrite && <Banner tone="info">Bạn chỉ có quyền xem. Chỉ chủ cửa hàng được thay đổi cài đặt.</Banner>}
       <div className="set-tools">
         <Input label="Tìm cài đặt" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ví dụ: tăng ca, duyệt, thuế…" />
@@ -189,7 +201,7 @@ function Params() {
         const isOpen = onlyPending || !!needle || open.has(g.group);
         const pend = g.items.filter((i) => i.pending).length;
         return (
-          <section className="card set-group" key={g.group}>
+          <section className="card set-group" key={g.group} id={"grp-" + g.group.replace(/\s+/g, "-")} style={{ scrollMarginTop: 80 }}>
             <button className="set-head" aria-expanded={isOpen} onClick={() => toggle(g.group)}>
               <h2>{g.group}</h2>
               <span className="row">
@@ -234,6 +246,7 @@ function Params() {
         </div>
       </Sheet>
     </div>
+    </div>
   );
 }
 
@@ -268,7 +281,7 @@ function Periods() {
   return (
     <div className="stack">
       <Banner tone="info">Khoá sổ chặn thêm/sửa phiếu thu chi vào kỳ đã kết thúc. Chỉ khoá được kỳ đã kết thúc; mở khoá cần chủ cửa hàng nhập lý do và được ghi vào Nhật ký. Khoá bảng công và bảng lương là chức năng riêng, không bị ảnh hưởng.</Banner>
-      <div className="stack" data-testid="period-list">
+      <div className="card-grid" data-testid="period-list">
         {periods.map((per) => {
           const x = byP.get(per);
           const ended = per < cur;
@@ -350,6 +363,14 @@ function AuditLog() {
         <Input label="Đến ngày" type="date" value={flt.to} onChange={set("to")} />
         <div className="row"><Button onClick={() => setN((x) => x + 1)}>Lọc</Button><Button variant="ghost" onClick={() => { setFlt({ userId: "", action: "", entity: "", from: "", to: "" }); setTimeout(() => setN((x) => x + 1), 0); }}>Xoá lọc</Button></div>
       </div>
+      <SplitLayout open={!!sel} panel={sel ? (
+        <DetailPanel title={ACTION_VI[sel.action] ?? sel.action} onClose={() => setSel(null)}>
+          <div className="stack">
+            <div className="small muted">{fmtDateTime(sel.at)} · {sel.username ?? "Hệ thống"} · <code>{sel.action}</code>{sel.entity ? ` · ${sel.entity}${sel.entityId ? " #" + sel.entityId : ""}` : ""}</div>
+            {sel.reason && <Banner tone="info">Lý do: {sel.reason}</Banner>}
+            <DiffView before={parseJson(sel.beforeJson)} after={parseJson(sel.afterJson)} />
+          </div>
+        </DetailPanel>) : null}>
       <div className="stack" data-testid="audit-list">
         {rows.map((r) => (
           <button className="audit-row" key={r.id} onClick={() => setSel(r)}>
@@ -362,15 +383,7 @@ function AuditLog() {
       </div>
       {loading && <Spinner />}
       {cursor && !loading && <Button variant="ghost" onClick={() => load(true)}>Tải thêm</Button>}
-      <Sheet open={!!sel} onClose={() => setSel(null)} title={sel ? ACTION_VI[sel.action] ?? sel.action : ""} wide>
-        {sel && (
-          <div className="stack">
-            <div className="small muted">{fmtDateTime(sel.at)} · {sel.username ?? "Hệ thống"} · <code>{sel.action}</code>{sel.entity ? ` · ${sel.entity}${sel.entityId ? " #" + sel.entityId : ""}` : ""}</div>
-            {sel.reason && <Banner tone="info">Lý do: {sel.reason}</Banner>}
-            <DiffView before={parseJson(sel.beforeJson)} after={parseJson(sel.afterJson)} />
-          </div>
-        )}
-      </Sheet>
+      </SplitLayout>
     </div>
   );
 }
@@ -381,7 +394,8 @@ export default function Settings() {
   const [tab, setTab] = useState(tabs[0].v);
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={tabs} />
+      <PageHeader subtitle={tab === "params" ? "Tham số vận hành, ngưỡng duyệt, thuế và lương" : tab === "periods" ? "Khoá sổ kế toán theo kỳ" : "Nhật ký thay đổi dữ liệu"} />
+      <Segmented fit value={tab} onChange={setTab} options={tabs} />
       {tab === "params" && <Params />}
       {tab === "periods" && <Periods />}
       {tab === "audit" && <AuditLog />}

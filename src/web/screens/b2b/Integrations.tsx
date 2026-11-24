@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { get, items, post, put } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { toast } from "../../components/toast";
 import { fmtDateTime } from "../../format";
 import { useCan } from "../../store";
@@ -14,7 +15,8 @@ export default function Integrations() {
   const [tab, setTab] = useState<"jobs" | "settings" | "sku" | "import">("jobs");
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "jobs", label: "Tác vụ" }, { v: "settings", label: "Cài đặt" }, { v: "sku", label: "SKU Fresco" }, { v: "import", label: "Nhập đơn" }]} />
+      <PageHeader subtitle="Hoá đơn điện tử, sàn Fresco và hàng đợi tác vụ nền" />
+      <Segmented fit value={tab} onChange={setTab} options={[{ v: "jobs", label: "Tác vụ" }, { v: "settings", label: "Cài đặt" }, { v: "sku", label: "SKU Fresco" }, { v: "import", label: "Nhập đơn" }]} />
       {tab === "jobs" && <Jobs />}
       {tab === "settings" && <Settings />}
       {tab === "sku" && <Sku />}
@@ -24,22 +26,28 @@ export default function Integrations() {
 }
 
 function Jobs() {
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(""), [q, setQ] = useState("");
   const j = useAsync(() => get("/integrations/jobs", { status, limit: 100 }).then((r) => items<any>(r)), [status]);
   const [busy, setBusy] = useState<number | null>(null);
+  const term = q.trim().toLowerCase();
+  const all = j.data ?? [];
+  const rows = all.filter((x) => !term || `${JOB_TYPE[x.type] ?? x.type} ${x.refType ?? ""} ${x.refId ?? ""} ${x.lastError ?? ""}`.toLowerCase().includes(term));
+  const n = (st: string[]) => all.filter((x) => st.includes(x.status)).length;
   return (
     <div className="stack">
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
-        <div className="grow"><Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option>{Object.entries(JOB_ST).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></div>
-        <Button variant="ghost" onClick={j.reload}>Làm mới</Button>
-      </div>
-      {j.loading ? <Spinner /> : <DataTable rows={j.data ?? []} rowKey={(x) => x.id} empty="Không có tác vụ" cols={[
-        { key: "i", label: "#", title: true, render: (x) => <b>#{x.id} · {JOB_TYPE[x.type] ?? x.type}</b> },
+      <FilterBar dirty={!!(status || q)} onReset={() => { setStatus(""); setQ(""); }}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Loại tác vụ, đối tượng, lỗi…" label="Tìm tác vụ" />
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(JOB_ST).map(([v, label]) => ({ v, label }))} />
+        <span style={{ marginLeft: "auto" }} className="row"><ExportButton filename="tac-vu-nen" rows={rows} columns={[{ label: "#", value: (x) => x.id }, { label: "Loại", value: (x) => JOB_TYPE[x.type] ?? x.type }, { label: "Đối tượng", value: (x) => `${x.refType ?? ""} ${x.refId ?? ""}`.trim() }, { label: "Trạng thái", value: (x) => JOB_ST[x.status] ?? x.status }, { label: "Lần thử", value: (x) => x.attempts }, { label: "Lỗi", value: (x) => x.lastError }]} /><Button variant="ghost" size="sm" onClick={j.reload}>Làm mới</Button></span>
+      </FilterBar>
+      {!j.loading && <KpiRow items={[{ label: "Tác vụ", value: all.length }, { label: "Đang chờ / chạy", value: n(["queued", "running"]), tone: "info" }, { label: "Hoàn tất", value: n(["done"]), tone: "ok" }, { label: "Lỗi / dừng", value: n(["failed", "dead"]), tone: n(["failed", "dead"]) ? "danger" : undefined, onClick: () => setStatus("failed") }]} />}
+      {j.loading ? <Spinner /> : <DataTable rows={rows} rowKey={(x) => x.id} pageSize={50} defaultSort={{ key: "i", dir: "desc" }} emptyState={<EmptyState title="Không có tác vụ nào" hint="Tác vụ nền (phát hành HĐĐT, nhắc nợ…) sẽ hiện ở đây." action={status || q ? <Button variant="soft" onClick={() => { setStatus(""); setQ(""); }}>Xoá lọc</Button> : undefined} />} cols={[
+        { key: "i", label: "#", title: true, sort: (x) => x.id, render: (x) => <b className="nw">#{x.id} · {JOB_TYPE[x.type] ?? x.type}</b> },
         { key: "r", label: "Đối tượng", render: (x) => (x.refType ? `${x.refType} ${x.refId ?? ""}` : "—") },
-        { key: "s", label: "Trạng thái", render: (x) => <Badge tone={jobTone(x.status)}>{JOB_ST[x.status] ?? x.status}</Badge> },
-        { key: "a", label: "Lần thử", right: true, hideMobile: true, render: (x) => x.attempts },
-        { key: "e", label: "Lỗi gần nhất", render: (x) => (x.lastError ? <span className="small" style={{ color: "var(--danger)" }}>{String(x.lastError).slice(0, 80)}</span> : "—") },
-        { key: "u", label: "Cập nhật", hideMobile: true, render: (x) => fmtDateTime(x.updatedAt) },
+        { key: "s", label: "Trạng thái", sort: (x) => x.status, render: (x) => <Badge tone={jobTone(x.status)}>{JOB_ST[x.status] ?? x.status}</Badge> },
+        { key: "a", label: "Lần thử", num: true, hideMobile: true, sort: (x) => x.attempts, render: (x) => x.attempts },
+        { key: "e", label: "Lỗi gần nhất", render: (x) => (x.lastError ? <span className="small" style={{ color: "var(--danger)" }}>{String(x.lastError).slice(0, 100)}</span> : "—") },
+        { key: "u", label: "Cập nhật", hideMobile: true, sort: (x) => x.updatedAt, render: (x) => <span className="nw">{fmtDateTime(x.updatedAt)}</span> },
         { key: "b", label: "", render: (x) => (["failed", "dead"].includes(x.status) ? <Button size="sm" loading={busy === x.id} onClick={async () => { setBusy(x.id); try { await post(`/integrations/jobs/${x.id}/retry`); toast("Đã xếp chạy lại", "ok"); j.reload(); } catch {} finally { setBusy(null); } }}>Chạy lại</Button> : null) },
       ]} />}
     </div>
@@ -54,7 +62,7 @@ function Settings() {
   if (s.loading && !d) return <Spinner />;
   if (!d) return null;
   return (
-    <div className="stack">
+    <div className="card-grid" style={{ alignItems: "start" }}>
       <Card title="Fresco (sàn bán hàng)">
         <div className="stack">
           <label className="row between" style={{ minHeight: 44 }}><span>Bật nhận đơn từ Fresco</span><input type="checkbox" role="switch" style={{ width: 26, height: 26 }} checked={d.frescoEnabled} disabled={busy} onChange={(e) => save({ frescoEnabled: e.target.checked })} /></label>
@@ -85,7 +93,7 @@ function Sku() {
     try { await put("/fresco/products", { mappings: [{ externalSku: sku.trim(), productId: prod!.id, unit: unit || prod!.baseUnit }] }); toast("Đã lưu ghép SKU", "ok"); setProd(null); setSku(""); m.reload(); } catch {} finally { setBusy(false); }
   };
   return (
-    <div className="stack">
+    <div className="two-col">
       <div className="card flat stack">
         <b>Ghép SKU sàn với hàng hoá</b>
         <Input label="SKU trên sàn" value={sku} onChange={(e) => setSku(e.target.value)} />
@@ -93,12 +101,12 @@ function Sku() {
           {prod && <Select label="Đơn vị" value={unit || prod.baseUnit} onChange={(e) => setUnit(e.target.value)}>{(prod.units?.length ? prod.units : [{ unit: prod.baseUnit, factorMilli: 1000 }]).map((u) => <option key={u.unit} value={u.unit}>{unitLabelSafe(u.unit)}</option>)}</Select>}</div>
         <div><Button loading={busy} disabled={!sku.trim() || !prod} onClick={save}>Lưu ghép</Button></div>
       </div>
-      {m.loading ? <Spinner /> : <DataTable rows={m.data ?? []} rowKey={(x) => x.externalSku} empty="Chưa ghép SKU nào" cols={[
+      <div style={{ minWidth: 0 }}>{m.loading ? <Spinner /> : <DataTable rows={m.data ?? []} rowKey={(x) => x.externalSku} empty="Chưa ghép SKU nào" cols={[
         { key: "s", label: "SKU sàn", title: true, render: (x) => <b>{x.externalSku}</b> },
         { key: "p", label: "Hàng hoá", render: (x) => `${x.productName} (${x.productSku})` },
         { key: "u", label: "Đơn vị", render: (x) => unitLabelSafe(x.unit) },
         { key: "r", label: "", render: (x) => <Button size="sm" variant="ghost" onClick={async () => { try { await put("/fresco/products", { remove: [x.externalSku] }); m.reload(); } catch {} }}>Xoá</Button> },
-      ]} />}
+      ]} />}</div>
       <ProductPicker open={pick} onClose={() => setPick(false)} onPick={(p) => { setProd(p); setUnit(""); }} />
     </div>
   );
@@ -110,7 +118,8 @@ function ImportOrders() {
   const file = useRef<HTMLInputElement>(null);
   if (!can("orders.online.manage")) return <Banner>Cần quyền quản lý đơn online để nhập đơn.</Banner>;
   return (
-    <div className="stack">
+    <div className="two-col">
+      <div className="stack">
       <div className="hint">Cột giả định: <code>order_id, created_at, sku, qty, unit_price, shipping_fee, buyer_name</code>. SKU chưa ghép sẽ tạo đơn ở trạng thái mới kèm cảnh báo, không giữ tồn.</div>
       <TextArea label="Dán CSV đơn từ sàn" rows={6} value={csv} onChange={(e) => setCsv(e.target.value)} style={{ fontFamily: "ui-monospace, monospace" } as any} />
       <div className="row wrap">
@@ -118,7 +127,8 @@ function ImportOrders() {
         <Button variant="ghost" onClick={() => file.current?.click()}>Chọn tệp CSV…</Button>
         <Button loading={busy} disabled={!csv.trim()} onClick={async () => { setBusy(true); setRes(null); try { const r = await post("/fresco/orders/import", { csv }); setRes(r); toast(`Đã nhập ${r.imported} đơn`, "ok"); } catch {} finally { setBusy(false); } }}>Nhập đơn</Button>
       </div>
-      {res && (
+      </div>
+      {res ? (
         <div className="stack">
           <Banner tone="info">Nhập thành công {res.imported} đơn · {res.items.length - res.imported} bỏ qua / lỗi · {res.errors?.length ?? 0} dòng CSV lỗi.</Banner>
           <DataTable rows={res.items} rowKey={(x: any) => x.externalId} cols={[
@@ -127,7 +137,7 @@ function ImportOrders() {
           ]} />
           {(res.errors ?? []).map((e: any, i: number) => <div key={i} className="err">{typeof e === "string" ? e : JSON.stringify(e)}</div>)}
         </div>
-      )}
+      ) : <Card><EmptyState title="Kết quả nhập sẽ hiện ở đây" hint="Dán CSV hoặc chọn tệp rồi bấm “Nhập đơn”." /></Card>}
     </div>
   );
 }

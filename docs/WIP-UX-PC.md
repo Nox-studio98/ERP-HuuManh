@@ -94,3 +94,5 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
 - Không lộ giá vốn hay lương cho vai trò không có quyền.
 - Giao diện hoàn toàn bằng tiếng Việt.
 - Mọi API mới phải có `requirePerm` và test.
+
+> **Lưu ý khi mở PR từ nhánh này:** commit WIP đầu tiên của nhánh có một bản cũ của tài liệu này chứa token bootstrap **dev local** trong lệnh mẫu, nên gitleaks sẽ báo (báo nhầm, không phải secret thật). Khi rebase lên `main`, hãy gộp (squash) các commit WIP thành một commit để loại bản cũ đó khỏi lịch sử.

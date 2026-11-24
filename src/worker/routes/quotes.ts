@@ -11,7 +11,7 @@ import { vnDate } from "../lib/time";
 import { addDays } from "../services/debt";
 import { currentAvgCost, resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
-import { pageParams, unitFactor } from "../services/http";
+import { addVnRange, likeOf, pageParams, unitFactor } from "../services/http";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { confirmOrderFlow, createB2bOrder, loadOrderDetail, DATE_RE, type Ctx as C2 } from "../services/b2b-orders";
 
@@ -133,6 +133,18 @@ quoteRoutes.get("/quotes", requirePerm("b2b.view"), async (c) => {
   if (q.status === "expired") where.push(`(q.status = 'expired' OR (q.status = 'sent' AND q.valid_until < '${vnDate()}'))`);
   else if (q.status === "sent") (where.push(`q.status = 'sent' AND q.valid_until >= '${vnDate()}'`));
   else if (q.status) (where.push("q.status = ?"), binds.push(q.status));
+  if (q.q?.trim()) (where.push(`(q.code LIKE ? ESCAPE '\\' OR cu.name LIKE ? ESCAPE '\\')`), binds.push(likeOf(q.q), likeOf(q.q)));
+  addVnRange(q, "q.created_at", where, binds);
+  const sumRows = (
+    await db
+      .prepare(`SELECT CASE WHEN q.status = 'sent' AND q.valid_until < '${vnDate()}' THEN 'expired' ELSE q.status END AS st, COUNT(*) AS n, COALESCE(SUM(q.subtotal),0) AS s
+                  FROM quotes q JOIN customers cu ON cu.id = q.customer_id ${where.length ? "WHERE " + where.join(" AND ") : ""} GROUP BY st`)
+      .bind(...binds)
+      .all<{ st: string; n: number; s: number }>()
+  ).results;
+  const byStatus: Record<string, { count: number; total: number }> = {};
+  for (const r of sumRows) byStatus[r.st] = { count: r.n, total: r.s };
+  const summary = { count: sumRows.reduce((a, r) => a + r.n, 0), total: sumRows.reduce((a, r) => a + r.s, 0), byStatus };
   if (cursor) (where.push("q.id < ?"), binds.push(cursor));
   const rows = (
     await db
@@ -141,7 +153,7 @@ quoteRoutes.get("/quotes", requirePerm("b2b.view"), async (c) => {
       .all<any>()
   ).results;
   const page = rows.slice(0, limit);
-  return c.json({ items: page.map(head), nextCursor: rows.length > limit ? page[page.length - 1].id : null });
+  return c.json({ items: page.map(head), nextCursor: rows.length > limit ? page[page.length - 1].id : null, summary });
 });
 
 quoteRoutes.get("/quotes/:id", requirePerm("b2b.view"), async (c) => c.json(await quoteDetail(c, Number(c.req.param("id")))));

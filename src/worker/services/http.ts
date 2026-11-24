@@ -3,6 +3,7 @@ import type { ZodTypeAny, z } from "zod";
 import type { AppBindings } from "../env";
 import { AppError, conflict } from "../lib/errors";
 import { toMilli } from "../lib/money";
+import { parseDayRange, vnDayRangeUtc } from "../lib/time";
 
 /** Đọc + kiểm tra JSON body bằng zod. */
 export async function parseBody<S extends ZodTypeAny>(c: Context<AppBindings>, schema: S): Promise<z.infer<S>> {
@@ -24,6 +25,17 @@ export function pageParams(c: Context<AppBindings>) {
   const cursor = Number(c.req.query("cursor") ?? 0) || 0;
   return { limit, cursor };
 }
+
+/** Lọc khoảng ngày VN `from`/`to` (YYYY-MM-DD, gồm cả hai đầu, tối đa 366 ngày) trên cột thời gian UTC `col`. Thêm điều kiện vào conds/params. */
+export function addVnRange(q: Record<string, string | undefined>, col: string, conds: string[], params: unknown[]) {
+  const r = parseDayRange(q.from, q.to);
+  if (!r) return;
+  conds.push(`${col} >= ? AND ${col} < ?`);
+  params.push(vnDayRangeUtc(r.from).from, vnDayRangeUtc(r.to).to);
+}
+
+/** Escape LIKE (dùng với ESCAPE '\\'). */
+export const likeOf = (s: string) => `%${s.trim().replace(/[\\%_]/g, (m) => "\\" + m)}%`;
 
 export async function getSetting(db: D1Database, key: string, fallback: number) {
   const r = await db.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>();

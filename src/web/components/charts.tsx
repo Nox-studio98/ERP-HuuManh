@@ -1,15 +1,18 @@
 import { money, num } from "../format";
 
-export function BarChart({ data, height = 180, format = money }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string }) {
-  const W = 560, padL = 8, padB = 22, padT = 16;
+/** `maxBar` (tuỳ chọn, đơn vị viewBox): giới hạn bề rộng cột và gom nhóm cột vào giữa khi ít dữ liệu, tránh cột to bản. */
+export function BarChart({ data, height = 180, format = money, maxBar, width = 560 }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string; maxBar?: number; width?: number }) {
+  const W = width, padL = 8, padB = 22, padT = 16;
   const max = Math.max(1, ...data.map((d) => d.value));
-  const bw = (W - padL * 2) / Math.max(1, data.length);
+  const slot = (W - padL * 2) / Math.max(1, data.length);
+  const bw = maxBar ? Math.min(slot, maxBar / 0.7) : slot;
+  const off = maxBar ? (W - padL * 2 - bw * data.length) / 2 : 0;
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${height}`} role="img" aria-label={"Biểu đồ cột: " + data.map((d) => `${d.label} ${format(d.value)}`).join(", ")}>
       <line className="axis" x1={padL} x2={W - padL} y1={height - padB} y2={height - padB} />
       {data.map((d, i) => {
         const h = Math.max(1, ((height - padB - padT) * Math.max(0, d.value)) / max);
-        const x = padL + i * bw + bw * 0.15, w = bw * 0.7;
+        const x = padL + off + i * bw + bw * 0.15, w = bw * 0.7;
         return (
           <g key={i}>
             <rect className="bar" x={x} y={height - padB - h} width={w} height={h} rx={3}><title>{`${d.label}: ${format(d.value)}`}</title></rect>
