@@ -25,3 +25,14 @@ describe("cron */30 — dọn dẹp sau audit", () => {
     expect(c!.pnl_line).toBe("transfer");
   });
 });
+
+describe("migration không chiếm id của dữ liệu nạp sẵn", () => {
+  it("seed BAN_HANG (id 1) can still be inserted after all migrations", async () => {
+    const db = testEnv.DB;
+    const row = await db.prepare(`SELECT id FROM cash_categories WHERE code='DOI_SOAT_RA'`).first<{ id: number }>();
+    expect(row!.id).toBeGreaterThan(99);
+    // seedBase/seed.sql chèn danh mục với id tường minh nhỏ → không được trùng
+    const clash = await db.prepare(`SELECT COUNT(*) n FROM cash_categories WHERE id < 100 AND code IN ('DOI_SOAT_RA')`).first<{ n: number }>();
+    expect(clash!.n).toBe(0);
+  });
+});
