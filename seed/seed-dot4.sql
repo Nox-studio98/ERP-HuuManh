@@ -120,3 +120,6 @@ INSERT OR IGNORE INTO promotions
 INSERT OR IGNORE INTO promotion_items (id, promotion_id, product_id, product_group_id, qty_milli) VALUES
   (1, 1, NULL, 1, NULL),
   (2, 2, NULL, 2, NULL);
+
+-- Đồng bộ bộ đếm mã khuyến mãi với KM-0001..0003 ở trên
+INSERT INTO doc_sequences(prefix, day, seq) VALUES ('KM','-',3) ON CONFLICT(prefix, day) DO UPDATE SET seq = MAX(seq, 3);

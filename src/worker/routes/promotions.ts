@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppBindings } from "../env";
-import { can, requirePerm } from "../lib/rbac";
+import { can, maskPhone, requirePerm } from "../lib/rbac";
+import { nextCode } from "../lib/codes";
 import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { vnDayRangeUtc } from "../lib/time";
@@ -79,11 +80,52 @@ function validatePromo(b: PromoBody) {
 }
 
 async function nextPromoCode(db: D1Database) {
-  const r = await db
-    .prepare(`INSERT INTO doc_sequences(prefix, day, seq) VALUES ('KM','-',1) ON CONFLICT(prefix, day) DO UPDATE SET seq = seq + 1 RETURNING seq`)
-    .first<{ seq: number }>();
-  return `KM-${String(r!.seq).padStart(4, "0")}`;
+  // Bộ đếm KM có thể chậm hơn mã đã tồn tại (dữ liệu nhập tay / seed) → bỏ qua mã đã dùng
+  for (let i = 0; i < 1000; i++) {
+    const r = await db
+      .prepare(`INSERT INTO doc_sequences(prefix, day, seq) VALUES ('KM','-',1) ON CONFLICT(prefix, day) DO UPDATE SET seq = seq + 1 RETURNING seq`)
+      .first<{ seq: number }>();
+    const code = `KM-${String(r!.seq).padStart(4, "0")}`;
+    if (!(await db.prepare(`SELECT 1 FROM promotions WHERE code = ?`).bind(code).first())) return code;
+  }
+  throw new AppError(500, "code_exhausted", "Không sinh được mã khuyến mãi");
 }
+
+// ---- POS: tra cứu / tạo nhanh khách lẻ để tích & đổi điểm (thu ngân không có quyền b2b.view) ----
+const posCustomerView = (c: any, role: Parameters<typeof maskPhone>[1]) => ({
+  id: c.id, code: c.code, name: c.name, type: c.type, phone: maskPhone(c.phone, role), points: c.points,
+});
+
+promotionRoutes.get("/pos/customers", requirePerm("pos.sell"), async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2) return c.json({ items: [] });
+  const role = c.get("user").role;
+  const digits = q.replace(/\D/g, "");
+  // SĐT: chỉ khớp chính xác hoặc đuôi ≥ 4 số (tránh liệt kê danh bạ khách); tên/mã: khớp một phần
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, code, name, type, phone, points FROM customers
+      WHERE active = 1 AND (name LIKE ?1 OR code LIKE ?1 OR (?2 <> '' AND length(?2) >= 4 AND phone LIKE ?3))
+      ORDER BY type = 'retail' DESC, name LIMIT 10`,
+  ).bind(`%${q}%`, digits, `%${digits}`).all<any>();
+  return c.json({ items: results.map((r) => posCustomerView(r, role)) });
+});
+
+promotionRoutes.post("/pos/customers", requirePerm("pos.sell"), async (c) => {
+  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), phone: z.string().trim().regex(/^[0-9+ ]{8,15}$/).optional() }));
+  const db = c.env.DB;
+  const role = c.get("user").role;
+  const phone = b.phone?.replace(/\s/g, "");
+  if (phone) {
+    const dup = await db.prepare(`SELECT id, code, name, type, phone, points FROM customers WHERE phone = ? AND active = 1`).bind(phone).first<any>();
+    if (dup) return c.json({ ...posCustomerView(dup, role), existing: true });
+  }
+  const code = await nextCode(db, "KL");
+  const group = await db.prepare(`SELECT id FROM customer_groups WHERE code = 'le'`).first<{ id: number }>();
+  const r = await db.prepare(`INSERT INTO customers(code, type, name, phone, customer_group_id, created_at) VALUES (?, 'retail', ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) RETURNING id, code, name, type, phone, points`)
+    .bind(code, b.name, phone ?? null, group?.id ?? null).first<any>();
+  await auditStmt(c, { action: "customer.create_retail", entity: "customer", entityId: r.id, after: { code, name: b.name } }).run();
+  return c.json(posCustomerView(r, role), 201);
+});
 
 const view = (p: any, items?: any[]) => ({
   id: p.id, code: p.code, name: p.name, kind: p.kind, channels: String(p.channels).split(",").filter(Boolean),

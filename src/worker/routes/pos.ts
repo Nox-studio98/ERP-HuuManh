@@ -527,6 +527,7 @@ posRoutes.get("/pos/receipt/:id", requirePerm("orders.view"), async (c) => {
     })),
     subtotal: o.subtotal,
     discount: o.discount,
+    discounts: (await c.env.DB.prepare(`SELECT description, amount FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(o.id).all<{ description: string; amount: number }>()).results,
     total: o.total,
     payments: o.payments.map((p: any) => ({ method: p.method, amount: p.amount, ref: p.ref })),
     note: o.note,

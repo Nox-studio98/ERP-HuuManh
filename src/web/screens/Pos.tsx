@@ -213,7 +213,7 @@ function CustomerSheet({ onClose, onPick }: { onClose: () => void; onPick: (c: C
   const dq = useDebounced(q);
   const res = useAsync(async () => {
     if (dq.trim().length < 2) return { list: [] as any[], denied: false };
-    try { return { list: items<any>(await get("/customers", { q: dq.trim(), limit: 10 }, { silent: true })), denied: false }; }
+    try { return { list: items<any>(await get("/pos/customers", { q: dq.trim() }, { silent: true })), denied: false }; }
     catch (e) { if (e instanceof ApiError && e.status === 403) return { list: [], denied: true }; throw e; }
   }, [dq]);
   return (
@@ -223,8 +223,32 @@ function CustomerSheet({ onClose, onPick }: { onClose: () => void; onPick: (c: C
         {res.data?.denied && <div className="banner">Tài khoản này không có quyền tra cứu khách — nhờ quản lý gắn khách.</div>}
         {res.loading ? <Spinner /> : res.data?.list.map((c) => <button key={c.id} className="dt-card" onClick={() => onPick({ id: c.id, name: c.name, phone: c.phone })}><div className="ttl">{c.name}</div><div className="small muted">{c.code}{c.phone ? " · " + c.phone : ""}</div></button>)}
         {!res.loading && dq.trim().length >= 2 && !res.data?.denied && !res.data?.list.length && <div className="muted">Không tìm thấy khách.</div>}
+        <QuickCustomer seed={q} onCreated={onPick} />
       </div>
     </Sheet>
+  );
+}
+
+/** Tạo nhanh khách lẻ tại quầy để tích điểm (tên + SĐT); SĐT đã có → dùng khách cũ. */
+function QuickCustomer({ seed, onCreated }: { seed: string; onCreated: (c: Cust) => void }) {
+  const [open, setOpen] = useState(false);
+  const isPhone = /^[0-9+ ]{8,15}$/.test(seed.trim());
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!open) return <Button variant="ghost" onClick={() => { setOpen(true); if (isPhone) setPhone(seed.trim()); else setName(seed.trim()); }}>+ Khách mới</Button>;
+  return (
+    <div className="stack" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+      <Input label="Tên khách" value={name} onChange={(e) => setName(e.target.value)} />
+      <Input label="Số điện thoại" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+      <Button disabled={busy || !name.trim()} onClick={async () => {
+        setBusy(true);
+        try {
+          const r: any = await post("/pos/customers", { name: name.trim(), ...(phone.trim() ? { phone: phone.trim() } : {}) });
+          onCreated({ id: r.id, name: r.name, phone: r.phone });
+        } finally { setBusy(false); }
+      }}>Lưu và gắn khách</Button>
+    </div>
   );
 }
 
