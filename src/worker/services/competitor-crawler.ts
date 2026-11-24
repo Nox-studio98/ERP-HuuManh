@@ -30,18 +30,72 @@ const sleep = (ms: number) => (ms > 0 ? new Promise<void>((r) => setTimeout(r, m
 
 class Blocked extends Error {}
 
-/** SSRF / đường nội bộ: chỉ http(s) tới tên miền công khai. */
+const BLOCKED_HOSTS = new Set(["localhost", "metadata", "metadata.google.internal", "instance-data", "instance-data.ec2.internal", "kubernetes.default.svc"]);
+
+function ipv4Private(h: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return (
+    a === 0 || a === 10 || a === 127 || a >= 224 || // 0/8, 10/8, loopback, multicast/reserved
+    (a === 169 && b === 254) || // link-local + metadata 169.254.169.254
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) || // CGNAT
+    (a === 192 && b === 0 && Number(m[3]) === 0) ||
+    (a === 198 && (b === 18 || b === 19))
+  );
+}
+
+/** SSRF / đường nội bộ: chỉ http(s) tới tên miền công khai, cổng 80/443 (hoặc mặc định). Mọi IP literal đều bị từ chối. */
 export function isPublicHttpUrl(u: string): boolean {
   try {
     const p = new URL(u);
     if (p.protocol !== "http:" && p.protocol !== "https:") return false;
-    const h = p.hostname.toLowerCase();
-    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || !h.includes(".")) return false;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.includes(":") || h.startsWith("[")) return false;
+    if (p.username || p.password) return false;
+    if (p.port && p.port !== "80" && p.port !== "443") return false;
+    const h = p.hostname.toLowerCase().replace(/\.+$/, ""); // bỏ dấu chấm cuối: "localhost." == "localhost"
+    if (!h || BLOCKED_HOSTS.has(h)) return false;
+    if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".lan") || h.endsWith(".home.arpa") || !h.includes(".")) return false;
+    if (h.includes(":") || h.startsWith("[")) return false; // IPv6 literal (::1, fc00::/7, fe80::/10, ::ffff:...)
+    if (/^[\d.]+$/.test(h) || /^0x[0-9a-f.]+$/i.test(h)) return false; // IPv4 (kể cả dạng rút gọn/thập lục) — kiểm thêm bên dưới
+    if (ipv4Private(h)) return false;
     return true;
   } catch {
     return false;
   }
+}
+
+/** Đọc body theo luồng, dừng ở maxBytes (không nạp cả phản hồi khổng lồ vào bộ nhớ). */
+export async function readBodyCapped(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return (await res.text()).slice(0, maxBytes);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const room = maxBytes - total;
+      if (value.byteLength >= room) {
+        chunks.push(value.subarray(0, room));
+        total += room;
+        break;
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* đã đóng */ }
+  }
+  const all = new Uint8Array(total);
+  let off = 0;
+  for (const ch of chunks) {
+    all.set(ch, off);
+    off += ch.byteLength;
+  }
+  return new TextDecoder().decode(all);
 }
 
 // ---------------------------------------------------------------- dùng chung với route
@@ -90,13 +144,20 @@ async function checkRobots(env: Env, src: any, ua: string, throttle: () => Promi
   }
   const origin = new URL(src.url).origin;
   await throttle();
-  const res = await fetch(`${origin}/robots.txt`, { headers: { "user-agent": ua, accept: "text/plain,*/*;q=0.5" }, signal: AbortSignal.timeout(15000) });
+  let res = await fetch(`${origin}/robots.txt`, { headers: { "user-agent": ua, accept: "text/plain,*/*;q=0.5" }, redirect: "manual", signal: AbortSignal.timeout(15000) });
+  // chuyển hướng robots.txt: chỉ theo (tối đa 3 bước) khi vẫn cùng origin và là URL công khai
+  for (let hop = 0; res.status >= 300 && res.status < 400 && hop < 3; hop++) {
+    const loc = res.headers.get("location");
+    const next = loc ? new URL(loc, `${origin}/robots.txt`).toString() : null;
+    if (!next || !isPublicHttpUrl(next) || new URL(next).origin !== origin) throw new Error("robots.txt chuyển hướng ra ngoài nguồn, bỏ qua");
+    res = await fetch(next, { headers: { "user-agent": ua, accept: "text/plain,*/*;q=0.5" }, redirect: "manual", signal: AbortSignal.timeout(15000) });
+  }
   let allowed = true;
   let delayMs = 0;
   if (res.status >= 500 || res.status === 429) throw new Error(`robots.txt lỗi ${res.status}`); // không đoán: thử lại lần sau
   if (res.status === 401 || res.status === 403) allowed = false;
   else if (res.status === 200) {
-    const text = (await res.text()).slice(0, 500_000);
+    const text = await readBodyCapped(res, 500_000);
     const rules: RobotsRules = parseRobots(text, ua);
     const u = new URL(src.url);
     allowed = robotsAllows(rules, u.pathname + u.search);
@@ -124,7 +185,7 @@ async function fetchPage(url: string, ua: string, throttle: () => Promise<void>)
     }
     if (res.status === 401 || res.status === 403 || res.status === 429) throw new Blocked(`HTTP ${res.status}`);
     if (res.status >= 400) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.text()).slice(0, MAX_BODY);
+    const body = await readBodyCapped(res, MAX_BODY);
     if (CAPTCHA_RE.test(body.slice(0, 20000)) && !/application\/ld\+json/i.test(body)) throw new Blocked("trang yêu cầu captcha/xác minh");
     return body;
   }

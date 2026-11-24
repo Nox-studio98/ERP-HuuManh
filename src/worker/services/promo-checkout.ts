@@ -1,4 +1,5 @@
 import { AppError, conflict } from "../lib/errors";
+import { assertStmt } from "./guard";
 import { allocate, costFloors, evaluatePromotions, type AppliedDiscount, type EngineLine, type PromoChannel } from "./promotions";
 import { earnFor, planRedeem, pointsStmts } from "./loyalty-points";
 
@@ -35,6 +36,7 @@ export async function planPromotions(
   o: {
     channel: PromoChannel;
     customerId?: number | null;
+    receiverPhone?: string | null;
     lines: EngineLine[];
     subtotal: number;
     voucherCode?: string | null;
@@ -44,7 +46,7 @@ export async function planPromotions(
     strict: boolean;
   },
 ): Promise<PromoPlan> {
-  const res = await evaluatePromotions(db, { channel: o.channel, customerId: o.customerId, lines: o.lines, subtotal: o.subtotal, voucherCode: o.voucherCode, at: o.at });
+  const res = await evaluatePromotions(db, { channel: o.channel, customerId: o.customerId, receiverPhone: o.receiverPhone, lines: o.lines, subtotal: o.subtotal, voucherCode: o.voucherCode, at: o.at });
   if (o.strict && o.voucherCode) {
     const bad = res.rejected.find((r) => FATAL_VOUCHER.has(r.reason));
     if (bad) {
@@ -81,7 +83,7 @@ export async function planPromotions(
 export async function promoStatements(
   db: D1Database,
   ord: { sql: string; bind: unknown },
-  o: { plan: PromoPlan; customerId: number | null | undefined; payableTotal: number; userId: number | null; customerSql?: { sql: string; bind: unknown }; skipEarn?: boolean },
+  o: { plan: PromoPlan; customerId: number | null | undefined; payableTotal: number; userId: number | null; customerSql?: { sql: string; bind: unknown }; skipEarn?: boolean; receiverPhone?: string | null },
 ): Promise<D1PreparedStatement[]> {
   const s: D1PreparedStatement[] = [];
   const { plan } = o;
@@ -92,6 +94,11 @@ export async function promoStatements(
         .bind(ord.bind, d.promotionId, d.voucherId ?? null, d.amount, d.description),
     );
     if (d.voucherId) {
+      // Chốt chặn đồng thời: hai checkout cùng lúc không vượt per_customer_limit (theo khách và/hoặc theo SĐT người nhận)
+      if (o.customerId)
+        s.push(assertStmt(db, "voucher.per_customer", `SELECT (SELECT COUNT(*) FROM voucher_redemptions WHERE voucher_id = ? AND customer_id = ? AND status = 'used') < (SELECT per_customer_limit FROM vouchers WHERE id = ?)`, [d.voucherId, o.customerId, d.voucherId]));
+      if (o.receiverPhone)
+        s.push(assertStmt(db, "voucher.per_phone", `SELECT (SELECT COUNT(*) FROM voucher_redemptions r JOIN orders x ON x.id = r.order_id WHERE r.voucher_id = ? AND r.status = 'used' AND x.receiver_phone = ?) < (SELECT per_customer_limit FROM vouchers WHERE id = ?)`, [d.voucherId, o.receiverPhone, d.voucherId]));
       s.push(
         db
           .prepare(`INSERT INTO voucher_redemptions(voucher_id, order_id, customer_id, amount) VALUES (?, ${ord.sql}, ${o.customerSql ? `COALESCE(?, ${o.customerSql.sql})` : "?"}, ?)`)

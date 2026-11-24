@@ -21,6 +21,10 @@
   ],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "huu-manh-erp-files" }],
   "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }] },
+  "ratelimits": [
+    { "name": "RL_AUTH", "namespace_id": "2201", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RATE_LIMITER", "namespace_id": "2202", "simple": { "limit": 120, "period": 60 } }
+  ],
   "vars": { "APP_ENV": "production" },
   "observability": { "enabled": true },
   "workers_dev": true,
@@ -29,6 +33,10 @@
     // (luôn cho qua) — CHỈ dùng cho demo, phải thay bằng secret thật trước khi go-live.
     "demo": {
       "name": "huu-manh-shop-demo",
+      "ratelimits": [
+        { "name": "RL_AUTH", "namespace_id": "2203", "simple": { "limit": 10, "period": 60 } },
+        { "name": "RATE_LIMITER", "namespace_id": "2204", "simple": { "limit": 120, "period": 60 } }
+      ],
       "vars": { "APP_ENV": "demo", "TURNSTILE_SECRET": "1x0000000000000000000000000000000AA" },
       "d1_databases": [
         {
@@ -43,6 +51,10 @@
     // Staging: D1/R2/Queue RIÊNG của staging — tuyệt đối không trỏ vào dữ liệu production
     "staging": {
       "name": "huu-manh-shop-staging",
+      "ratelimits": [
+        { "name": "RL_AUTH", "namespace_id": "2205", "simple": { "limit": 10, "period": 60 } },
+        { "name": "RATE_LIMITER", "namespace_id": "2206", "simple": { "limit": 120, "period": 60 } }
+      ],
       "vars": { "APP_ENV": "staging" },
       "d1_databases": [
         {

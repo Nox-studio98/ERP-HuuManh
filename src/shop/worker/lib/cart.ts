@@ -129,11 +129,12 @@ export async function computeTotals(db: D1Database, lines: CartLine[], district:
 }
 
 /** Khuyến mãi / voucher cho giỏ online (engine dùng chung với POS). strict=true (checkout): voucher sai → lỗi; false (báo giá): chỉ trả `rejected`. */
-export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: number, customerId: number | null, voucherCode: string | undefined, strict: boolean) {
+export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: number, customerId: number | null, voucherCode: string | undefined, strict: boolean, receiverPhone: string | null = null) {
   const groups = await groupIdsOf(db, lines.map((l) => l.productId));
   return planPromotions(db, {
     channel: "online",
     customerId,
+    receiverPhone,
     lines: lines.map((l) => ({ productId: l.productId, groupId: groups.get(l.productId) ?? null, qtyMilli: l.qtyMilli, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
     subtotal,
     voucherCode,

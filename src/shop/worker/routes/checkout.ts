@@ -12,7 +12,9 @@ import { DATE_RE, addDaysStr, findZone, getSlot, slotProblem } from "../lib/deli
 import { orderView } from "../lib/orderview";
 import { optionalAuth } from "../lib/session";
 import { verifyTurnstile } from "../lib/turnstile";
-import { baseUrl, enqueueByRef, normalizePhone, onlineStoreId, parseBody, setting, settingNum } from "../lib/util";
+import { mailAllowed } from "../lib/mailguard";
+import { assertStmt } from "../../../worker/services/guard";
+import { baseUrl, enqueueByRef, last4, normalizePhone, httpError, onlineStoreId, parseBody, setting, settingNum } from "../lib/util";
 import { vnDate } from "../../../worker/lib/time";
 import type { ShopBindings } from "../env";
 import { ItemSchema } from "./cart";
@@ -29,7 +31,10 @@ export const AddressSchema = z.object({
 });
 
 const CheckoutSchema = z.object({
-  clientUuid: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/),
+  // uuid-grade (>= 16 ký tự): chống đoán mã để xem lại đơn của người khác
+  clientUuid: z.string().min(16).max(64).regex(/^[A-Za-z0-9_-]+$/),
+  /** 4 số cuối SĐT người nhận — khách vãng lai gửi lại cùng clientUuid cần kèm (hoặc gửi lại đúng địa chỉ có SĐT đó) mới xem lại được đơn. */
+  phone4: z.string().regex(/^\d{4}$/).optional(),
   items: z.array(ItemSchema.extend({ expectedUnitPrice: z.number().int().nonnegative() })).min(1).max(50),
   address: z.union([z.object({ addressId: z.number().int().positive() }), AddressSchema]),
   slotDate: z.string().regex(DATE_RE),
@@ -44,6 +49,17 @@ const CheckoutSchema = z.object({
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
 const isUnique = (e: unknown) => /UNIQUE constraint failed/i.test(String((e as Error)?.message ?? ""));
 const ORD = `(SELECT id FROM orders WHERE code = ?1)`;
+
+const OPEN_STATUSES = `('new','awaiting_payment')`;
+const dayAgo = () => new Date(Date.now() - 86400_000).toISOString();
+/** Số đơn online chưa hoàn tất xác nhận của một SĐT người nhận trong 24h. */
+async function openOrdersByPhone(db: D1Database, phone: string) {
+  const r = await db
+    .prepare(`SELECT COUNT(*) AS n FROM orders WHERE channel = 'online' AND receiver_phone = ? AND status IN ${OPEN_STATUSES} AND created_at >= ?`)
+    .bind(phone, dayAgo())
+    .first<{ n: number }>();
+  return r?.n ?? 0;
+}
 
 /** Câu lệnh giữ tồn theo kế hoạch FEFO; order_line_id lấy theo thứ tự chèn dòng (vị trí) → cùng một batch với tạo đơn. */
 function reserveByPosition(db: D1Database, code: string, plans: { pos: number; plan: ReservationPlan }[]) {
@@ -73,7 +89,11 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     if (!ex) return null;
     if (ex.channel !== "online" || (ex.shop_account_id ?? null) !== (account?.id ?? null))
       throw conflict("duplicate_client_uuid", "Mã yêu cầu đã được dùng");
-    return c.json(await orderView(db, ex), 200);
+    if (account) return c.json(await orderView(db, ex), 200);
+    // Khách vãng lai: chỉ lộ đầy đủ khi chứng minh biết SĐT người nhận (4 số cuối); ngược lại chỉ trả mã + trạng thái
+    const supplied = b.phone4 ?? ("receiverPhone" in b.address ? last4(normalizePhone(b.address.receiverPhone) ?? "") : "");
+    if (supplied && supplied === last4(ex.receiver_phone)) return c.json(await orderView(db, ex), 200);
+    return c.json({ code: ex.code, status: ex.status }, 200);
   };
   const r0 = await replay();
   if (r0) return r0;
@@ -93,6 +113,11 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   } else addr = b.address;
   const phone = normalizePhone(addr.receiverPhone);
   if (!phone) throw new AppError(422, "invalid_phone", "Số điện thoại không hợp lệ");
+
+  // Chống giữ hàng bằng đơn ảo: mỗi SĐT người nhận tối đa N đơn chưa hoàn tất (new/awaiting_payment) trong 24h (khách vãng lai)
+  const maxOpen = await settingNum(db, "online.max_open_orders_per_phone", 3);
+  if (!account && (await openOrdersByPhone(db, phone)) >= maxOpen)
+    throw httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
 
   // --- khu vực + khung giờ ---
   const zone = await findZone(db, addr.district);
@@ -117,7 +142,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   if (totals.subtotal < zone.minOrder) throw new AppError(422, "min_order", `Đơn tối thiểu ${zone.minOrder.toLocaleString("vi-VN")}đ`, { minOrder: zone.minOrder, subtotal: totals.subtotal });
 
   // --- khuyến mãi / voucher (Đợt 4): giảm tính trên tiền hàng, phí giao giữ nguyên ---
-  const promo = await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true);
+  const promo = await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true, phone);
   const finalTotal = totals.total - promo.promoTotal;
 
   // --- thanh toán ---
@@ -135,6 +160,9 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const groupId = (await db.prepare(`SELECT id FROM customer_groups WHERE code = 'le'`).first<{ id: number }>())?.id ?? null;
   const shipAddress = [addr.addressLine, addr.ward, addr.district, addr.province].filter(Boolean).join(", ");
   const link = `${baseUrl(c)}/track/${token}`;
+
+  // Email xác nhận cho khách vãng lai: giới hạn theo người nhận (60 giây/lần, 5/ngày) — bị chặn thì bỏ qua im lặng
+  const guestMailOk = !account && !!b.email && (await mailAllowed(db, "notify.order_status", null, b.email));
 
   for (let attempt = 0; ; attempt++) {
     const short = await applyStock(db, storeId, lines);
@@ -158,6 +186,14 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     const status = b.paymentMethod === "cod" ? (autoConfirm && !isPreorder ? "confirmed" : "new") : "awaiting_payment";
     const payStatus = b.paymentMethod === "cod" ? "unpaid" : "pending";
     const stmts: D1PreparedStatement[] = [];
+    // Chốt chặn đồng thời (trong batch): khung giờ còn chỗ và SĐT chưa vượt trần đơn mở — đặt ĐẦU batch
+    stmts.push(
+      assertStmt(db, "checkout.slot_capacity", `SELECT (SELECT COUNT(*) FROM orders WHERE slot_date = ? AND slot_id = ? AND status <> 'cancelled') < ?`, [b.slotDate, b.slotId, slot.capacity]),
+    );
+    if (!account)
+      stmts.push(
+        assertStmt(db, "checkout.phone_open_cap", `SELECT (SELECT COUNT(*) FROM orders WHERE channel = 'online' AND receiver_phone = ? AND status IN ${OPEN_STATUSES} AND created_at >= ?) < ?`, [phone, dayAgo(), maxOpen]),
+      );
     if (guestCustomerCode)
       stmts.push(
         db
@@ -193,7 +229,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
       ...(await promoStatements(
         db,
         { sql: "(SELECT id FROM orders WHERE code = ?)", bind: code },
-        { plan: promo, customerId: account?.customerId ?? null, payableTotal: finalTotal, userId: null, skipEarn: true, customerSql: { sql: "(SELECT id FROM customers WHERE code = ?)", bind: guestCustomerCode } },
+        { plan: promo, customerId: account?.customerId ?? null, receiverPhone: phone, payableTotal: finalTotal, userId: null, skipEarn: true, customerSql: { sql: "(SELECT id FROM customers WHERE code = ?)", bind: guestCustomerCode } },
       )),
     );
     const ev = (st: string, note: string) =>
@@ -212,7 +248,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     }
     stmts.push(
       enqueueByRef(db, "notify.order_status", "order", code, {
-        orderCode: code, status, accountId: account?.id ?? null, email: account ? null : b.email ?? null, link,
+        orderCode: code, status, accountId: account?.id ?? null, email: account ? null : guestMailOk ? b.email ?? null : null, link,
       }),
       enqueueByRef(db, "notify.staff_new_order", "order", code, { orderCode: code, total: finalTotal, isPreorder }),
     );
@@ -225,6 +261,12 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
         if (r) return r;
       }
       if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
+      if (/state_changed/.test(String((e as Error)?.message ?? ""))) {
+        // Chốt chặn trong batch bật: xác định nguyên nhân để báo đúng lỗi
+        if ((await slotProblem(db, slot, b.slotDate)) === "full") throw conflict("slot_full", "Khung giờ đã đầy, vui lòng chọn khung khác");
+        if (!account && (await openOrdersByPhone(db, phone)) >= maxOpen) throw httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
+        await promoForCart(db, lines, totals.subtotal, account?.customerId ?? null, b.voucherCode, true, phone); // ném lỗi voucher cụ thể nếu có
+      }
       if (isCheckFail(e)) {
         if (attempt === 0) continue; // tồn vừa đổi: tính lại một lần
         throw conflict("insufficient_stock", "Không đủ hàng (tồn vừa thay đổi), vui lòng thử lại");
