@@ -138,6 +138,16 @@ export async function paidNet(db: D1Database, orderId: number) {
   return { net: s?.s ?? 0, method: first?.method ?? "transfer", fundId: first?.fund_id ?? null };
 }
 
+/**
+ * A-14: nghĩa vụ hoàn tiền (CHƯA có dòng quỹ): số cần hoàn = tiền đã thu ròng − phần đã ghi nghĩa vụ (`keep`), tối đa `cap`.
+ * Huỷ/trả hàng (orders.online.manage) chỉ ghi `orders.refund_due`; tiền ra khỏi quỹ do người có finance.write bấm /refund (refundOrder).
+ * Đơn COD chưa thu (không có payments dương) → 0, không cần hoàn.
+ */
+export async function refundObligation(db: D1Database, orderId: number, keep = 0, cap = Number.POSITIVE_INFINITY) {
+  const p = await paidNet(db, orderId);
+  return Math.max(0, Math.min(p.net - keep, cap));
+}
+
 /** Hoàn tiền: dòng payments âm cùng phương thức/quỹ + cập nhật payment_status (đặt vào extraSet của transitionStmts, bind từ ?3). */
 export async function refundPlan(db: D1Database, orderId: number, total: number, keep = 0, cap = Number.POSITIVE_INFINITY, ref = "refund") {
   const p = await paidNet(db, orderId);
