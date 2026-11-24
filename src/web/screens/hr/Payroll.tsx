@@ -86,6 +86,8 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
         </div>
       </div>
       <div className="row"><h2 style={{ margin: 0 }}>{periodLabel(period)}</h2>{st && <Badge tone={periodTone(st)}>{PERIOD_STATUS[st]}</Badge>}</div>
+      {d?.stale && <Banner tone="danger">Dữ liệu đầu vào (hồ sơ, bảng công, thưởng/phạt, tạm ứng...) đã thay đổi sau lần tính cuối. Hãy bấm <b>Tính lại</b> trước khi duyệt.</Banner>}
+      {d && d.items.some((x: any) => x.advancesCarried > 0) && <Banner>Có nhân viên không đủ thực lĩnh để trừ hết tạm ứng: phần còn lại tự chuyển sang kỳ lương kế tiếp khi chi lương (xem dòng "Tạm ứng chuyển kỳ sau" trên phiếu lương).</Banner>}
       {l.err && !d ? <EmptyState title="Chưa có bảng lương kỳ này" hint="Hãy tính lương cho kỳ này sau khi chốt bảng công." /> : l.loading ? <Spinner /> : d && (
         <>
           <div className="kpis">

@@ -7,6 +7,7 @@ import {
 /** Một ca/ngày không có giờ ra sau quá số phút này thì coi là quên chấm ra (không đoán giờ ra). */
 export const MAX_SHIFT_MINUTES = 16 * 60;
 
+/** serverAt = giờ HIỆU LỰC (effective_at; chấm offline = giờ máy NV đã kiểm tra). */
 export interface TsPunch { id: number; kind: "in" | "out"; serverAt: string; status: string; assignmentId: number | null }
 export interface TsAssignment { id: number; workDate: string; startAt: string; endAt: string; breakMinutes: number; status: string }
 export interface TsOvertime { workDate: string; minutes: number; multiplierBp: number | null; status: string }
@@ -244,7 +245,8 @@ export async function computeTimesheetLive(db: D1Database, period: string, emplo
   const eq = employeeId ? " AND employee_id = ?" : "";
   const ebind = employeeId ? [employeeId] : [];
   const [pu, as, ot, lv, ho] = await Promise.all([
-    db.prepare(`SELECT id, employee_id, kind, server_at, status, assignment_id FROM attendance_punches WHERE server_at >= ? AND server_at < ? AND status = 'accepted'${eq}`).bind(range.from, range.to, ...ebind).all<any>(),
+    // C-01: giờ hiệu lực = effective_at (chấm offline dùng giờ máy NV đã kiểm tra), bản ghi cũ chưa có thì server_at
+    db.prepare(`SELECT id, employee_id, kind, COALESCE(effective_at, server_at) AS server_at, status, assignment_id FROM attendance_punches WHERE COALESCE(effective_at, server_at) >= ? AND COALESCE(effective_at, server_at) < ? AND status = 'accepted'${eq}`).bind(range.from, range.to, ...ebind).all<any>(),
     db.prepare(`SELECT id, employee_id, work_date, start_at, end_at, break_minutes, status FROM shift_assignments WHERE work_date >= ? AND work_date <= ? AND status != 'cancelled'${eq}`).bind(addDays(first, -1), last, ...ebind).all<any>(),
     db.prepare(`SELECT employee_id, work_date, minutes, multiplier_bp, status FROM overtime_requests WHERE work_date >= ? AND work_date <= ? AND status = 'approved'${eq}`).bind(first, last, ...ebind).all<any>(),
     db.prepare(`SELECT lr.employee_id, lr.from_date, lr.to_date, lr.half_day, lr.status, lt.code, lt.paid FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.leave_type_id WHERE lr.status = 'approved' AND lr.from_date <= ? AND lr.to_date >= ?${eq.replace("employee_id", "lr.employee_id")}`).bind(last, first, ...ebind).all<any>(),
@@ -320,7 +322,7 @@ export async function collectUnresolved(db: D1Database, period: string, ts: Time
   const r = vnRangeUtc(first, last);
   const one = async (sql: string, ...b: unknown[]) => (await db.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
   return {
-    pendingPunches: await one(`SELECT COUNT(*) n FROM attendance_punches WHERE status='pending' AND server_at >= ? AND server_at < ?`, r.from, r.to),
+    pendingPunches: await one(`SELECT COUNT(*) n FROM attendance_punches WHERE status='pending' AND COALESCE(effective_at, server_at) >= ? AND COALESCE(effective_at, server_at) < ?`, r.from, r.to),
     pendingCorrections: await one(`SELECT COUNT(*) n FROM attendance_corrections WHERE status='pending' AND work_date >= ? AND work_date <= ?`, first, last),
     pendingLeaves: await one(`SELECT COUNT(*) n FROM leave_requests WHERE status='pending' AND from_date <= ? AND to_date >= ?`, last, first),
     pendingOvertime: await one(`SELECT COUNT(*) n FROM overtime_requests WHERE status='pending' AND work_date >= ? AND work_date <= ?`, first, last),

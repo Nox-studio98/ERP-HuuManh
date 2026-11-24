@@ -54,11 +54,12 @@ describe("Chấm công GPS", () => {
     expect(await db().prepare(`SELECT lat, lng FROM attendance_punches WHERE id=?`).bind(r.body.punch.id).first()).toEqual({ lat: null, lng: null });
   });
 
-  it("offline → pending, ghi client_at; được duyệt thì mới thành accepted", async () => {
+  it("offline hợp lý → tính công ngay (accepted + review_flag), ghi client_at/effective_at; quản lý xác nhận bỏ cờ", async () => {
     const clientAt = new Date(Date.now() - 3600_000).toISOString();
     const r = await punch("s_g", gps("in", { offline: { clientAt } }));
     expect(r.status).toBe(201);
-    expect(r.body.punch).toMatchObject({ method: "offline", status: "pending" });
+    // C-01: giờ máy hợp lý (trong 48h, không ở tương lai) → tính công ngay theo client_at, gắn cờ xem lại
+    expect(r.body.punch).toMatchObject({ method: "offline", status: "accepted", reviewFlag: true, effectiveAt: clientAt });
     expect(await db().prepare(`SELECT client_at FROM attendance_punches WHERE id=?`).bind(r.body.punch.id).first()).toEqual({ client_at: clientAt });
     const dec = await call("manager", "POST", `/api/v1/attendance/punches/${r.body.punch.id}/decide`, { decision: "approved" });
     expect(dec.body.status).toBe("accepted");
