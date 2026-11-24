@@ -80,7 +80,8 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
    npm run build && npm run build:shop
    npx wrangler dev -c dist/huu_manh_erp/wrangler.json --port 8797 --persist-to $S &
    npx wrangler dev -c dist-shop/huu_manh_shop/wrangler.json --port 8795 --inspector-port 9795 --persist-to $S &   # chỉ khi chạy shop/shop-b2b/d4
-   curl -X POST localhost:8797/api/auth/bootstrap -H 'content-type: application/json' -H 'x-bootstrap-token: local-dev-bootstrap' -d '{"username":"chu","password":"ChuCuaHang-2026","fullName":"Chủ cửa hàng"}'
+   # BOOTSTRAP_TOKEN: lấy giá trị trong .dev.vars (chỉ dùng cho môi trường dev local)
+   curl -X POST localhost:8797/api/auth/bootstrap -H 'content-type: application/json' -H "x-bootstrap-token: $BOOTSTRAP_TOKEN" -d '{"username":"chu","password":"<mật khẩu dev>","fullName":"Chủ cửa hàng"}'
    BASE=http://localhost:8797 SHOTS=0 PERSIST=$S node e2e/smoke.mjs     # rồi b2b.mjs trên cùng DB
    ```
    Các bộ khác: `hr`, `hr-swap`, `gaps2`, `online` (BASE + PERSIST); `shop`, `shop-b2b`, `d4` (ERP=… SHOP=… PERSIST=…; d4 mặc định cổng 8792/8793); `settings` tự dựng DB + server cổng 8798. Tất cả 10 bộ phải đạt.
@@ -93,3 +94,5 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
 - Không lộ giá vốn hay lương cho vai trò không có quyền.
 - Giao diện hoàn toàn bằng tiếng Việt.
 - Mọi API mới phải có `requirePerm` và test.
+
+> **Lưu ý khi mở PR từ nhánh này:** commit WIP đầu tiên của nhánh có một bản cũ của tài liệu này chứa token bootstrap **dev local** trong lệnh mẫu, nên gitleaks sẽ báo (báo nhầm, không phải secret thật). Khi rebase lên `main`, hãy gộp (squash) các commit WIP thành một commit để loại bản cũ đó khỏi lịch sử.
