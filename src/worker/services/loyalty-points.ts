@@ -57,10 +57,13 @@ export function pointsStmts(
   clampAtZero = false,
 ): D1PreparedStatement[] {
   if (!points) return [];
+  // Khi kẹp ở 0 mà số dư vừa giảm (đồng thời), sổ phải ghi đúng phần thực sự trừ — không ghi delta chưa kẹp
+  const pointsSql = clampAtZero && points < 0 ? `-MIN(?, (SELECT points FROM customers WHERE id = ?))` : `?`;
+  const pointsBind = clampAtZero && points < 0 ? [-points, customerId] : [points];
   return [
     db
-      .prepare(`INSERT INTO loyalty_ledger(customer_id, order_id, kind, points, note, created_by) VALUES (?, ${ord ? ord.sql : "NULL"}, ?, ?, ?, ?)`)
-      .bind(...(ord ? [customerId, ord.bind] : [customerId]), kind, points, note, userId),
+      .prepare(`INSERT INTO loyalty_ledger(customer_id, order_id, kind, points, note, created_by) VALUES (?, ${ord ? ord.sql : "NULL"}, ?, ${pointsSql}, ?, ?)`)
+      .bind(...(ord ? [customerId, ord.bind] : [customerId]), kind, ...pointsBind, note, userId),
     clampAtZero
       ? db.prepare(`UPDATE customers SET points = MAX(0, points + ?) WHERE id = ?`).bind(points, customerId)
       : db.prepare(`UPDATE customers SET points = points + ? WHERE id = ?`).bind(points, customerId),

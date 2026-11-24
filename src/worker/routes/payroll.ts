@@ -2,12 +2,14 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { AppBindings } from "../env";
-import { requirePerm } from "../lib/rbac";
+import { can, requirePerm } from "../lib/rbac";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { audit, auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { parseBody } from "../services/http";
+import { assertStmt, onceStmt } from "../services/guard";
+import { getSettingInt } from "../services/settings";
 import { buildXlsx, XLSX_MIME } from "../services/xlsx";
 import { calculatePayslip, loadPayrollSettings, type PayslipInput, type TimesheetDayInput } from "../services/payroll-calc";
 
@@ -15,6 +17,7 @@ import { calculatePayslip, loadPayrollSettings, type PayslipInput, type Timeshee
 export const payrollRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
 
+const MAX_VND = 10_000_000_000;
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 function periodParam(p: string | undefined) {
   if (!p || !PERIOD_RE.test(p)) throw new AppError(422, "validation_error", "Kỳ phải có dạng YYYY-MM");
@@ -84,7 +87,7 @@ async function calculatePeriod(c: Ctx, period: string) {
   const adjs = (await db.prepare(`SELECT employee_id, kind, SUM(minutes) AS m FROM timesheet_adjustments WHERE target_period = ? GROUP BY employee_id, kind`).bind(period).all<any>()).results;
   const allw = (await db.prepare(`SELECT * FROM employee_allowances WHERE active = 1`).all<any>()).results;
   const entries = (await db.prepare(`SELECT * FROM payroll_entries WHERE period = ? ORDER BY id`).bind(period).all<any>()).results;
-  const advs = (await db.prepare(`SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'paid' ORDER BY id`).bind(period).all<any>()).results;
+  const advs = (await db.prepare(`SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'paid' AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted')) ORDER BY id`).bind(period).all<any>()).results;
   const sales = (
     await db
       .prepare(
@@ -237,7 +240,11 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
     .bind(pp.id)
     .all<any>();
   const curPeriod = vnPeriod();
-  const stmts: D1PreparedStatement[] = [];
+  // Chốt chặn (audit #3): chi lương một lần cho mỗi kỳ; kỳ phải còn 'approved' tại lúc ghi
+  const stmts: D1PreparedStatement[] = [
+    onceStmt(db, "payroll.pay", pp.id),
+    assertStmt(db, "payroll.pay", `SELECT status = 'approved' FROM payroll_periods WHERE id = ?`, [pp.id]),
+  ];
   const vouchers: { employee: string; amount: number; code: string }[] = [];
   for (const it of items) {
     if (it.net <= 0) continue;
@@ -256,7 +263,8 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
     db
       .prepare(
         `UPDATE salary_advances SET status='deducted' WHERE deduct_period = ? AND status='paid' AND created_at <= ?
-            AND employee_id IN (SELECT employee_id FROM payroll_items WHERE payroll_period_id = ? AND advances > 0)`,
+            AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted'))
+            AND employee_id IN (SELECT employee_id FROM payroll_items WHERE payroll_period_id = ? AND advances > 0 AND net > 0)`,
       )
       .bind(period, pp.calculated_at, pp.id),
     db.prepare(`UPDATE payroll_periods SET status='paid', paid_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), paid_fund_id=? WHERE id=? AND status='approved'`).bind(fundId, pp.id),
@@ -287,7 +295,7 @@ const entrySchema = z.object({
   employeeId: z.number().int().positive(),
   period: z.string().regex(PERIOD_RE),
   kind: z.enum(["bonus", "penalty", "allowance", "adjustment"]),
-  amount: z.number().int(),
+  amount: z.number().int().min(-MAX_VND).max(MAX_VND),
   taxable: z.boolean().optional(),
   reason: z.string().min(1).max(300),
   sourcePeriod: z.string().regex(PERIOD_RE).optional(),
@@ -329,7 +337,7 @@ payrollRoutes.get("/payroll/advances", requirePerm("payroll.write"), async (c) =
 
 const advanceSchema = z.object({
   employeeId: z.number().int().positive(),
-  amount: z.number().int().positive(),
+  amount: z.number().int().positive().max(MAX_VND),
   fundId: z.number().int().positive(),
   reason: z.string().max(300).optional(),
   deductPeriod: z.string().regex(PERIOD_RE).optional(),
@@ -356,13 +364,23 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
   const code = await nextCode(db, PREFIX.cashOut);
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   const note = `Tạm ứng lương ${emp.code}${b.reason ? ": " + b.reason : ""}`.slice(0, 500);
+  // Ngưỡng duyệt chi tiền (như POST /vouchers): vượt approval.cash_out_vnd mà không có finance.approve → phiếu chờ duyệt + approval
+  const threshold = await getSettingInt(db, "approval.cash_out_vnd", 5_000_000);
+  const needApproval = b.amount > threshold && !can(user.role, "finance.approve");
   const res = await db.batch([
     db
       .prepare(
         `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, status, period, note, created_by, approved_by)
-         VALUES (?, 'out', ?, ?, ?, ?, 'salary_advance', 'posted', ?, ?, ?, ?)`,
+         VALUES (?, 'out', ?, ?, ?, ?, 'salary_advance', ?, ?, ?, ?, ?)`,
       )
-      .bind(code, b.fundId, cat.id, b.amount, emp.code, vnPeriod(), note, user.id, user.id),
+      .bind(code, b.fundId, cat.id, b.amount, emp.code, needApproval ? "pending_approval" : "posted", vnPeriod(), note, user.id, needApproval ? null : user.id),
+    ...(needApproval
+      ? [
+          db
+            .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('cash_voucher.post','cash_voucher',CAST((SELECT id FROM cash_vouchers WHERE code = ?) AS TEXT),?,?,?)`)
+            .bind(code, JSON.stringify({ amount: b.amount, code }), `Tạm ứng lương ${b.amount} vượt ngưỡng ${threshold}`, user.id),
+        ]
+      : []),
     db
       .prepare(
         `INSERT INTO salary_advances(employee_id, amount, advance_date, deduct_period, fund_id, cash_voucher_id, reason, created_by)
@@ -371,8 +389,8 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
       .bind(b.employeeId, b.amount, today, deduct, b.fundId, code, b.reason ?? null, user.id),
     auditStmt(c, { action: "payroll.advance", entity: "employee", entityId: b.employeeId, after: { amount: b.amount, deductPeriod: deduct, voucher: code } }),
   ]);
-  const id = (res[1].results as any[])[0]?.id;
-  return c.json({ id, employeeId: b.employeeId, amount: b.amount, deductPeriod: deduct, voucherCode: code, status: "paid" }, 201);
+  const id = (res[needApproval ? 2 : 1].results as any[])[0]?.id;
+  return c.json({ id, employeeId: b.employeeId, amount: b.amount, deductPeriod: deduct, voucherCode: code, status: needApproval ? "pending_approval" : "paid" }, 201);
 });
 
 // ---------------------------------------------------------------- phiếu lương cá nhân

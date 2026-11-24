@@ -117,10 +117,22 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
   return { from, to, channels: rows, allocations, unallocated, totals, otherIncome: { forfeitedDeposits: forfeited!.s } };
 }
 
+/** Quỹ "chờ đối soát": tiền COD/sàn/thẻ đã ghi nhận nhưng chưa về tay — không phải tiền thật nên không tính vào tổng dòng tiền. */
+export const CLEARING_FUND_TYPES = ["cod_clearing", "marketplace_clearing", "card_clearing"];
+
+/**
+ * Dòng tiền (audit #11). Quỹ chờ đối soát được liệt kê trong byFund (`counted:false`) nhưng LOẠI khỏi các tổng và danh mục thu/chi:
+ * tiền COD vào quỹ chờ lúc giao hàng, rồi được chuyển ra khi đối soát và ghi VÀO quỹ thật theo số thực nhận —
+ * nếu tính cả hai sẽ đếm đôi doanh thu COD. Chọn đích danh một quỹ chờ (fundId) thì vẫn xem được dòng tiền riêng của quỹ đó.
+ */
 export async function cashFlow(db: D1Database, fromIso: string, toIso: string, fundId: number | null) {
   const funds = (await db.prepare(`SELECT id, code, name, type FROM funds ${fundId ? "WHERE id = ?" : ""} ORDER BY id`).bind(...(fundId ? [fundId] : [])).all<any>()).results;
-  const fundIds = funds.map((f) => f.id);
-  if (!fundIds.length) return { opening: 0, inflows: [], outflows: [], closing: 0, byFund: [] };
+  const allFunds = funds;
+  const counted = (f: { id: number; type: string }) => !!fundId || !CLEARING_FUND_TYPES.includes(f.type);
+  const fundIds = funds.filter(counted).map((f) => f.id);
+  if (!fundIds.length) {
+    return { opening: 0, inflows: [], outflows: [], totalInflow: 0, totalOutflow: 0, closing: 0, byFund: allFunds.map((f) => ({ fundId: f.id, code: f.code, name: f.name, type: f.type, opening: 0, inflow: 0, outflow: 0, closing: 0, counted: false })) };
+  }
   const inList = fundIds.map(() => "?").join(",");
   const PAY = `p.status='confirmed' AND o.status='completed' AND p.fund_id IN (${inList})`;
 
@@ -165,10 +177,10 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
 
   const inflows = [...flows.values()].filter((f) => f.dir === "in").map((f) => ({ category: f.category, amount: f.amount }));
   const outflows = [...flows.values()].filter((f) => f.dir === "out").map((f) => ({ category: f.category, amount: f.amount }));
-  const byFund = funds.map((f) => {
+  const byFund = allFunds.map((f) => {
     const o = open.get(f.id) ?? 0, i = inflowFund.get(f.id) ?? 0, x = outflowFund.get(f.id) ?? 0;
-    return { fundId: f.id, code: f.code, name: f.name, type: f.type, opening: o, inflow: i, outflow: x, closing: o + i - x };
+    return { fundId: f.id, code: f.code, name: f.name, type: f.type, opening: o, inflow: i, outflow: x, closing: o + i - x, counted: counted(f) };
   });
-  const sum = (k: "opening" | "inflow" | "outflow" | "closing") => byFund.reduce((s, f) => s + f[k], 0);
+  const sum = (k: "opening" | "inflow" | "outflow" | "closing") => byFund.filter((f) => f.counted).reduce((s, f) => s + f[k], 0);
   return { opening: sum("opening"), inflows, outflows, totalInflow: sum("inflow"), totalOutflow: sum("outflow"), closing: sum("closing"), byFund };
 }

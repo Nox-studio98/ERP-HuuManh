@@ -9,6 +9,7 @@ import { nextCode, PREFIX } from "../lib/codes";
 import { vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { getSettingInt } from "../services/settings";
 import { approveVoucher } from "../services/vouchers";
+import { assertStmt } from "../services/guard";
 
 export const financeRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -47,6 +48,8 @@ financeRoutes.get("/vouchers", requirePerm("finance.view"), async (c) => {
   if (q.direction) { conds.push(`v.direction = ?`); params.push(q.direction); }
   if (q.status) { conds.push(`v.status = ?`); params.push(q.status); }
   if (q.cursor) { conds.push(`v.id < ?`); params.push(Number(q.cursor)); }
+  // Phiếu lương/tạm ứng là dữ liệu nhạy cảm của nhân sự: chỉ người có hr.sensitive mới thấy
+  if (!can(c.get("user").role, "hr.sensitive")) conds.push(`COALESCE(v.ref_type,'') NOT IN ('payroll_item','salary_advance','payroll') AND cc.code <> 'LUONG'`);
   const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
   const rows = (
     await c.env.DB
@@ -66,10 +69,11 @@ const voucherSchema = z.object({
   direction: z.enum(["in", "out"]),
   fundId: z.number().int().positive(),
   categoryId: z.number().int().positive(),
-  amount: z.number().int().positive(),
+  amount: z.number().int().positive().max(10_000_000_000),
   counterparty: z.string().max(200).optional(),
   note: z.string().max(500).optional(),
-  refType: z.string().max(50).optional(),
+  // Chỉ phiếu thủ công: các ref_type của module khác (debt_payment, payroll_item, order_deposit...) do chính module đó tạo
+  refType: z.literal("manual").nullish(),
   refId: z.number().int().optional(),
   channel: z.enum(["pos", "online", "b2b"]).optional(), // chi phí trực tiếp theo kênh (M6-06)
 });
@@ -125,18 +129,23 @@ financeRoutes.post("/vouchers/:id/reverse", requirePerm("finance.write"), async 
   if (!v) throw notFound("voucher_not_found", "Không tìm thấy phiếu");
   if (v.status !== "posted") throw conflict("not_posted", "Chỉ đảo được phiếu đã ghi sổ");
   if (v.reverses_id) throw conflict("is_reversal", "Không thể đảo một phiếu đảo");
+  // Phiếu do module khác quản lý (thu nợ, lương, tạm ứng, cọc, đối soát, đơn...) phải đảo bằng luồng của module đó, nếu không sổ nghiệp vụ lệch sổ quỹ
+  if (v.ref_type && v.ref_type !== "manual") throw conflict("managed_voucher", "Phiếu này do module khác quản lý, hãy đảo từ chứng từ gốc", { refType: v.ref_type });
   const done = await db.prepare(`SELECT id FROM cash_vouchers WHERE reverses_id = ?`).bind(id).first();
   if (done) throw conflict("already_reversed", "Phiếu đã được đảo trước đó");
   const code = await nextCode(db, v.direction === "in" ? PREFIX.cashOut : PREFIX.cashIn);
-  const r = await db
-    .prepare(
-      `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, reverses_id)
-       VALUES (?,?,?,?,?,?,?,?, 'posted', ?,?,?,?,?)`,
-    )
-    .bind(code, v.direction === "in" ? "out" : "in", v.fund_id, v.category_id, v.amount, v.counterparty, v.ref_type, v.ref_id, vnPeriod(),
-      `Đảo phiếu ${v.code}: ${body.reason}`, user.id, user.id, id)
-    .run();
-  const newId = r.meta.last_row_id as number;
+  // Chốt chặn (audit #6): phiếu gốc còn 'posted'; đảo đôi còn bị unique reverses_id chặn → 409 already_reversed
+  const res = await db.batch([
+    assertStmt(db, "voucher.reverse", `SELECT status = 'posted' FROM cash_vouchers WHERE id = ?`, [id]),
+    db
+      .prepare(
+        `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, reverses_id, channel)
+         VALUES (?,?,?,?,?,?,?,?, 'posted', ?,?,?,?,?,?)`,
+      )
+      .bind(code, v.direction === "in" ? "out" : "in", v.fund_id, v.category_id, v.amount, v.counterparty, v.ref_type, v.ref_id, vnPeriod(),
+        `Đảo phiếu ${v.code}: ${body.reason}`, user.id, user.id, id, v.channel ?? null),
+  ]);
+  const newId = res[1].meta.last_row_id as number;
   await auditStmt(c, { action: "voucher.reverse", entity: "cash_voucher", entityId: id, before: { code: v.code, period: v.period }, after: { reversalId: newId, code }, reason: body.reason }).run();
   return c.json(await db.prepare(`SELECT * FROM cash_vouchers WHERE id = ?`).bind(newId).first(), 201);
 });
