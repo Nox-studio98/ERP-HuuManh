@@ -20,7 +20,7 @@ export interface QuoteLine { productId: number; name: string; unit: string; qty:
 export interface Issue { productId: number | null; code: string; message: string }
 export interface QuoteDiscount { promotionId: number; amount: number; description: string }
 export interface QuoteVoucher { code: string; applied: boolean; reason?: string }
-export interface Quote { lines: QuoteLine[]; subtotal: number; discount: number; discounts: QuoteDiscount[]; voucher?: QuoteVoucher; shippingFee: number; zone: { id: number; name: string } | null; total: number; estimated: boolean; issues: Issue[] }
+export interface Quote { lines: QuoteLine[]; subtotal: number; discount: number; pointsRedeemed?: number; pointsAmount?: number; pointsMax?: number; pointsBalance?: number; discounts: QuoteDiscount[]; voucher?: QuoteVoucher; shippingFee: number; zone: { id: number; name: string } | null; total: number; estimated: boolean; issues: Issue[] }
 export interface Slot { date: string; id: number; label: string; startTime: string; endTime: string; available: boolean; reason?: string }
 export interface Zone { id: number; name: string; fee: number; freeOver: number | null; minOrder: number }
 export interface Transfer { bankBin: string; accountNo: string; accountName: string; amount: number; content: string; qrPayload: string; expiresAt: string | null }
@@ -28,10 +28,10 @@ export interface OrderLine { productId: number; name: string; imageUrl: string |
 export interface OrderView {
   code: string; trackingToken: string | null; status: string; statusLabel: string; createdAt: string; slotDate: string | null; slotLabel: string | null;
   receiverName: string | null; receiverPhoneMasked: string; shipAddress: string | null; paymentMethod: string | null; paymentStatus: string;
-  estimated: boolean; estimatedTotal: number; subtotal: number; shippingFee: number; discount: number; total: number; weightAdjustStatus: string;
+  estimated: boolean; estimatedTotal: number; subtotal: number; shippingFee: number; discount: number; total: number; pointsRedeemed?: number; pointsAmount?: number; pointsEarned?: number; pointsEarnable?: number; weightAdjustStatus: string;
   lines: OrderLine[]; events: { at: string; status: string; statusLabel: string; note: string | null }[]; canCancel: boolean; transfer?: Transfer;
 }
-export interface Me { id: number; fullName: string; email: string; phone: string | null; kind: "retail" | "b2b"; b2bStatus: "pending" | "approved" | "rejected" | null; customerGroup: string | null; marketingOptIn: boolean }
+export interface Me { id: number; fullName: string; email: string; phone: string | null; kind: "retail" | "b2b"; b2bStatus: "pending" | "approved" | "rejected" | null; customerGroup: string | null; marketingOptIn: boolean; points?: number; pointValueVnd?: number }
 export interface Address { id: number; label: string | null; receiverName: string; receiverPhone: string; addressLine: string; ward: string | null; district: string; province: string; zoneId: number | null; isDefault: boolean }
 
 interface Opts { method?: string; body?: unknown; turnstile?: string | null; signal?: AbortSignal }

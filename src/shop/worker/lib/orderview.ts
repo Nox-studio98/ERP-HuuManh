@@ -1,4 +1,5 @@
 import { CUSTOMER_LABEL, type OnlineStatus } from "../../../worker/services/online-orders";
+import { earnFor } from "../../../worker/services/loyalty-points";
 import { buildVietQr } from "./vietqr";
 import { imageUrl, last4, maskPhone, parseImages, setting } from "./util";
 import type { ShopAccount } from "../env";
@@ -56,6 +57,13 @@ export async function orderView(db: D1Database, o: any) {
     .prepare(`SELECT 1 AS x FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = ? AND p.sell_by_weight = 1 LIMIT 1`)
     .bind(o.id)
     .first());
+  const pts = o.shop_account_id
+    ? await db
+        .prepare(`SELECT COALESCE(SUM(CASE WHEN kind='earn' THEN points END),0) AS earned, COALESCE(SUM(CASE WHEN kind='redeem' THEN -points END),0) AS redeemed, (SELECT COALESCE(SUM(amount),0) FROM order_discounts WHERE order_id = ?1 AND points_redeemed IS NOT NULL) AS amount FROM loyalty_ledger WHERE order_id = ?1`)
+        .bind(o.id)
+        .first<{ earned: number; redeemed: number; amount: number }>()
+    : null;
+  const pointsEarnable = o.shop_account_id && !["completed", "cancelled", "returned"].includes(o.status) ? await earnFor(db, Math.max(0, o.total - o.shipping_fee), o.customer_id) : 0;
   const view: Record<string, unknown> = {
     code: o.code,
     trackingToken: o.tracking_token ?? null,
@@ -75,6 +83,10 @@ export async function orderView(db: D1Database, o: any) {
     shippingFee: o.shipping_fee,
     discount: o.discount,
     total: o.total,
+    pointsRedeemed: pts?.redeemed ?? 0,
+    pointsAmount: pts?.amount ?? 0,
+    pointsEarned: pts?.earned ?? 0,
+    pointsEarnable,
     weightAdjustStatus: o.weight_adjust_status,
     lines: lines.results.map((l) => ({
       productId: l.product_id,
