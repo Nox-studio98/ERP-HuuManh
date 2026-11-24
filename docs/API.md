@@ -41,7 +41,7 @@ Chứng từ `stock_docs` vòng đời: `draft → (pending_approval) → posted
 |---|---|---|---|
 | GET | /stock-docs?type=&status=&day= | inventory.view | |
 | GET | /stock-docs/:id | inventory.view | kèm lines |
-| POST | /stock-docs | inventory.write | `{type:'receipt'|'waste'|'adjust'|'count'|'transfer', locationId, toLocationId?, supplierId?, supplierRef?, reason?, note?}` → draft |
+| POST | /stock-docs | inventory.write | `{type:'receipt'|'waste'|'adjust'|'count'|'transfer', locationId, toLocationId?, supplierId?, supplierRef?, vatAmount?, reason?, note?}` → draft. `vatAmount` (receipt có NCC, VND nguyên ≥ 0, ≤ tổng phiếu khi ghi sổ, nếu vượt → 422 `vat_exceeds_total`) là VAT đầu vào, chuyển sang `supplier_bills.vat_amount` lúc post |
 | POST | /stock-docs/:id/lines | inventory.write | receipt: `{productId,unit,qty,docQty?,unitCost,expiresAt?}` (unitCost theo đơn vị nhập → server đổi về đơn vị chính). waste/adjust/transfer: `{lotId,qty,unit,reason}`. count: `{lotId,countedQty,unit}` (server điền doc_qty = tồn hệ thống) |
 | POST | /stock-docs/:id/scan | inventory.write | `{code, qty?, unit?}` quét mã thêm dòng; cảnh báo M2-16 (unknown / expired / not_in_doc / duplicate) → 422 với code tương ứng, luôn ghi scan_events |
 | DELETE | /stock-docs/:id/lines/:lineId | inventory.write | chỉ khi draft |
@@ -92,7 +92,7 @@ Quy tắc bắt buộc: không có endpoint sửa tồn trực tiếp; lô `expi
 | GET | /periods, POST /periods/:period/lock | finance.view / finance.lock_period | |
 
 ## Báo cáo — `routes/reports.ts`
-| GET | /reports/pnl?from=YYYY-MM-DD&to=&groupBy=day|channel|group | reports.view | M6-04: doanh thu (orders sale − return), giá vốn (Σ cost_amount), lãi gộp; chi phí từ vouchers theo pnl_line (hao hụt từ phiếu waste quy ra tiền tính vào chi phí, không vào giá vốn) |
+| GET | /reports/pnl?from=YYYY-MM-DD&to=&groupBy=day|channel|group | reports.view | Bổ sung: `expenses.badDebt` (xoá nợ khách hàng), `expenses.stockCount` (chênh lệch kiểm kê/điều chỉnh theo giá vốn lô, ± ), `revenueDeductions.paymentDiscount` (chiết khấu thanh toán phải thu), `otherIncome{forfeitedDeposits,payableDiscounts,settlementSurplus,total}`; `netProfit = lãi gộp − chiết khấu − chi phí + thu khác`; cùng quy tắc ở /reports/pnl-by-channel. | M6-04: doanh thu (orders sale − return), giá vốn (Σ cost_amount), lãi gộp; chi phí từ vouchers theo pnl_line (hao hụt từ phiếu waste quy ra tiền tính vào chi phí, không vào giá vốn) |
 | GET | /reports/inventory?asOf= | reports.view | nhập–xuất–tồn theo mặt hàng (M2-08) + hao hụt |
 | GET | /reports/daily?day= | reports.view | M1-10 |
 | GET | /reports/export/:name.csv | reports.view | CSV UTF-8 BOM cho Excel (M6-05 tạm thời; mẫu kế toán [Cần xác nhận]) |

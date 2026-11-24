@@ -180,6 +180,7 @@ describe("COD clearing does not double count (audit #11)", () => {
       db().prepare(`INSERT INTO orders(id, code, channel, kind, store_id, status, total, paid_total, payment_method, payment_status, created_at, completed_at) VALUES (9901,'DH-COD-1','online','sale',1,'completed',1000000,1000000,'cod','paid',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
       db().prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (9901,'cod',1000000,3,'confirmed')`),
     ]);
+    const bankBefore = (await api("owner", "GET", `${V}/funds`)).body.items.find((f: any) => f.id === 2).balance;
     const flowBefore = await api("owner", "GET", `${V}/reports/cash-flow?from=${today}&to=${today}`);
     expect(flowBefore.status).toBe(200);
     const clrBefore = flowBefore.body.byFund.find((f: any) => f.fundId === 3);
@@ -199,7 +200,11 @@ describe("COD clearing does not double count (audit #11)", () => {
     const flow = await api("owner", "GET", `${V}/reports/cash-flow?from=${today}&to=${today}`);
     // chỉ phần thực nhận 980.000 vào quỹ thật được tính là thu; quỹ chờ không cộng thêm 1.000.000
     expect(flow.body.totalInflow - inBefore).toBe(980_000);
-    expect(flow.body.totalOutflow - flowBefore.body.totalOutflow).toBe(20_000); // chỉ phí; phiếu chuyển khỏi quỹ chờ không tính
+    // A-03/B-05: `received` đã là tiền thực nhận (net) nên phí 20.000 KHÔNG được ghi ra từ quỹ ngân hàng lần nữa
+    // (trước đây bank = +980.000 − 20.000 = 960.000, sai). Phí là chi phí ghi ra từ quỹ chờ → không tính vào dòng tiền quỹ thật.
+    expect(flow.body.totalOutflow - flowBefore.body.totalOutflow).toBe(0);
+    const bank = funds.find((f: any) => f.id === 2);
+    expect(bank.balance - bankBefore).toBe(980_000);
     // đợt đối soát không thể xác nhận hai lần, và một đơn không nằm trong hai đợt
     expect((await api("owner", "POST", `${V}/settlements/${s.body.id}/confirm`)).status).toBe(409);
     const dup = await api("owner", "POST", `${V}/settlements`, {

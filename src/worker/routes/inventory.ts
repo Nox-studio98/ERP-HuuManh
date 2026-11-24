@@ -33,7 +33,7 @@ function docShape(d: any) {
     id: d.id, code: d.code, type: d.type, status: d.status, storeId: d.store_id,
     locationId: d.location_id, toLocationId: d.to_location_id, supplierId: d.supplier_id, supplierRef: d.supplier_ref,
     reason: d.reason, note: d.note, totalAmount: d.total_amount, createdBy: d.created_by, createdByName: d.created_by_name,
-    createdAt: d.created_at, approvedBy: d.approved_by, postedAt: d.posted_at, version: d.version,
+    createdAt: d.created_at, approvedBy: d.approved_by, postedAt: d.posted_at, version: d.version, vatAmount: d.vat_amount ?? 0,
   };
 }
 
@@ -111,6 +111,7 @@ const createDocBody = z.object({
   toLocationId: z.number().int().positive().nullish(),
   supplierId: z.number().int().positive().nullish(),
   supplierRef: z.string().trim().max(60).nullish(),
+  vatAmount: z.number().int().min(0).max(10_000_000_000).optional(), // B-07: VAT đầu vào (VND) của phiếu nhập, chuyển sang hoá đơn mua khi ghi sổ
   reason: z.string().trim().max(200).nullish(),
   note: z.string().trim().max(500).nullish(),
 });
@@ -135,10 +136,10 @@ inventoryRoutes.post("/stock-docs", requirePerm("inventory.write"), async (c) =>
     db.batch([
       db
         .prepare(
-          `INSERT INTO stock_docs(code, type, store_id, location_id, to_location_id, supplier_id, supplier_ref, reason, note, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO stock_docs(code, type, store_id, location_id, to_location_id, supplier_id, supplier_ref, reason, note, created_by, vat_amount)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         )
-        .bind(code, b.type, loc.store_id, b.locationId, b.type === "transfer" ? b.toLocationId : null, b.type === "receipt" ? (b.supplierId ?? null) : null, b.supplierRef ?? null, b.reason ?? null, b.note ?? null, u.id),
+        .bind(code, b.type, loc.store_id, b.locationId, b.type === "transfer" ? b.toLocationId : null, b.type === "receipt" ? (b.supplierId ?? null) : null, b.supplierRef ?? null, b.reason ?? null, b.note ?? null, u.id, b.type === "receipt" && b.supplierId ? (b.vatAmount ?? 0) : 0),
       auditStmt(c, { action: "stock_doc.create", entity: "stock_doc", entityId: code, after: b }),
     ]),
   );
@@ -356,13 +357,15 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
       const sup = await db.prepare(`SELECT payment_terms_days d FROM suppliers WHERE id = ?`).bind(doc.supplier_id).first<{ d: number | null }>();
       const issue = vnDate();
       const ref = typeof doc.supplier_ref === "string" ? doc.supplier_ref.trim() : "";
+      const vat = doc.vat_amount ?? 0;
+      if (vat > total) throw new AppError(422, "vat_exceeds_total", "VAT đầu vào không được lớn hơn tổng tiền phiếu nhập", { vatAmount: vat, total });
       stmts.push(
         db
           .prepare(
-            `INSERT INTO supplier_bills(code, supplier_id, stock_doc_id, supplier_ref, is_provisional, issue_date, due_date, total, created_by)
-             VALUES (?,?,?,?,?,?,?,?,?)`,
+            `INSERT INTO supplier_bills(code, supplier_id, stock_doc_id, supplier_ref, is_provisional, issue_date, due_date, total, created_by, vat_amount)
+             VALUES (?,?,?,?,?,?,?,?,?,?)`,
           )
-          .bind(await nextCode(db, "CNP"), doc.supplier_id, doc.id, ref || null, ref ? 0 : 1, issue, addDays(issue, sup?.d ?? 0), total, doc.created_by),
+          .bind(await nextCode(db, "CNP"), doc.supplier_id, doc.id, ref || null, ref ? 0 : 1, issue, addDays(issue, sup?.d ?? 0), total, doc.created_by, vat),
       );
     }
   } else if (type === "count") {
