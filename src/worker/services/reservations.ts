@@ -1,5 +1,8 @@
-import { allocateFefo, type LotAllocation } from "./stock";
+import { allocateFefo, allocateFefoPartial, type LotAllocation } from "./stock";
 import { assertStmt } from "./guard";
+import { sysAuditStmt } from "./sysaudit";
+import { enqueueJobStmt } from "./outbox";
+import { AppError, conflict } from "../lib/errors";
 
 /**
  * Giữ tồn cho đơn chưa giao (M2-06) — dùng chung cho đơn sỉ (M4), đơn sàn Fresco, đơn online (Đợt 3).
@@ -124,6 +127,7 @@ export async function consumeForDeliveryStmts(
   refId: number,
   userId: number,
 ): Promise<ConsumeResult> {
+  await ensureReservationsDeliverable(db, orderId);
   const rows = await activeReservations(db, orderId);
   const now = new Date().toISOString();
   const stmts: D1PreparedStatement[] = [activeCountGuard(db, orderId, rows.length)];
@@ -161,35 +165,142 @@ export async function consumeForDeliveryStmts(
   return { stmts, allocByLine, shortByLine };
 }
 
+
+const BAD_LOT_SQL = `(l.status <> 'active' OR (l.expires_at IS NOT NULL AND l.expires_at <= ?))`;
+
+export interface SwapShort {
+  orderId: number;
+  orderCode: string;
+  orderLineId: number;
+  productId: number;
+  lotId: number;
+  lotCode: string;
+  missingMilli: number;
+}
+
 /**
- * EC-15: lô đang giữ cho đơn bị hết hạn / chuyển quarantine → nhả và giữ lại từ lô khác nếu còn.
- * Trả danh sách đơn thiếu hàng để báo người phụ trách. Gọi từ cron hằng ngày và khi ghi hao hụt một lô.
+ * EC-15 (B-03): lô đang giữ cho đơn bị hết hạn / chuyển quarantine → chuyển phần giữ sang lô tốt khác theo FEFO.
+ * Phần không thay được: nhả giữ, đánh dấu đơn (orders.reservation_short_*), ghi thông báo cho quản lý
+ * (notifications + job push) và audit. Gọi từ: cron hằng ngày (mọi cửa hàng), ngay khi cách ly lô
+ * (opts.lotId), trước khi giao hàng (opts.orderId).
+ * storeId: chỉ xử lý các lô thuộc cửa hàng đó và chỉ lấy lô thay thế trong cửa hàng đó.
  */
-export async function swapBadReservations(db: D1Database, storeId: number) {
+export async function swapBadReservations(
+  db: D1Database,
+  storeId: number,
+  opts: { lotId?: number; orderId?: number; actorId?: number | null } = {},
+) {
   const now = new Date().toISOString();
+  const where = [`r.status = 'active'`, `loc.store_id = ?`, BAD_LOT_SQL];
+  const binds: unknown[] = [storeId, now];
+  if (opts.lotId != null) (where.push("r.lot_id = ?"), binds.push(opts.lotId));
+  if (opts.orderId != null) (where.push("r.order_id = ?"), binds.push(opts.orderId));
   const { results } = await db
     .prepare(
-      `SELECT r.id, r.order_id, r.order_line_id, r.lot_id, r.qty_milli, l.product_id
-         FROM reservations r JOIN lots l ON l.id = r.lot_id
-        WHERE r.status = 'active' AND (l.status <> 'active' OR (l.expires_at IS NOT NULL AND l.expires_at <= ?))`,
+      `SELECT r.id, r.order_id, r.order_line_id, r.lot_id, r.qty_milli, l.product_id, l.lot_code, o.code AS order_code
+         FROM reservations r JOIN lots l ON l.id = r.lot_id JOIN locations loc ON loc.id = l.location_id JOIN orders o ON o.id = r.order_id
+        WHERE ${where.join(" AND ")} ORDER BY r.id`,
     )
-    .bind(now)
-    .all<{ id: number; order_id: number; order_line_id: number; lot_id: number; qty_milli: number; product_id: number }>();
+    .bind(...binds)
+    .all<{ id: number; order_id: number; order_line_id: number; lot_id: number; qty_milli: number; product_id: number; lot_code: string; order_code: string }>();
   const swapped: number[] = [];
-  const short: { orderId: number; orderLineId: number; productId: number; missingMilli: number }[] = [];
+  const short: SwapShort[] = [];
   for (const r of results) {
-    const release = [
-      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ? AND EXISTS (SELECT 1 FROM reservations WHERE id = ? AND status = 'active')`).bind(r.qty_milli, r.lot_id, r.id),
+    const { alloc, missingMilli } = await allocateFefoPartial(db, r.product_id, r.qty_milli, storeId, { at: now, excludeLotIds: [r.lot_id] });
+    const stmts: D1PreparedStatement[] = [
+      assertStmt(db, "reservation.swap", `SELECT status = 'active' AND qty_milli = ? FROM reservations WHERE id = ?`, [r.qty_milli, r.id]),
+      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ?`).bind(r.qty_milli, r.lot_id),
       db.prepare(`UPDATE reservations SET status='released', closed_at=? WHERE id=? AND status='active'`).bind(now, r.id),
     ];
-    try {
-      const alloc = await allocateFefo(db, r.product_id, r.qty_milli, storeId);
-      await db.batch([...release, ...reserveStmts(db, r.order_id, [{ orderLineId: r.order_line_id, productId: r.product_id, alloc }])]);
-      swapped.push(r.order_id);
-    } catch {
-      await db.batch(release);
-      short.push({ orderId: r.order_id, orderLineId: r.order_line_id, productId: r.product_id, missingMilli: r.qty_milli });
+    if (alloc.length) stmts.push(...reserveStmts(db, r.order_id, [{ orderLineId: r.order_line_id, productId: r.product_id, alloc }]));
+    if (missingMilli > 0) {
+      const title = `Đơn ${r.order_code} thiếu hàng do lô ${r.lot_code} hỏng/hết hạn`;
+      const body = `Thiếu ${missingMilli / 1000} (đơn vị chính) chưa có lô thay thế — cần liên hệ khách hoặc bổ sung hàng.`;
+      stmts.push(
+        db.prepare(`UPDATE orders SET reservation_short_milli = reservation_short_milli + ?, reservation_short_at = ? WHERE id = ?`).bind(missingMilli, now, r.order_id),
+        db.prepare(`INSERT INTO notifications(kind, title, body, audience_perm, ref_type, ref_id) VALUES ('reservation_short', ?, ?, 'inventory.approve', 'order', ?)`).bind(title, body, r.order_id),
+        enqueueJobStmt(db, "notify.managers", "order", r.order_id, { title, body, url: "/orders" }),
+        sysAuditStmt(db, { action: "reservation.short_after_swap", entity: "order", entityId: r.order_id, after: { lotId: r.lot_id, lotCode: r.lot_code, orderLineId: r.order_line_id, missingMilli } }, opts.actorId ?? null),
+      );
     }
+    try {
+      await db.batch(stmts);
+    } catch (e) {
+      if (String((e as Error)?.message).includes("state_changed")) continue; // đã được xử lý song song
+      throw e;
+    }
+    if (alloc.length) swapped.push(r.order_id);
+    if (missingMilli > 0) short.push({ orderId: r.order_id, orderCode: r.order_code, orderLineId: r.order_line_id, productId: r.product_id, lotId: r.lot_id, lotCode: r.lot_code, missingMilli });
   }
-  return { swapped, short };
+  return { swapped: [...new Set(swapped)], short };
+}
+
+/** Chạy swap cho mọi cửa hàng (cron). */
+export async function swapBadReservationsAllStores(db: D1Database) {
+  const { results } = await db.prepare(`SELECT id FROM stores`).all<{ id: number }>();
+  const out = { swapped: [] as number[], short: [] as SwapShort[] };
+  for (const s of results) {
+    const r = await swapBadReservations(db, s.id);
+    out.swapped.push(...r.swapped);
+    out.short.push(...r.short);
+  }
+  return out;
+}
+
+/**
+ * B-04: trước khi giao, các lô đang giữ cho đơn phải còn bán được (active, chưa hết hạn). Lô hỏng → thử đổi sang lô tốt (FEFO);
+ * không thay được → 409 lot_expired kèm các dòng thiếu (đơn đã được đánh dấu + báo quản lý).
+ */
+export async function ensureReservationsDeliverable(db: D1Database, orderId: number) {
+  const now = new Date().toISOString();
+  const bad = await db
+    .prepare(
+      `SELECT DISTINCT loc.store_id AS store_id FROM reservations r JOIN lots l ON l.id = r.lot_id JOIN locations loc ON loc.id = l.location_id
+        WHERE r.order_id = ? AND r.status = 'active' AND ${BAD_LOT_SQL}`,
+    )
+    .bind(orderId, now)
+    .all<{ store_id: number }>();
+  if (!bad.results.length) return;
+  const lines: SwapShort[] = [];
+  for (const s of bad.results) lines.push(...(await swapBadReservations(db, s.store_id, { orderId })).short);
+  if (lines.length) {
+    throw conflict("lot_expired", "Lô đang giữ cho đơn đã hết hạn / bị cách ly và không còn lô thay thế — không thể giao", { lines });
+  }
+}
+
+/**
+ * B-03: giải phóng `needFreeMilli` tồn khả dụng của một lô bằng cách chuyển phần giữ của các đơn sang lô khác (FEFO, cùng cửa hàng).
+ * Dùng khi ghi hao hụt / điều chỉnh / kiểm kê giảm vượt phần khả dụng. Trả số còn thiếu (0 = đã đủ).
+ */
+export async function freeLotReservations(db: D1Database, lotId: number, needFreeMilli: number): Promise<number> {
+  const lot = await db
+    .prepare(`SELECT l.product_id, l.qty_on_hand_milli, l.qty_reserved_milli, loc.store_id FROM lots l JOIN locations loc ON loc.id = l.location_id WHERE l.id = ?`)
+    .bind(lotId)
+    .first<{ product_id: number; qty_on_hand_milli: number; qty_reserved_milli: number; store_id: number }>();
+  if (!lot) throw new AppError(422, "unknown_lot", "Không tìm thấy lô hàng");
+  let extra = needFreeMilli - (lot.qty_on_hand_milli - lot.qty_reserved_milli);
+  if (extra <= 0) return 0;
+  const now = new Date().toISOString();
+  const { results } = await db
+    .prepare(`SELECT id, order_id, order_line_id, qty_milli FROM reservations WHERE lot_id = ? AND status = 'active' ORDER BY id DESC`)
+    .bind(lotId)
+    .all<{ id: number; order_id: number; order_line_id: number; qty_milli: number }>();
+  for (const r of results) {
+    if (extra <= 0) break;
+    const want = Math.min(r.qty_milli, extra);
+    const { alloc } = await allocateFefoPartial(db, lot.product_id, want, lot.store_id, { at: now, excludeLotIds: [lotId] });
+    const got = alloc.reduce((s, a) => s + a.qtyMilli, 0);
+    if (got <= 0) continue;
+    await db.batch([
+      assertStmt(db, "reservation.relocate", `SELECT status = 'active' AND qty_milli = ? FROM reservations WHERE id = ?`, [r.qty_milli, r.id]),
+      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ?`).bind(got, lotId),
+      got === r.qty_milli
+        ? db.prepare(`UPDATE reservations SET status='released', closed_at=? WHERE id=?`).bind(now, r.id)
+        : db.prepare(`UPDATE reservations SET qty_milli = qty_milli - ? WHERE id=?`).bind(got, r.id),
+      ...reserveStmts(db, r.order_id, [{ orderLineId: r.order_line_id, productId: lot.product_id, alloc }]),
+      sysAuditStmt(db, { action: "reservation.relocate", entity: "order", entityId: r.order_id, after: { fromLotId: lotId, toLots: alloc, qtyMilli: got } }),
+    ]);
+    extra -= got;
+  }
+  return Math.max(extra, 0);
 }

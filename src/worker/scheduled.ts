@@ -2,8 +2,7 @@ import type { Env } from "./env";
 import { vnDay } from "./lib/time";
 import { enqueueDebtReminders, sweepJobs } from "./services/jobs";
 import { cancelExpiredAwaitingPayment } from "./services/online-payments";
-import { swapBadReservations } from "./services/reservations";
-import { sysAudit } from "./services/sysaudit";
+import { swapBadReservationsAllStores } from "./services/reservations";
 import { hrAttendanceAlerts } from "./services/hr-cron";
 import { runDueCompetitorCrawls } from "./services/competitor-cron";
 import { generateRecurringOrders } from "./services/recurring-cron";
@@ -83,8 +82,9 @@ async function backupToR2(env: Env) {
 /** 08:00 giờ VN. Mỗi bước độc lập: lỗi một bước không chặn bước sau. */
 async function dailyMorning(env: Env) {
   try {
-    const r = await swapBadReservations(env.DB, 1); // EC-15, cửa hàng 1
-    if (r.short.length) await sysAudit(env.DB, { action: "reservation.short_after_swap", entity: "reservations", after: r.short });
+    const r = await swapBadReservationsAllStores(env.DB); // EC-15, mọi cửa hàng
+    // Từng đơn thiếu đã được ghi audit + thông báo ngay trong swapBadReservations
+    void r;
   } catch (e) {
     console.error(JSON.stringify({ level: "error", msg: "swap_bad_reservations", err: String((e as Error)?.message).slice(0, 200) }));
   }

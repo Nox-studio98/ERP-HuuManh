@@ -28,6 +28,7 @@ export default function Inventory() {
           <Button onClick={() => setEditor({ type: "receipt" })}>+ Nhập hàng</Button>
           <Button variant="soft" onClick={() => setEditor({ type: "waste" })}>Huỷ hàng</Button>
           <Button variant="soft" onClick={() => setEditor({ type: "count" })}>Kiểm kê</Button>
+          <Button variant="soft" onClick={() => setEditor({ type: "transfer" })}>Chuyển kho</Button>
         </div>
       )}
       {tab === "alerts" && <Alerts key={rev} />}
@@ -40,13 +41,22 @@ export default function Inventory() {
 
 function Alerts() {
   const a = useAsync(() => get("/stock/alerts"), []);
+  const notes = useAsync(() => get("/notifications", { unread: 1 }).catch(() => ({ items: [] })), []);
   const pmap = useUnitMap();
   const bu = (x: any) => pmap?.get(x.productId ?? x.id)?.baseUnit ?? x.baseUnit;
   if (a.loading) return <Spinner />;
   const d = a.data ?? {};
-  const low = d.lowStock ?? [], soon = d.expiringSoon ?? [], exp = d.expired ?? [];
+  const low = d.lowStock ?? [], soon = d.expiringSoon ?? [], exp = d.expired ?? [], quar = d.quarantined ?? [];
   return (
     <div className="stack">
+      {(notes.data?.items ?? []).map((n: any) => (
+        <div key={n.id} className="banner danger" role="alert">
+          <div className="row between" style={{ alignItems: "flex-start", gap: 8 }}>
+            <div><b>{n.title}</b><div className="small">{n.body}</div></div>
+            <Button size="sm" variant="soft" onClick={async () => { try { await post(`/notifications/${n.id}/read`, {}); notes.reload(); } catch {} }}>Đã xem</Button>
+          </div>
+        </div>
+      ))}
       <div className="kpis">
         <div className="kpi"><div className="l">Sắp hết hàng</div><div className="v" style={{ color: low.length ? "var(--warn)" : undefined }}>{low.length}</div></div>
         <div className="kpi"><div className="l">Sắp hết hạn (≤2 ngày)</div><div className="v" style={{ color: soon.length ? "var(--warn)" : undefined }}>{soon.length}</div></div>
@@ -59,11 +69,11 @@ function Alerts() {
         { key: "m", label: "Tối thiểu", right: true, render: (x: any) => qtyText(x.minStockMilli, bu(x)) },
       ]} /></Card>
       <div className="grid3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", alignItems: "start" }}>
-        {[["Sắp hết hạn", soon, "warn"], ["Đã hết hạn", exp, "danger"]].map(([t, rows, tn]: any) => (
+        {[["Sắp hết hạn", soon, "warn"], ["Đã hết hạn", exp, "danger"], ["Đang cách ly (lô hỏng)", quar, "danger"]].map(([t, rows, tn]: any) => (
           <Card key={t} title={t}><DataTable rows={rows} rowKey={(x: any) => x.id} empty="Không có lô nào" cols={[
             { key: "n", label: "Hàng", title: true, render: (x: any) => pname(x) },
             { key: "l", label: "Lô", render: (x: any) => <span className="num">{x.lotCode}</span> },
-            { key: "e", label: "HSD", render: (x: any) => <Badge tone={tn}>{fmtDate(x.expiresAt)}</Badge> },
+            { key: "e", label: t === "Đang cách ly (lô hỏng)" ? "Lý do" : "HSD", render: (x: any) => (t === "Đang cách ly (lô hỏng)" ? <Badge tone={tn}>{x.quarantineReason ?? "Cách ly"}</Badge> : <Badge tone={tn}>{fmtDate(x.expiresAt)}</Badge>) },
             { key: "q", label: "Còn", right: true, render: (x: any) => qtyText(remain(x), bu(x)) },
           ]} /></Card>
         ))}
@@ -136,6 +146,8 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
   const type = doc.data?.type ?? t0 ?? "receipt";
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [receiving, setReceiving] = useState(false);
+  const can = useCan();
   const d = doc.data && pmap ? withShown(doc.data, pmap) : doc.data;
   const editable = !d || d.status === "draft";
   const lines: any[] = d?.lines ?? [];
@@ -144,6 +156,7 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
     setBusy(true);
     try {
       const r = await post(`/stock-docs/${id}/${what}`, {});
+      if (r?.warnings?.length) toast(`Có ${r.warnings.length} lô biến động tồn giữa lúc đếm và lúc ghi sổ — chênh lệch đã tính theo tồn lúc đếm, hãy kiểm tra lại`, "info");
       toast(what === "cancel" ? "Đã huỷ phiếu" : r?.status === "pending_approval" || r?.doc?.status === "pending_approval" ? "Đã gửi quản lý duyệt" : "Đã ghi sổ", "ok");
       if (what === "post" && r?.status !== "pending_approval") onClose(); else doc.reload();
     } catch {} finally { setBusy(false); }
@@ -152,13 +165,19 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
   return (
     <Sheet open onClose={onClose} wide title={`${DOC_TYPES[type] ?? type}${d ? " · " + d.code : ""}`}
       footer={d && editable ? <><Button variant="ghost" onClick={() => act("cancel")} disabled={busy}>Huỷ phiếu</Button><Button className="grow" loading={busy} disabled={!lines.length} onClick={() => act("post")}>Ghi sổ</Button></> : undefined}>
+      {receiving && d && <ReceiveSheet doc={d} onClose={() => setReceiving(false)} onDone={() => { setReceiving(false); doc.reload(); }} />}
       {!id ? <CreateDoc type={type} onCreated={setId} /> : !d ? <Spinner /> : (
         <div className="stack">
           <div className="row wrap"><Badge tone={docTone(d.status)}>{DOC_STATUS[d.status] ?? d.status}</Badge>{d.supplierRef && <span className="muted small">Số CT NCC: {d.supplierRef}</span>}{d.reason && <span className="muted small">{d.reason}</span>}</div>
           {d.status === "pending_approval" && <Banner>Phiếu đang chờ quản lý duyệt.</Banner>}
+          {type === "count" && d.lockLots && d.status !== "posted" && d.status !== "cancelled" && <Banner>Đang khoá lô tại vị trí này: không bán / xuất hao hụt cho tới khi ghi sổ hoặc huỷ phiếu kiểm kê.</Banner>}
+          {type === "transfer" && d.transferStatus === "in_transit" && (
+            <Banner>Hàng đang đi đường — chưa bán được ở nguồn lẫn đích. {can("inventory.write") && <Button size="sm" onClick={() => setReceiving(true)}>Nhận hàng</Button>}</Banner>
+          )}
+          {type === "transfer" && d.transferStatus === "received" && <Banner tone="info">Đã nhận hàng lúc {fmtDateTime(d.receivedAt)}.</Banner>}
           <DataTable rows={lines} rowKey={(l) => l.id} empty="Chưa có dòng nào" cols={[
             { key: "n", label: "Hàng / lô", title: true, render: (l) => <>{pname(l)}{l.lotCode ? ` · ${l.lotCode}` : ""}</> },
-            { key: "dq", label: type === "count" ? "Hệ thống" : "Theo CT", right: true, render: (l) => (l.docQtyShown != null ? qtyText(l.docQtyShown, l.unit) : "—") },
+            { key: "dq", label: type === "count" ? "Hệ thống lúc đếm" : "Theo CT", right: true, render: (l) => (l.docQtyShown != null ? qtyText(l.docQtyShown, l.unit) : "—") },
             { key: "q", label: type === "count" ? "Đếm" : "Thực tế", right: true, render: (l) => <b>{qtyText(l.qtyShown ?? l.qtyMilli, l.unit)}</b> },
             { key: "c", label: "Giá vốn/đv chính", right: true, hideMobile: type !== "receipt", render: (l) => (l.unitCost != null ? money(l.unitCost) : "—") },
             { key: "e", label: type === "waste" ? "Lý do" : "HSD", render: (l) => (type === "waste" ? REASONS.find((r) => r[0] === l.reason)?.[1] ?? l.reason ?? "—" : fmtDate(l.expiresAt)) },
@@ -178,19 +197,22 @@ async function api_del(docId: number, lineId: number) {
 function CreateDoc({ type, onCreated }: { type: string; onCreated: (id: number) => void }) {
   const locs = useAsync(() => get("/locations").then((x) => items<any>(x)), []);
   const sups = useAsync(() => (type === "receipt" ? get("/suppliers").then((x) => items<any>(x)) : Promise.resolve([])), [type]);
+  const [toLoc, setToLoc] = useState(""), [lock, setLock] = useState(false);
   const [loc, setLoc] = useState(""), [sup, setSup] = useState(""), [ref, setRef] = useState(""), [note, setNote] = useState(""), [busy, setBusy] = useState(false);
   const locationId = loc || String(locs.data?.[0]?.id ?? "");
   return (
     <div className="stack">
       <Select label="Vị trí kho" value={locationId} onChange={(e) => setLoc(e.target.value)}>{(locs.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
+      {type === "transfer" && <Select label="Vị trí đích" value={toLoc} onChange={(e) => setToLoc(e.target.value)}><option value="">— Chọn —</option>{(locs.data ?? []).filter((l) => String(l.id) !== locationId).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>}
+      {type === "count" && <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={lock} onChange={(e) => setLock(e.target.checked)} /> Khoá lô trong lúc kiểm kê (không bán / xuất)</label>}
       {type === "receipt" && <>
         <Select label="Nhà cung cấp" value={sup} onChange={(e) => setSup(e.target.value)}><option value="">— Chọn —</option>{(sups.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
         <Input label="Số chứng từ NCC" value={ref} onChange={(e) => setRef(e.target.value)} />
       </>}
       <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
-      <Button size="lg" loading={busy} disabled={!locationId || (type === "receipt" && !sup)} onClick={async () => {
+      <Button size="lg" loading={busy} disabled={!locationId || (type === "receipt" && !sup) || (type === "transfer" && !toLoc)} onClick={async () => {
         setBusy(true);
-        try { const r = await post("/stock-docs", { type, locationId: Number(locationId), ...(sup ? { supplierId: Number(sup) } : {}), ...(ref ? { supplierRef: ref } : {}), ...(note ? { note } : {}) }); onCreated(r.id ?? r.doc?.id); } catch {} finally { setBusy(false); }
+        try { const r = await post("/stock-docs", { type, locationId: Number(locationId), ...(sup ? { supplierId: Number(sup) } : {}), ...(ref ? { supplierRef: ref } : {}), ...(note ? { note } : {}), ...(type === "transfer" ? { toLocationId: Number(toLoc) } : {}), ...(type === "count" && lock ? { lockLots: true } : {}) }); onCreated(r.id ?? r.doc?.id); } catch {} finally { setBusy(false); }
       }}>Tạo phiếu nháp</Button>
     </div>
   );
@@ -211,12 +233,13 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
     try {
       const body = type === "receipt" ? { productId: prod!.id, unit: u, qty: n, ...(typeof docQty === "number" ? { docQty } : {}), unitCost: cost, ...(exp ? { expiresAt: exp } : {}) }
         : type === "count" ? { lotId: lot.id, countedQty: n, unit: u }
+        : type === "transfer" ? { lotId: lot.id, qty: n, unit: u }
         : { lotId: lot.id, qty: n, unit: u, reason };
       await post(`/stock-docs/${docId}/lines`, body); toast("Đã thêm dòng", "ok"); onDone();
     } catch (e) { if (e instanceof ApiError) { /* toast đã hiện */ } } finally { setBusy(false); }
   };
   return (
-    <Card className="flat" title={type === "receipt" ? "Thêm hàng nhập" : type === "count" ? "Đếm lô" : "Huỷ theo lô"}>
+    <Card className="flat" title={type === "receipt" ? "Thêm hàng nhập" : type === "count" ? "Đếm lô" : type === "transfer" ? "Chuyển theo lô" : "Huỷ theo lô"}>
       <div className="stack">
         {!picked ? (type === "receipt" ? <ProductPick onPick={(p, _l, un) => { setProd(p); setUnit(un ?? ""); }} /> : <LotPick onPick={(l, p) => { setLot(l); setProd(p); }} />) : (
           <>
@@ -241,6 +264,64 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
   );
 }
 
+/** B-19: nhận hàng chuyển kho — nhập số thực nhận từng dòng; nhận thiếu phải ghi lý do (ghi hao hụt). */
+function ReceiveSheet({ doc, onClose, onDone }: { doc: any; onClose: () => void; onDone: () => void }) {
+  const [qty, setQty] = useState<Record<number, number | "">>(() => Object.fromEntries((doc.lines ?? []).map((l: any) => [l.id, (l.qtyShown ?? l.qtyMilli) / 1000])));
+  const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const short = (doc.lines ?? []).some((l: any) => Number(qty[l.id] ?? 0) * 1000 < (l.qtyShown ?? l.qtyMilli) - 0.5);
+  return (
+    <Sheet open onClose={onClose} title={`Nhận hàng · ${doc.code}`} footer={<Button block loading={busy} disabled={short && !reason.trim()} onClick={async () => {
+      setBusy(true);
+      try {
+        await post(`/stock-docs/${doc.id}/receive`, { ...(reason.trim() ? { reason: reason.trim() } : {}), lines: (doc.lines ?? []).map((l: any) => ({ lineId: l.id, qty: Number(qty[l.id] ?? 0) })) });
+        toast("Đã nhận hàng", "ok"); onDone();
+      } catch {} finally { setBusy(false); }
+    }}>Xác nhận nhận hàng</Button>}>
+      <div className="stack">
+        {(doc.lines ?? []).map((l: any) => (
+          <div key={l.id} className="card flat" style={{ padding: 12 }}>
+            <div className="small muted">{pname(l)} · {l.lotCode} · đã chuyển {qtyText(l.qtyShown ?? l.qtyMilli, l.unit)}</div>
+            <DecInput label={`Thực nhận (${unitLabel(l.unit)})`} value={qty[l.id] ?? ""} onChange={(n) => setQty({ ...qty, [l.id]: n })} />
+          </div>
+        ))}
+        {short && <><Banner>Nhận thiếu — phần thiếu được ghi hao hụt (huỷ hàng). Cần nêu lý do.</Banner><Input label="Lý do hao hụt" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="vd: rơi vỡ khi vận chuyển" /></>}
+      </div>
+    </Sheet>
+  );
+}
+
+/** B-03: đánh dấu lô hỏng — lô ngừng bán, phần giữ cho đơn được chuyển sang lô khác (FEFO). */
+function QuarantineButton({ lot, onDone }: { lot: any; onDone: () => void }) {
+  const can = useCan();
+  const [open, setOpen] = useState(false), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  if (!can("inventory.write")) return null;
+  if (lot.status === "quarantine") {
+    return can("inventory.approve") ? <Button variant="soft" onClick={async () => { const r = window.prompt("Lý do bỏ cách ly"); if (!r) return; try { await post(`/lots/${lot.id}/release-quarantine`, { reason: r }); toast("Đã bỏ cách ly", "ok"); onDone(); } catch {} }}>Bỏ cách ly</Button> : <Badge tone="danger">Đang cách ly</Badge>;
+  }
+  if (lot.status !== "active") return null;
+  return (
+    <>
+      <Button variant="soft" onClick={() => setOpen(true)}>Đánh dấu lô hỏng</Button>
+      {open && (
+        <Sheet open onClose={() => setOpen(false)} title={`Cách ly lô ${lot.lotCode}`} footer={<Button block variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await post(`/lots/${lot.id}/quarantine`, { reason: reason.trim() });
+            const short = r?.shortOrders?.length ?? 0;
+            toast(short ? `Đã cách ly lô. ${short} đơn thiếu hàng — đã báo quản lý` : "Đã cách ly lô, phần giữ cho đơn đã chuyển sang lô khác", short ? "error" : "ok");
+            setOpen(false); onDone();
+          } catch {} finally { setBusy(false); }
+        }}>Cách ly lô</Button>}>
+          <div className="stack">
+            <Banner>Lô sẽ ngừng bán ngay. Phần đã giữ cho đơn B2B/online được chuyển sang lô tốt khác theo hạn dùng; phần không thay được sẽ nhả và báo quản lý. Sau đó có thể lập phiếu huỷ hàng cho lô này.</Banner>
+            <Input label="Lý do (bắt buộc)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="vd: dập nát, thối" />
+          </div>
+        </Sheet>
+      )}
+    </>
+  );
+}
+
 function Obj({ v, depth = 0 }: { v: any; depth?: number }) {
   if (v == null) return <span className="muted">—</span>;
   if (Array.isArray(v)) {
@@ -261,7 +342,7 @@ function Obj({ v, depth = 0 }: { v: any; depth?: number }) {
 }
 const fmtVal = (k: string, v: any) => (typeof v === "string" && /At$|^at$|Date$/.test(k) && /^\d{4}-\d\d-\d\dT/.test(v) ? fmtDateTime(v) : /Milli$/.test(k) && typeof v === "number" ? qtyText(v) : /(price|cost|amount|total)$/i.test(k) && typeof v === "number" ? money(v) : String(v ?? "—"));
 
-const MOVE: Record<string, string> = { receipt: "Nhập kho", sale: "Bán", return: "Trả hàng", waste: "Huỷ hàng", adjust: "Điều chỉnh", transfer_in: "Chuyển đến", transfer_out: "Chuyển đi" };
+const MOVE: Record<string, string> = { receipt: "Nhập kho", sale: "Bán", return: "Trả hàng", waste: "Huỷ hàng", adjust: "Điều chỉnh", transfer_in: "Nhận chuyển kho", transfer_out: "Xuất chuyển kho" };
 /** Backend: { lot, receipt:{code,postedAt,supplierName,supplierRef}|null, moves[{at,moveType,qtyDeltaMilli}], orders[{code,kind,channel,status,createdAt,qtyMilli}] } */
 function Trace() {
   const [code, setCode] = useState("");
@@ -279,6 +360,8 @@ function Trace() {
               <div className="kv row between"><span className="muted small">Nhập</span><span>{qtyText(d.lot.qtyInMilli, bu)}</span></div>
               <div className="kv row between"><span className="muted small">Còn lại</span><span>{qtyText(d.lot.qtyOnHandMilli, bu)}</span></div>
               <div className="kv row between"><span className="muted small">Hạn dùng</span><span>{d.lot.expiresAt ? fmtDate(d.lot.expiresAt) : "—"} {d.lot.expired && <Badge tone="danger">Hết hạn</Badge>}</span></div>
+              {d.lot.status === "quarantine" && <Banner>Lô đang cách ly{d.lot.quarantineReason ? `: ${d.lot.quarantineReason}` : ""} — không bán, không giữ cho đơn.</Banner>}
+              <QuarantineButton lot={d.lot} onDone={r.reload} />
               <div className="kv row between"><span className="muted small">Nhà cung cấp</span><span>{d.receipt?.supplierName ?? "—"}</span></div>
               <div className="kv row between"><span className="muted small">Phiếu nhập</span><span>{d.receipt ? `${d.receipt.code} · ${fmtDateTime(d.receipt.postedAt)}` : "—"}{d.receipt?.supplierRef ? ` · CT ${d.receipt.supplierRef}` : ""}</span></div>
             </div>

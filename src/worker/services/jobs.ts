@@ -4,7 +4,7 @@ import { getProvider, loadInvoiceDoc } from "./einvoice";
 import { INVOICE_OUTSTANDING_SQL, addDays } from "./debt";
 import { enqueueJobStmt } from "./outbox";
 import { sysAudit, sysAuditStmt } from "./sysaudit";
-import { notifyEmail, notifyOrderStatus, notifyStaffNewOrder } from "./notify";
+import { notifyEmail, notifyManagers, notifyOrderStatus, notifyStaffNewOrder } from "./notify";
 
 /** Backoff sau lần thất bại thứ n (1-based): 1 phút, 5 phút, 30 phút, 2 giờ, 12 giờ. */
 export const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000];
@@ -100,6 +100,8 @@ async function dispatch(env: Env, job: JobRow): Promise<unknown> {
       return notifyStaffNewOrder(env, orderRef(job));
     case "notify.email":
       return notifyEmail(env, JSON.parse(job.payload_json || "{}"));
+    case "notify.managers":
+      return notifyManagers(env, JSON.parse(job.payload_json || "{}"));
     default:
       throw new Error(`Loại job không hỗ trợ: ${job.type}`);
   }
