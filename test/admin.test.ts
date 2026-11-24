@@ -4,9 +4,12 @@ import { api, login, seedBase, testEnv } from "./helpers";
 
 beforeAll(seedBase);
 
+/** id khoản mục chi theo mã (không gõ cứng id — id phụ thuộc thứ tự migration/seed) */
+const outCat = async () => (await testEnv.DB.prepare(`SELECT id FROM cash_categories WHERE code = 'MAT_BANG'`).first<{ id: number }>())!.id;
+
 describe("approvals", () => {
   it("only finance.approve roles decide cash voucher approvals; reject cancels voucher", async () => {
-    const v = await api("accountant", "POST", "/api/v1/vouchers", { direction: "out", fundId: 1, categoryId: 3, amount: 7_000_000 });
+    const v = await api("accountant", "POST", "/api/v1/vouchers", { direction: "out", fundId: 1, categoryId: await outCat(), amount: 7_000_000 });
     expect(v.body.status).toBe("pending_approval");
     const list = await api("manager", "GET", "/api/v1/approvals?status=pending");
     expect(list.status).toBe(200);
@@ -22,7 +25,7 @@ describe("approvals", () => {
   });
 
   it("approving a cash voucher via decide posts it", async () => {
-    const v = await api("accountant", "POST", "/api/v1/vouchers", { direction: "out", fundId: 1, categoryId: 3, amount: 5_500_000 });
+    const v = await api("accountant", "POST", "/api/v1/vouchers", { direction: "out", fundId: 1, categoryId: await outCat(), amount: 5_500_000 });
     const d = await api("owner", "POST", `/api/v1/approvals/${v.body.approvalId}/decide`, { decision: "approved" });
     expect(d.status).toBe(200);
     expect(d.body.status).toBe("approved");
