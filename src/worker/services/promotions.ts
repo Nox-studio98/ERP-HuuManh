@@ -21,6 +21,8 @@ export interface EngineLine {
 export interface EngineInput {
   channel: PromoChannel;
   customerId?: number | null;
+  /** SĐT người nhận (online): khách vãng lai không có customerId → giới hạn lượt/khách tính theo SĐT. */
+  receiverPhone?: string | null;
   lines: EngineLine[];
   subtotal: number;
   voucherCode?: string | null;
@@ -241,6 +243,14 @@ export async function evaluatePromotions(db: D1Database, input: EngineInput): Pr
         const used = await db
           .prepare(`SELECT COUNT(*) AS n FROM voucher_redemptions WHERE voucher_id = ? AND customer_id = ? AND status = 'used'`)
           .bind(v.id, input.customerId)
+          .first<{ n: number }>();
+        limited = (used?.n ?? 0) >= v.per_customer_limit;
+      }
+      // Khách vãng lai (không có customerId, mỗi đơn tạo hồ sơ khách mới): tính theo SĐT người nhận của các đơn đã dùng voucher
+      if (!limited && input.receiverPhone) {
+        const used = await db
+          .prepare(`SELECT COUNT(*) AS n FROM voucher_redemptions r JOIN orders o ON o.id = r.order_id WHERE r.voucher_id = ? AND r.status = 'used' AND o.receiver_phone = ?`)
+          .bind(v.id, input.receiverPhone)
           .first<{ n: number }>();
         limited = (used?.n ?? 0) >= v.per_customer_limit;
       }
