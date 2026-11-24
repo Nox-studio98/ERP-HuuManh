@@ -13,7 +13,7 @@ export async function voucherCosts(db: D1Database, fromIso: string, toIso: strin
                 SUM(CASE WHEN v.direction='out' THEN v.amount WHEN v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END) AS amount
            FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status='posted' AND v.created_at >= ? AND v.created_at < ?
-            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer')
+            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
           GROUP BY v.channel, v.category_id`,
       )
       .bind(fromIso, toIso)
@@ -35,6 +35,53 @@ export async function shrinkage(db: D1Database, fromIso: string, toIso: string) 
     .bind(fromIso, toIso)
     .first<{ d: number }>();
   return Math.round(waste!.v) + disc!.d;
+}
+
+/**
+ * Các khoản P&L không đi qua đơn hàng / phiếu chi thường (A-04, B-06, B-13) — dùng chung /reports/pnl và pnl-by-channel:
+ *  - badDebt: xoá nợ khách hàng (debt_adjustments.write_off, đã posted) → chi phí "Xoá nợ khó đòi"
+ *  - paymentDiscount: chiết khấu thanh toán trên công nợ phải thu → giảm trừ doanh thu
+ *  - payableIncome: chiết khấu / xoá nợ phải trả NCC → thu khác
+ *  - forfeitedDeposits: cọc đặt trước không hoàn → thu khác
+ *  - stockCount: chênh lệch kiểm kê/điều chỉnh tồn (move_type='adjust') theo giá vốn lô; giảm = chi phí (+), tăng = giảm chi phí (−). Hao hụt (waste) đã tính riêng.
+ *  - voucherIncome: phiếu thu có dòng P&L other_income (vd chênh lệch đối soát thừa), trừ phiếu đảo
+ * return_credit / offset / opening_balance không đi vào P&L. Mốc ngày theo created_at (UTC) đã quy đổi qua fromIso/toIso của ngày VN.
+ */
+export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: string) {
+  const adj = (
+    await db
+      .prepare(
+        `SELECT type, partner_type AS pt, COALESCE(SUM(amount),0) AS s FROM debt_adjustments
+          WHERE status='posted' AND type IN ('write_off','discount') AND created_at >= ? AND created_at < ? GROUP BY type, partner_type`,
+      )
+      .bind(fromIso, toIso)
+      .all<{ type: string; pt: string; s: number }>()
+  ).results;
+  const pick = (type: string, pt: string) => adj.find((r) => r.type === type && r.pt === pt)?.s ?? 0;
+  const forfeited = await db
+    .prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM order_deposits WHERE status='forfeited' AND settled_at >= ? AND settled_at < ?`)
+    .bind(fromIso, toIso)
+    .first<{ s: number }>();
+  const stock = await db
+    .prepare(`SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000.0),0) AS v FROM stock_moves WHERE move_type='adjust' AND at >= ? AND at < ?`)
+    .bind(fromIso, toIso)
+    .first<{ v: number }>();
+  const vi = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN v.direction='in' AND v.reverses_id IS NULL THEN v.amount WHEN v.direction='out' AND v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END),0) AS s
+         FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
+        WHERE v.status='posted' AND cc.pnl_line='other_income' AND v.created_at >= ? AND v.created_at < ?`,
+    )
+    .bind(fromIso, toIso)
+    .first<{ s: number }>();
+  return {
+    badDebt: pick("write_off", "customer"),
+    paymentDiscount: pick("discount", "customer"),
+    payableIncome: pick("discount", "supplier") + pick("write_off", "supplier"),
+    forfeitedDeposits: forfeited!.s,
+    stockCount: Math.round(stock!.v),
+    voucherIncome: vi!.s,
+  };
 }
 
 export async function revenueByChannel(db: D1Database, fromIso: string, toIso: string) {
@@ -97,6 +144,9 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
     allocations.push({ categoryId: g.categoryId, category: g.category, method: rule.method, amount: g.amount, byChannel });
   }
   if (shrink) unallocated.push({ categoryId: null, category: "Hao hụt", amount: shrink, reason: "not_attributable" });
+  const adj = await pnlAdjustments(db, fromIso, toIso);
+  if (adj.badDebt) unallocated.push({ categoryId: null, category: "Xoá nợ khó đòi", amount: adj.badDebt, reason: "not_attributable" });
+  if (adj.stockCount) unallocated.push({ categoryId: null, category: "Chênh lệch kiểm kê", amount: adj.stockCount, reason: "not_attributable" });
 
   const rows = [...channels.values()].map((c) => ({
     ...c, grossProfit: c.revenue - c.cogs, netProfit: c.revenue - c.cogs - c.directCosts - c.allocatedCosts,
@@ -109,12 +159,14 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
     totalExpenses: sum((r) => r.directCosts + r.allocatedCosts) + unallocatedTotal,
     netProfit: sum((r) => r.grossProfit) - sum((r) => r.directCosts + r.allocatedCosts) - unallocatedTotal,
   };
-  // tiền cọc không hoàn (forfeited) trong kỳ: thu khác, chưa tính vào doanh thu kênh
-  const forfeited = await db
-    .prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM order_deposits WHERE status='forfeited' AND settled_at >= ? AND settled_at < ?`)
-    .bind(fromIso, toIso)
-    .first<{ s: number }>();
-  return { from, to, channels: rows, allocations, unallocated, totals, otherIncome: { forfeitedDeposits: forfeited!.s } };
+  const otherIncomeTotal = adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome;
+  const deductions = adj.paymentDiscount;
+  totals.netProfit = totals.netProfit - deductions + otherIncomeTotal;
+  return {
+    from, to, channels: rows, allocations, unallocated, totals: { ...totals, revenueDeductions: deductions, otherIncome: otherIncomeTotal },
+    revenueDeductions: { paymentDiscount: adj.paymentDiscount },
+    otherIncome: { forfeitedDeposits: adj.forfeitedDeposits, payableDiscounts: adj.payableIncome, settlementSurplus: adj.voucherIncome, total: otherIncomeTotal },
+  };
 }
 
 /** Quỹ "chờ đối soát": tiền COD/sàn/thẻ đã ghi nhận nhưng chưa về tay — không phải tiền thật nên không tính vào tổng dòng tiền. */

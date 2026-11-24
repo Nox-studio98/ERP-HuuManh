@@ -195,6 +195,8 @@ financeRoutes.post("/periods/:period/lock", requirePerm("finance.lock_period"), 
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new AppError(422, "validation_error", "Kỳ phải có dạng YYYY-MM");
   const db = c.env.DB;
   const user = c.get("user");
+  // B-08: chỉ khoá kỳ ĐÃ KẾT THÚC (cuối kỳ < hôm nay giờ VN); kỳ hiện tại/tương lai còn phát sinh nghiệp vụ nên không khoá được
+  if (period >= vnPeriod()) throw new AppError(422, "period_not_ended", "Chỉ khoá được kỳ đã kết thúc (kỳ hiện tại hoặc tương lai chưa khoá được)", { period, current: vnPeriod() });
   const cur = await db.prepare(`SELECT locked_at FROM periods WHERE period = ?`).bind(period).first<{ locked_at: string | null }>();
   if (cur?.locked_at) throw conflict("already_locked", "Kỳ đã khoá sổ");
   await db.batch([

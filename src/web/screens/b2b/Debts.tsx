@@ -116,6 +116,7 @@ function Aging({ side, onOpen }: { side: "receivable" | "payable"; onOpen: (r: a
         <div className="kpi"><div className="l">{side === "receivable" ? "Còn phải thu" : "Còn phải trả"}</div><div className="v">{money(t.outstanding)}</div></div>
         <div className="kpi"><div className="l">Đã trả trước chưa gạch</div><div className="v" style={{ color: t.unapplied ? "var(--accent)" : undefined }}>{money(t.unapplied)}</div></div>
         <div className="kpi"><div className="l">Số dư ròng</div><div className="v">{money(t.balance)}</div></div>
+        <div className="kpi"><div className="l">Khách dư có</div><div className="v" style={{ color: t.credit ? "var(--accent)" : undefined }}>{money(t.credit ?? 0)}</div></div>
         <div className="kpi"><div className="l">Quá hạn</div><div className="v" style={{ color: t.overdueAmount ? "var(--warn)" : undefined }}>{money(t.overdueAmount)}</div></div>
       </div>
       <Card title="Tuổi nợ"><BucketBar b={sum} total={BK.reduce((s, x) => s + sum[x.k], 0)} /></Card>
@@ -130,7 +131,7 @@ function Aging({ side, onOpen }: { side: "receivable" | "payable"; onOpen: (r: a
           { key: "age", label: "Tuổi nợ", hideDesktop: true, render: (x: any) => <span className="small">{BK.filter((b) => x.buckets?.[b.k] > 0).map((b) => `${b.label}: ${num(x.buckets[b.k])}`).join(" · ") || "—"}</span> },
           { key: "o", label: "Quá hạn", right: true, render: (x) => (x.overdueAmount ? <Badge tone="warn">{money(x.overdueAmount)}{x.oldestOverdueDays ? ` · ${x.oldestOverdueDays}n` : ""}</Badge> : <span className="muted">—</span>) },
           { key: "u", label: "Trả trước", right: true, hideMobile: true, render: (x) => (x.unapplied ? <span className="money" style={{ color: "var(--accent)" }}>{money(x.unapplied)}</span> : "—") },
-          { key: "b", label: "Số dư", right: true, render: (x) => <b className="money">{money(x.balance)}</b> },
+          { key: "b", label: "Số dư", right: true, render: (x) => (x.balance < 0 ? <b className="money" style={{ color: "var(--accent)" }}>Khách dư có {money(-x.balance)}</b> : <b className="money">{money(x.balance)}</b>) },
         ]} />
       )}
     </div>
