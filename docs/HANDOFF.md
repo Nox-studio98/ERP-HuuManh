@@ -76,7 +76,7 @@ Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạ
 3. **Secrets**: `BOOTSTRAP_TOKEN` (tạo tài khoản chủ lần đầu rồi xoá), `ATTENDANCE_QR_SECRET` (mã QR chấm công), `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRIVATE_KEY`; vars `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`, `SHOP_BASE_URL` (bắt buộc — link trong email); khi có: `MISA_*`, `FRESCO_WEBHOOK_SECRET`. Rate limiting (`RL_AUTH`, `RATE_LIMITER`) đã khai báo trong wrangler, không cần thao tác thêm.
 4. **Font PDF** lên R2: `fonts/BeVietnamPro-Regular.ttf`, `fonts/BeVietnamPro-Bold.ttf`.
 5. **Tên miền + bảo vệ**: gắn domain, Cloudflare Access cho ERP, WAF/rate limit theo checklist `docs/SECOPS.md` mục 3.
-6. **Môi trường staging**: tạo D1 `huu-manh-erp-staging`, R2 `huu-manh-erp-files-staging`, queue `huu-manh-erp-jobs-staging` (+ `-dlq`), điền `database_id` staging vào hai file wrangler (đang là placeholder `0000…`).
+6. **Môi trường staging** (job `deploy-staging` chỉ chạy khi biến repo `STAGING_ENABLED=true`): tạo D1 `huu-manh-erp-staging`, R2 `huu-manh-erp-files-staging`, queue `huu-manh-erp-jobs-staging` (+ `-dlq`), điền `database_id` staging vào hai file wrangler (đang là placeholder `0000…`).
 7. Bật **GitHub Environments** `staging`/`production` (production cần Required reviewers).
 
 ### 3.2 Chức năng còn thiếu / giả định cần xác nhận

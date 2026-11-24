@@ -26,7 +26,8 @@ jobs:
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
 
   deploy-staging:
-    if: github.ref == 'refs/heads/main'
+    # Chỉ chạy khi đã tạo tài nguyên staging (D1/R2/Queues) và đặt biến repo STAGING_ENABLED=true
+    if: github.ref == 'refs/heads/main' && vars.STAGING_ENABLED == 'true'
     needs: test
     runs-on: ubuntu-latest
     environment: staging
