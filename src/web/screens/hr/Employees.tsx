@@ -4,7 +4,7 @@ import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Mo
 import { toast } from "../../components/toast";
 import { money, ROLES, todayVN } from "../../format";
 import { useAuth, useCan } from "../../store";
-import { Confirm, EMP_STATUS, PAY_TYPE, dmy } from "./kit";
+import { Confirm, EMP_STATUS, PAY_TYPE, dmy, useLeaveTypes } from "./kit";
 
 const EMPTY = { fullName: "", position: "Nhân viên bán hàng", hireDate: todayVN(), payType: "monthly", baseSalary: 0, hourlyRate: 0, shiftRate: 0, insuranceSalary: 0, dependents: 0, annualLeaveDays: 12, locationExempt: false, pitEnabled: false, phone: "", email: "", idNumber: "", dob: "", address: "", bankName: "", bankAccount: "", note: "" };
 
@@ -16,6 +16,7 @@ export default function Employees() {
   const dq = useDebounced(q, 250);
   const l = useAsync(() => get("/employees", { status: status === "all" ? undefined : status, q: dq, limit: 200 }).then((r) => items<any>(r)), [status, dq]);
   const [sel, setSel] = useState<number | null>(null);
+  const [lt, setLt] = useState(false);
   const [form, setForm] = useState<any>(null);
   const [temp, setTemp] = useState<{ username: string; password: string; name: string } | null>(null);
   const rows = l.data ?? [];
@@ -23,7 +24,7 @@ export default function Employees() {
     <div className="stack">
       <div className="row wrap between">
         <Segmented value={status} onChange={setStatus} options={[{ v: "active", label: "Đang làm" }, { v: "terminated", label: "Đã nghỉ" }, { v: "all", label: "Tất cả" }]} />
-        {manage && <Button onClick={() => setForm({})}>+ Thêm nhân viên</Button>}
+        <div className="row">{manage && <Button variant="soft" onClick={() => setLt(true)}>Loại nghỉ phép</Button>}{manage && <Button onClick={() => setForm({})}>+ Thêm nhân viên</Button>}</div>
       </div>
       <Input label="Tìm theo tên hoặc mã" value={q} onChange={(e) => setQ(e.target.value)} />
       {!sens && <Banner tone="info">Bạn không có quyền xem lương và thông tin cá nhân nhạy cảm.</Banner>}
@@ -39,6 +40,7 @@ export default function Employees() {
             { key: "st", label: "Trạng thái", render: (r) => <Badge tone={r.status === "active" ? "ok" : undefined}>{EMP_STATUS[r.status] ?? r.status}</Badge> },
           ]} />
       )}
+      {lt && <LeaveTypes onClose={() => setLt(false)} />}
       {sel != null && <Detail id={sel} sens={sens} manage={manage} onClose={() => setSel(null)} onChanged={l.reload} onEdit={(e) => { setSel(null); setForm(e); }} />}
       {form && <EmpForm emp={form.id ? form : null} sens={sens} onClose={() => setForm(null)}
         onSaved={(r) => { setForm(null); l.reload(); if (r.tempPassword) setTemp({ username: r.username, password: r.tempPassword, name: r.fullName }); }} />}
@@ -57,7 +59,7 @@ export default function Employees() {
 function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; sens: boolean; manage: boolean; onClose: () => void; onChanged: () => void; onEdit: (e: any) => void }) {
   const d = useAsync(() => get("/employees/" + id), [id]);
   const [term, setTerm] = useState(false);
-  const [ct, setCt] = useState(false);
+  const [ct, setCt] = useState<false | "new" | any>(false);
   const [al, setAl] = useState(false);
   const e = d.data;
   const reload = () => { d.reload(); onChanged(); };
@@ -91,11 +93,12 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
               {e.note && <div className="small muted" style={{ whiteSpace: "pre-line", marginTop: 8 }}>{e.note}</div>}
             </Card>
           ) : null}
-          <Card title="Hợp đồng" className="flat" actions={manage && <Button size="sm" variant="soft" onClick={() => setCt(true)}>+ Hợp đồng</Button>}>
+          <Card title="Hợp đồng" className="flat" actions={manage && <Button size="sm" variant="soft" onClick={() => setCt("new")}>+ Hợp đồng</Button>}>
             {!e.contracts.length ? <div className="muted">Chưa có hợp đồng.</div> : e.contracts.map((c: any) => (
               <div key={c.id} className="row between" style={{ borderBottom: "1px solid var(--border)", padding: "6px 0" }}>
                 <span><b>{c.type}</b> · {dmy(c.startDate)} → {c.endDate ? dmy(c.endDate) : "không thời hạn"}{c.note && <span className="muted small"> · {c.note}</span>}</span>
-                {sens && c.salary != null && <span className="num">{money(c.salary)}</span>}
+                <span className="row">{sens && c.salary != null && <span className="num">{money(c.salary)}</span>}
+                  {manage && <Button size="sm" variant="ghost" aria-label={`Sửa hợp đồng ${c.type}`} onClick={() => setCt(c)}>Sửa</Button>}</span>
               </div>
             ))}
           </Card>
@@ -109,7 +112,7 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
             ))}
           </Card>
           {term && <Terminate e={e} onClose={() => setTerm(false)} onDone={() => { setTerm(false); reload(); }} />}
-          {ct && <ContractForm id={e.id} sens={sens} onClose={() => setCt(false)} onDone={() => { setCt(false); reload(); }} />}
+          {ct && <ContractForm id={e.id} sens={sens} contract={ct === "new" ? null : ct} onClose={() => setCt(false)} onDone={() => { setCt(false); reload(); }} />}
           {al && <AllowanceForm id={e.id} onClose={() => setAl(false)} onDone={() => { setAl(false); reload(); }} />}
         </div>
       )}
@@ -129,12 +132,17 @@ function Terminate({ e, onClose, onDone }: { e: any; onClose: () => void; onDone
     </Confirm>
   );
 }
-function ContractForm({ id, sens, onClose, onDone }: { id: number; sens: boolean; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ type: "Hợp đồng thử việc", startDate: todayVN(), endDate: "", salary: 0, note: "" }), [busy, setBusy] = useState(false);
+function ContractForm({ id, sens, contract, onClose, onDone }: { id: number; sens: boolean; contract: any | null; onClose: () => void; onDone: () => void }) {
+  const [f, setF] = useState({ type: contract?.type ?? "Hợp đồng thử việc", startDate: contract?.startDate ?? todayVN(), endDate: contract?.endDate ?? "", salary: contract?.salary ?? 0, note: contract?.note ?? "" }), [busy, setBusy] = useState(false);
   return (
-    <Sheet open onClose={onClose} title="Thêm hợp đồng" footer={<Button block loading={busy} disabled={!f.type.trim()} onClick={async () => {
+    <Sheet open onClose={onClose} title={contract ? "Sửa hợp đồng" : "Thêm hợp đồng"} footer={<Button block loading={busy} disabled={!f.type.trim()} onClick={async () => {
       setBusy(true);
-      try { await post(`/employees/${id}/contracts`, { type: f.type.trim(), startDate: f.startDate, endDate: f.endDate || null, salary: sens && f.salary ? f.salary : undefined, note: f.note || null }); toast("Đã thêm hợp đồng", "ok"); onDone(); } catch { /* toast */ } finally { setBusy(false); }
+      try {
+        const body = { type: f.type.trim(), startDate: f.startDate, endDate: f.endDate || null, salary: sens && f.salary ? f.salary : undefined, note: f.note || null };
+        if (contract) await put(`/employees/${id}/contracts/${contract.id}`, sens ? { ...body, salary: f.salary || null } : { type: body.type, startDate: body.startDate, endDate: body.endDate, note: body.note });
+        else await post(`/employees/${id}/contracts`, body);
+        toast(contract ? "Đã lưu hợp đồng" : "Đã thêm hợp đồng", "ok"); onDone();
+      } catch { /* toast */ } finally { setBusy(false); }
     }}>Lưu hợp đồng</Button>}>
       <div className="stack">
         <Input label="Loại hợp đồng" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} />
@@ -229,6 +237,46 @@ function EmpForm({ emp, sens, onClose, onSaved }: { emp: any | null; sens: boole
             {acc && <div className="hint">Mật khẩu tạm sẽ hiện một lần sau khi tạo; nhân viên phải đổi khi đăng nhập lần đầu.</div>}
           </>
         )}
+      </div>
+    </Sheet>
+  );
+}
+
+function LeaveTypes({ onClose }: { onClose: () => void }) {
+  const lt = useLeaveTypes(true);
+  const [f, setF] = useState<{ id?: number; code: string; name: string; paid: boolean; usesBalance: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!f) return;
+    setBusy(true);
+    try {
+      if (f.id) await put(`/leave-types/${f.id}`, { name: f.name.trim(), paid: f.paid, usesBalance: f.usesBalance });
+      else await post("/leave-types", { code: f.code.trim(), name: f.name.trim(), paid: f.paid, usesBalance: f.usesBalance });
+      toast("Đã lưu loại nghỉ", "ok"); setF(null); lt.reload();
+    } catch { /* toast */ } finally { setBusy(false); }
+  };
+  return (
+    <Sheet open onClose={onClose} title="Loại nghỉ phép">
+      <div className="stack" data-testid="leave-types">
+        {!f && <div><Button size="sm" onClick={() => setF({ code: "", name: "", paid: true, usesBalance: false })}>+ Loại nghỉ mới</Button></div>}
+        {f ? (
+          <div className="stack">
+            <Input label="Mã (chữ thường, không dấu, vd: cuoi)" value={f.code} disabled={!!f.id} onChange={(e) => setF({ ...f, code: e.target.value })} />
+            <Input label="Tên hiển thị" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+            <label className="row"><input type="checkbox" checked={f.paid} onChange={(e) => setF({ ...f, paid: e.target.checked })} /> Có lương</label>
+            <label className="row"><input type="checkbox" checked={f.usesBalance} onChange={(e) => setF({ ...f, usesBalance: e.target.checked })} /> Trừ vào số dư phép năm</label>
+            <div className="row"><Button variant="ghost" onClick={() => setF(null)}>Huỷ</Button><Button loading={busy} disabled={!f.name.trim() || (!f.id && !/^[a-z0-9_]{2,30}$/.test(f.code.trim()))} onClick={save}>Lưu</Button></div>
+          </div>
+        ) : lt.types.map((t) => (
+          <div key={t.id} className="card flat row between wrap">
+            <span><b>{t.name}</b> <span className="muted small">{t.code}</span><div className="small muted">{t.paid ? "Có lương" : "Không lương"} · {t.usesBalance ? "Trừ phép năm" : "Không trừ phép năm"}</div></span>
+            <span className="row">
+              {!t.active && <Badge tone="warn">Đã tắt</Badge>}
+              <Button size="sm" variant="ghost" onClick={() => setF({ id: t.id, code: t.code, name: t.name, paid: t.paid, usesBalance: t.usesBalance })}>Sửa</Button>
+              <Button size="sm" variant="ghost" onClick={async () => { try { await put(`/leave-types/${t.id}`, { active: !t.active }); lt.reload(); } catch { /* toast */ } }}>{t.active ? "Tắt" : "Bật"}</Button>
+            </span>
+          </div>
+        ))}
       </div>
     </Sheet>
   );

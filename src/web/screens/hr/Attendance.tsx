@@ -4,7 +4,7 @@ import { Badge, Banner, Button, Card, DataTable, DecInput, Input, Segmented, Sel
 import { toast } from "../../components/toast";
 import { fmtDateTime, todayVN } from "../../format";
 import { navigate } from "../../router";
-import { Confirm, CORR_TYPE, KIND, LEAVE_TYPE, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, days10, dmy, errCode, hm, reqTone } from "./kit";
+import { Confirm, CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, days10, dmy, errCode, hm, reqTone, useLeaveTypes } from "./kit";
 
 type Tab = "punches" | "corr" | "leave" | "ot" | "dev" | "log";
 
@@ -94,6 +94,7 @@ function Corrections({ onChange }: { onChange: () => void }) {
 }
 
 function Leaves({ onChange }: { onChange: () => void }) {
+  const lt = useLeaveTypes(true);
   const l = useAsync(() => get("/leave-requests", { status: "pending", limit: 100 }).then((r) => items<any>(r)), []);
   const [over, setOver] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -105,7 +106,7 @@ function Leaves({ onChange }: { onChange: () => void }) {
       {l.data!.map((r) => (
         <Card key={r.id}>
           <div className="stack" style={{ gap: 6 }}>
-            <div className="row between"><b>{r.employeeName}</b><span className="row">{r.overBalance && <Badge tone="danger">Vượt số dư phép</Badge>}<Badge>{LEAVE_TYPE[r.leaveTypeCode] ?? r.leaveTypeCode}</Badge></span></div>
+            <div className="row between"><b>{r.employeeName}</b><span className="row">{r.overBalance && <Badge tone="danger">Vượt số dư phép</Badge>}<Badge>{lt.label(r.leaveTypeCode)}</Badge></span></div>
             <div className="small">{dmy(r.fromDate)}{r.toDate !== r.fromDate ? ` – ${dmy(r.toDate)}` : ""} · {days10(r.daysX10)} ngày{r.halfDay ? " (nửa ngày)" : ""}</div>
             {r.reason && <div className="small muted">Lý do: {r.reason}</div>}
             {r.overBalance && <div className="small" style={{ color: "var(--danger)" }}>Đơn vượt số ngày phép còn lại. Duyệt sẽ là ngoại lệ và được ghi vào nhật ký.</div>}

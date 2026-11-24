@@ -4,6 +4,7 @@ import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Se
 import { toast } from "../../components/toast";
 import { ORDER_STATUS, money, todayVN, unitLabel, uuid } from "../../format";
 import { navigate, usePath } from "../../router";
+import Recurring from "./Recurring";
 import { useCan } from "../../store";
 import {
   Back, CreditBlocked, CustomerSelect, DELIVERY_STATUS, EINVOICE, INVOICE_KIND, LinesEditor, Lnk, QUOTE_STATUS, ReasonSheet, deliveryTone, einvTone, linePayload, orderTone, qparam, q3, qtyU, ymd,
@@ -21,10 +22,13 @@ function OrderList() {
   const [status, setStatus] = useState(""), [day, setDay] = useState("");
   const pre = qparam("new");
   const [creating, setCreating] = useState(!!pre);
+  const [tab, setTab] = useState<"orders" | "recurring">("orders");
   const list = useAsync(() => get("/b2b/orders", { status, deliveryDate: day, limit: 100 }).then((r) => items<any>(r)), [status, day]);
   const rows = list.data ?? [];
+  if (tab === "recurring") return <div className="stack"><Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} /><Recurring /></div>;
   return (
     <div className="stack">
+      {can("b2b.write") && <Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />}
       <div className="row wrap" style={{ alignItems: "flex-end" }}>
         <div className="grow" style={{ minWidth: 160 }}><Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option>{["new", "confirmed", "preparing", "shipping", "completed", "delivery_failed", "cancelled"].map((s) => <option key={s} value={s}>{ORDER_STATUS[s]}</option>)}</Select></div>
         <div style={{ minWidth: 160 }}><Input label="Ngày giao" type="date" value={day} onChange={(e) => setDay(e.target.value)} /></div>

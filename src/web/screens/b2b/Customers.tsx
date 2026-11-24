@@ -73,11 +73,12 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
   const can = useCan();
   const { user } = useAuth();
   const groups = useGroups();
+  const owners = useAsync(() => get("/users/assignable", undefined, { silent: true }).then((r) => items<{ id: number; fullName: string }>(r)).catch(() => [] as { id: number; fullName: string }[]), []);
   const edit = !!customer;
   const [f, setF] = useState({
     name: customer?.name ?? "", taxCode: customer?.taxCode ?? "", phone: customer?.phone ?? "", email: customer?.email && customer.email !== "***" ? customer.email : "",
     billingAddress: customer?.billingAddress ?? "", groupId: String(customer?.customerGroupId ?? ""), creditLimit: customer?.creditLimit ?? 0, terms: customer ? customer.paymentTermsDays : 7,
-    mine: customer ? customer.ownerUserId != null : true,
+    ownerId: customer ? (customer.ownerUserId != null ? String(customer.ownerUserId) : "") : String(user?.id ?? ""),
   });
   const [contacts, setContacts] = useState<ContactF[]>([{ name: "", phone: "", role: "", isReceiver: true }]);
   const [addrs, setAddrs] = useState<AddrF[]>([{ label: "Cửa hàng", address: "", receiver: 0, isDefault: true }]);
@@ -92,13 +93,13 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
       if (edit) {
         const r = await put(`/customers/${customer.id}`, {
           version: customer.version, name: f.name.trim(), taxCode: f.taxCode || null, phone: f.phone || null, email: f.email || null, billingAddress: f.billingAddress || null,
-          ...(sensitiveLocked ? {} : { customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms }), ownerUserId: f.mine ? user?.id ?? null : null,
+          ...(sensitiveLocked ? {} : { customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms }), ownerUserId: f.ownerId ? Number(f.ownerId) : null,
         });
         toast("Đã lưu khách hàng", "ok"); onSaved(r);
       } else {
         const r = await post("/customers", {
           name: f.name.trim(), type: "b2b", taxCode: f.taxCode || undefined, phone: f.phone || undefined, email: f.email || undefined, billingAddress: f.billingAddress || undefined,
-          customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms, ownerUserId: f.mine ? user?.id : undefined,
+          customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms, ownerUserId: f.ownerId ? Number(f.ownerId) : undefined,
           contacts: contacts.map((c) => ({ name: c.name.trim(), phone: c.phone || undefined, role: c.role || undefined, isReceiver: c.isReceiver })),
           addresses: addrs.map((a) => ({ label: a.label.trim(), address: a.address.trim(), receiverContactIndex: a.receiver, isDefault: a.isDefault })),
         });
@@ -127,7 +128,11 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
               <MoneyInput label="Hạn mức công nợ (₫)" value={f.creditLimit} onChange={(n) => !sensitiveLocked && setF({ ...f, creditLimit: n })} />
               <Input label="Hạn thanh toán (ngày)" inputMode="numeric" disabled={sensitiveLocked} value={String(f.terms)} onChange={(e) => setF({ ...f, terms: Math.max(0, Math.min(365, Math.floor(parseDec(e.target.value)))) })} />
             </div>
-            <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.mine} onChange={(e) => setF({ ...f, mine: e.target.checked })} /> Tôi phụ trách khách này ({user?.fullName})</label>
+            <Select label="Nhân viên phụ trách" value={f.ownerId} onChange={(e) => setF({ ...f, ownerId: e.target.value })}>
+              <option value="">— Chưa phân công —</option>
+              {(owners.data ?? []).map((u) => <option key={u.id} value={u.id}>{u.fullName}{u.id === user?.id ? " (tôi)" : ""}</option>)}
+              {f.ownerId && !(owners.data ?? []).some((u) => String(u.id) === f.ownerId) && <option value={f.ownerId}>{customer?.ownerName ?? (String(user?.id) === f.ownerId ? user?.fullName : `Người dùng #${f.ownerId}`)}</option>}
+            </Select>
           </div>
         </Card>
         {!edit && (
