@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, get, items, post } from "../../api";
-import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../../components/ui";
 import { toast } from "../../components/toast";
 import { fmtDateTime, money, todayVN, unitLabel, uuid } from "../../format";
 import { navigate, usePath } from "../../router";
 import { useCan } from "../../store";
 import { Back, Lnk, q3 } from "../b2b/kit";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, useWide, type DateRange } from "../../components/list";
 import { CHANNEL_LABEL, PAY_METHOD, PAY_STATUS, STATUS_LABEL, TABS, WEIGHT_LABEL, statusTone, ymdShow } from "./kit";
 
 export default function OnlineOrders() {
@@ -19,58 +20,86 @@ export default function OnlineOrders() {
 const qs = (k: string) => { try { return new URLSearchParams(location.search).get(k) ?? ""; } catch { return ""; } };
 function OrderList() {
   const [status, setStatus] = useState(qs("status") || "all");
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
   const [slotDate, setSlotDate] = useState("");
-  const [channel, setChannel] = useState("all");
+  const [channel, setChannel] = useState("");
   const [q, setQ] = useState("");
-  const dq = useDebounced(q);
-  const l = useAsync(() => get("/online-orders", { status: status === "all" ? undefined : status, slotDate, channel, q: dq, limit: 100 }), [status, slotDate, channel, dq]);
-  const counts: Record<string, number> = l.data?.counts ?? {};
+  const [sel, setSel] = useState<number | null>(null);
+  const wide = useWide();
+  const l = usePagedList<any>("/online-orders", { status: status === "all" ? undefined : status, slotDate, channel: channel || "all", q, from: range.from, to: range.to, limit: 50 }, [status, slotDate, channel, q, range.from, range.to]);
+  const counts: Record<string, number> = l.extra?.counts ?? {};
+  const sum = l.extra?.summary;
   const cnt = (v: string) => counts[v.replace(/_([a-z])/g, (_, c) => c.toUpperCase())];
-  const rows: any[] = l.data?.items ?? [];
+  const rows: any[] = l.rows;
+  const dirty = !!(q || channel || slotDate || status !== "all");
+  const reset = () => { setQ(""); setChannel(""); setSlotDate(""); setStatus("all"); };
+  const rangeLabel = range.from === range.to ? ymdShow(range.from) : `${ymdShow(range.from)} – ${ymdShow(range.to)}`;
+  const openRow = (o: any) => { if (wide) setSel(o.id); else navigate(`/online-orders/${o.id}`); };
+  const pending = (counts.new ?? 0) + (counts.awaitingPayment ?? 0);
   return (
     <div className="stack">
-      <div className="row between wrap">
-        <div className="chips scroll" role="tablist" aria-label="Lọc theo trạng thái">
-          {TABS.map(([v, label]) => (
-            <button key={v} className="chip" role="tab" aria-pressed={status === v} onClick={() => setStatus(v)}>{label}{cnt(v) != null ? ` (${cnt(v)})` : ""}</button>
-          ))}
-        </div>
+      <PageHeader compact subtitle={<>Đặt từ {rangeLabel}{sum ? <> · {sum.count} đơn</> : null}</>}
+        actions={<>
+          <ExportButton filename={`don-online-${range.from}_${range.to}`} rows={rows} columns={[
+            { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => CHANNEL_LABEL[o.channel] ?? o.channel }, { label: "Trạng thái", value: (o) => STATUS_LABEL[o.status] ?? o.status },
+            { label: "Người nhận", value: (o) => o.receiverName }, { label: "SĐT", value: (o) => o.receiverPhone }, { label: "Khu vực", value: (o) => o.district ?? o.zoneName }, { label: "Ngày giao", value: (o) => o.slotDate },
+            { label: "Thanh toán", value: (o) => `${PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · ${PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}` }, { label: "Tổng", value: (o) => o.total },
+          ]} />
+          <Lnk to="/online-orders/new" className="btn">+ Tạo đơn mạng xã hội</Lnk>
+        </>} />
+      <div className="chips scroll" role="tablist" aria-label="Lọc theo trạng thái">
+        {TABS.map(([v, label]) => (
+          <button key={v} className="chip" role="tab" aria-pressed={status === v} onClick={() => setStatus(v)}>{label}{cnt(v) != null ? ` (${cnt(v)})` : ""}</button>
+        ))}
       </div>
-      <div className="grid3">
-        <Input label="Ngày giao" type="date" value={slotDate} onChange={(e) => setSlotDate(e.target.value)} />
-        <Select label="Kênh" value={channel} onChange={(e) => setChannel(e.target.value)}>
-          <option value="all">Tất cả kênh</option><option value="online">Website</option><option value="fresco">Fresco</option><option value="social">Mạng xã hội</option>
-        </Select>
-        <Input label="Tìm" type="search" placeholder="Mã đơn, tên, SĐT" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-      <div className="row"><Lnk to="/online-orders/new" className="btn">+ Tạo đơn mạng xã hội</Lnk></div>
-      {l.loading && !l.data ? <Spinner /> : !rows.length ? <EmptyState title="Không có đơn online" hint="Đổi bộ lọc hoặc tạo đơn từ mạng xã hội." /> : (
-        <div className="stack" data-testid="online-list">
-          {rows.map((o) => (
-            <a key={o.id} href={`/online-orders/${o.id}`} className="dt-card" style={{ textDecoration: "none", color: "inherit" }} onClick={(e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); navigate(`/online-orders/${o.id}`); }}>
-              <div className="row between"><b className="num">{o.code}</b><Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status] ?? o.status}</Badge></div>
-              <div className="row between"><span>{o.receiverName} <span className="muted small">{o.receiverPhone}</span></span><span className="money">{money(o.total)}{o.estimated ? "*" : ""}</span></div>
-              <div className="small muted">{CHANNEL_LABEL[o.channel] ?? o.channel} · {o.district ?? "—"} · {o.slotDate ? `${ymdShow(o.slotDate)} ${o.slotLabel ?? ""}` : "Chưa hẹn giờ"}</div>
-              <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
-                <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
-                {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
-                {o.weightAdjustStatus === "pending_customer" && <Badge tone="warn">Chờ khách xác nhận cân</Badge>}
-                {o.needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
-                {o.diffAmount > 0 && <Badge tone="warn">Thu thêm {money(o.diffAmount)}</Badge>}
-                {o.diffAmount < 0 && <Badge tone="danger">Hoàn lại {money(-o.diffAmount)}</Badge>}
-              </div>
-            </a>
-          ))}
-          {l.data?.nextCursor && <div className="small muted">Còn thêm đơn — hãy thu hẹp bộ lọc.</div>}
-        </div>
-      )}
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[channel, slotDate].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Kênh" value={channel} onChange={setChannel} allLabel="Tất cả kênh" options={[{ v: "online", label: "Website" }, { v: "fresco", label: "Fresco" }, { v: "social", label: "Mạng xã hội" }]} />
+        <label className="field"><span className="lbl">Ngày giao</span><input className="input" type="date" aria-label="Ngày giao" value={slotDate} onChange={(e) => setSlotDate(e.target.value)} style={{ minHeight: 40 }} /></label>
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["today", "yesterday", "7d", "month", "lastMonth", "custom"]} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên, SĐT" label="Tìm" />
+      </FilterBar>
+      <KpiRow items={[
+        { label: "Số đơn", value: sum ? sum.count : "—", sub: sum ? `${sum.cancelled} huỷ / trả` : undefined },
+        { label: "Doanh thu đã hoàn tất", value: sum ? money(sum.revenue) : "—", tone: "ok" },
+        { label: "Đang xử lý", value: sum ? money(sum.pipelineTotal) : "—", sub: "giá trị đơn chưa hoàn tất", tone: "info" },
+        { label: "Chờ xác nhận / thanh toán", value: l.extra ? pending : "—", tone: pending ? "warn" : undefined, onClick: () => setStatus("new") },
+      ]} />
+      <SplitLayout open={sel != null && wide} panel={sel != null ? <OrderDetail key={sel} id={sel} panel={{ onClose: () => setSel(null), onChanged: l.reload }} /> : null}>
+        {l.loading && !rows.length ? <Spinner /> : (
+          <div data-testid="online-list">
+            <DataTable rows={rows} rowKey={(o) => o.id} onRowClick={openRow} selectedKey={sel} hasMore={l.hasMore} loadingMore={l.loadingMore} onLoadMore={l.loadMore}
+              footer={`Đang hiển thị ${rows.length}${sum ? ` / ${sum.count}` : ""} đơn`}
+              emptyState={<EmptyState title={dirty ? "Không có đơn online nào khớp bộ lọc" : "Chưa có đơn online trong khoảng này"} hint="Đơn từ website, Fresco và mạng xã hội sẽ hiện ở đây."
+                action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}<Lnk to="/online-orders/new" className="btn">+ Tạo đơn mạng xã hội</Lnk>{range.preset !== "lastMonth" && <Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button>}</div>} />}
+              cols={[
+                { key: "c", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="num nw">{o.code}</b> },
+                { key: "t", label: "Đặt lúc", hideBelow: 1440, sort: (o) => o.createdAt, render: (o) => fmtDateTime(o.createdAt) },
+                { key: "r", label: "Người nhận", sort: (o) => o.receiverName ?? "", render: (o) => <span>{o.receiverName}<div className="small muted">{o.receiverPhone}</div></span> },
+                { key: "ch", label: "Kênh", hideBelow: 1280, sort: (o) => CHANNEL_LABEL[o.channel] ?? o.channel, render: (o) => CHANNEL_LABEL[o.channel] ?? o.channel },
+                { key: "z", label: "Giao", sort: (o) => o.slotDate ?? "", render: (o) => <span>{o.slotDate ? `${ymdShow(o.slotDate)} ${o.slotLabel ?? ""}` : "Chưa hẹn"}<div className="small muted">{o.district ?? "—"}</div></span> },
+                { key: "p", label: "Thanh toán", hideBelow: 1280, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge> },
+                { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => (
+                  <span className="row wrap" style={{ gap: 4 }}>
+                    <Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status] ?? o.status}</Badge>
+                    {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
+                    {o.weightAdjustStatus === "pending_customer" && <Badge tone="warn">Chờ khách xác nhận cân</Badge>}
+                    {o.needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
+                    {o.diffAmount > 0 && <Badge tone="warn">Thu thêm {money(o.diffAmount)}</Badge>}
+                    {o.diffAmount < 0 && <Badge tone="danger">Hoàn {money(-o.diffAmount)}</Badge>}
+                  </span>) },
+                { key: "tt", label: "Tổng", num: true, sort: (o) => o.total, render: (o) => <span className="money">{money(o.total)}{o.estimated ? "*" : ""}</span> },
+              ]} />
+          </div>
+        )}
+      </SplitLayout>
     </div>
   );
 }
 
 /* ============================================================ chi tiết */
 type Mode = "" | "pack" | "ship" | "fail" | "redeliver" | "return" | "cancel" | "paid";
-function OrderDetail({ id }: { id: number }) {
+function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void; onChanged: () => void } }) {
   const can = useCan();
   const d = useAsync(() => get(`/online-orders/${id}`), [id]);
   const [data, setData] = useState<any>(null);
@@ -78,12 +107,12 @@ function OrderDetail({ id }: { id: number }) {
   const [mode, setMode] = useState<Mode>("");
   const [busy, setBusy] = useState(false);
   useEffect(() => setData(null), [id]);
-  if (d.loading && !o) return <Spinner />;
-  if (!o) return <div className="stack"><Back to="/online-orders" label="Đơn online" /><EmptyState title="Không tìm thấy đơn" /></div>;
+  if (d.loading && !o) return panel ? <DetailPanel title="Đơn online" onClose={panel.onClose}><Spinner /></DetailPanel> : <Spinner />;
+  if (!o) return panel ? <DetailPanel title="Đơn online" onClose={panel.onClose}><EmptyState title="Không tìm thấy đơn" /></DetailPanel> : <div className="stack"><Back to="/online-orders" label="Đơn online" /><EmptyState title="Không tìm thấy đơn" /></div>;
 
   const run = async (path: string, body: unknown, okMsg: string) => {
     setBusy(true);
-    try { const r = await post(`/online-orders/${id}/${path}`, body ?? {}); setData(r); setMode(""); toast(okMsg, "ok"); return r; }
+    try { const r = await post(`/online-orders/${id}/${path}`, body ?? {}); setData(r); setMode(""); toast(okMsg, "ok"); panel?.onChanged(); return r; }
     catch { return null; } finally { setBusy(false); }
   };
   const st = o.status as string;
@@ -96,16 +125,20 @@ function OrderDetail({ id }: { id: number }) {
   const needsRefund = o.refundDue > 0;
   const Act = ({ children, ...p }: any) => <Button size="lg" loading={busy && !mode} {...p}>{children}</Button>;
 
-  return (
+  const body = (
     <div className="stack">
-      <Back to="/online-orders" label="Đơn online" />
-      <div className="page-head" style={{ marginBottom: 0 }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 style={{ margin: 0 }} className="num">{o.code}</h2>
-          <div className="muted small">{CHANNEL_LABEL[o.channel] ?? o.channel} · tạo {fmtDateTime(o.createdAt)}</div>
+      {!panel && <Back to="/online-orders" label="Đơn online" />}
+      {!panel ? (
+        <div className="page-head" style={{ marginBottom: 0 }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0 }} className="num">{o.code}</h2>
+            <div className="muted small">{CHANNEL_LABEL[o.channel] ?? o.channel} · tạo {fmtDateTime(o.createdAt)}</div>
+          </div>
+          <Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge>
         </div>
-        <Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge>
-      </div>
+      ) : (
+        <div className="row between wrap"><span className="muted small">{CHANNEL_LABEL[o.channel] ?? o.channel} · tạo {fmtDateTime(o.createdAt)}</span><Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge></div>
+      )}
       <div className="row wrap" style={{ gap: 6 }}>
         <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
         {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
@@ -212,6 +245,7 @@ function OrderDetail({ id }: { id: number }) {
       {mode === "paid" && <PaidSheet o={o} busy={busy} onClose={() => setMode("")} onSubmit={(b) => run("mark-paid", b, "Đã xác nhận nhận tiền")} />}
     </div>
   );
+  return panel ? <DetailPanel title={`Đơn ${o.code}`} onClose={panel.onClose}>{body}</DetailPanel> : body;
 }
 const shipBlock = (st: string, reasons: string[]) => (st === "preparing" && reasons.length > 0 ? <Banner>{reasons.map((r) => <div key={r}>⚠ Chưa thể giao: {r}</div>)}</Banner> : null);
 

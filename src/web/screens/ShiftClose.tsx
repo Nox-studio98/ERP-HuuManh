@@ -2,7 +2,7 @@ import { useState } from "react";
 import { PageHeader } from "../components/list";
 import { ApiError, get, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, MoneyInput, Spinner, TextArea, useAsync } from "../components/ui";
-import { CHANNELS, METHODS, fmtTime, money, qtyText } from "../format";
+import { CHANNELS, METHODS, fmtDateTime, fmtTime, money, qtyText } from "../format";
 import { toast } from "../components/toast";
 import { navigate } from "../router";
 
@@ -18,7 +18,7 @@ export default function ShiftClose() {
   if (cur.loading) return <Spinner />;
   const s = cur.data;
   if (report) return <Summary r={report} />;
-  if (!s) return <Card><div className="stack"><div>Hiện không có ca nào đang mở.</div><Button onClick={() => navigate("/pos")}>Về bán hàng</Button></div></Card>;
+  if (!s) return <NoShift />;
   const expected: number | undefined = srvExpected;
   const diff = expected != null ? counted - expected : undefined;
   const needReason = diff !== undefined ? diff !== 0 : false;
@@ -36,8 +36,9 @@ export default function ShiftClose() {
     } finally { setBusy(false); }
   };
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto" }} className="stack">
-      <Card title={`Chốt ca #${s.id}`}>
+    <div className="hero-panel" style={{ maxWidth: 980 }}>
+     <div className="hero-grid">
+      <Card title={`Chốt ca #${s.id}`} className="hero-main">
         <div className="stack">
           <div className="grid2">
             <div className="kpi"><div className="l">Tiền đầu ca</div><div className="v">{money(s.openingCash)}</div></div>
@@ -47,6 +48,43 @@ export default function ShiftClose() {
           {diff !== undefined && <div className={"banner " + (diff === 0 ? "info" : "")}>{diff === 0 ? "Khớp, không chênh lệch." : `Chênh lệch ${diff > 0 ? "thừa" : "thiếu"} ${money(Math.abs(diff))}`}</div>}
           <TextArea label={needReason ? "Lý do chênh lệch (bắt buộc)" : "Lý do chênh lệch (nếu có)"} value={reason} onChange={(e) => setReason(e.target.value)} />
           <Button size="lg" block loading={busy} disabled={needReason && reason.trim().length < 3} onClick={close}>Chốt ca</Button>
+        </div>
+      </Card>
+      <Card title="Thông tin ca">
+        <div className="stack">
+          <div className="kv-row"><span className="muted">Mở lúc</span><b>{fmtDateTime(s.openedAt)}</b></div>
+          <div className="kv-row"><span className="muted">Tiền đầu ca</span><b className="money">{money(s.openingCash)}</b></div>
+          <div className="hint">Hệ thống tự tính tiền dự kiến trong két từ các đơn tiền mặt của ca. Đếm tiền thực tế rồi nhập vào ô bên cạnh; nếu lệch cần ghi lý do.</div>
+        </div>
+      </Card>
+     </div>
+    </div>
+  );
+}
+
+function NoShift() {
+  const last = useAsync(async () => { try { return (await get("/shifts/last", undefined, { silent: true }))?.shift ?? null; } catch { return null; } }, []);
+  const l = last.data;
+  return (
+    <div className="hero-panel" style={{ maxWidth: 760 }}>
+      <Card>
+        <div className="stack" style={{ padding: "var(--s-3)" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "1.25rem" }}>Hiện không có ca nào đang mở</h2>
+            <div className="muted">Mở ca ở màn Bán hàng để bắt đầu bán; khi kết thúc quay lại đây để chốt ca và đối chiếu tiền mặt.</div>
+          </div>
+          <div className="row wrap"><Button onClick={() => navigate("/pos")}>Mở ca bán hàng</Button><Button variant="ghost" onClick={() => navigate("/orders")}>Xem đơn hàng</Button></div>
+          {last.loading ? null : l && (
+            <div className="stack">
+              <hr style={{ border: 0, borderTop: "1px solid var(--border)", width: "100%" }} />
+              <div className="muted small">Ca gần nhất — #{l.id} · chốt lúc {fmtDateTime(l.closedAt)}</div>
+              <div className="kpis">
+                <div className="kpi"><div className="l">Doanh thu</div><div className="v">{money(l.revenue)}</div><div className="s small muted">{l.orderCount} đơn</div></div>
+                <div className="kpi"><div className="l">Kiểm đếm</div><div className="v">{money(l.countedCash)}</div><div className="s small muted">dự kiến {money(l.expectedCash)}</div></div>
+                <div className="kpi"><div className="l">Chênh lệch</div><div className="v" style={{ color: l.diffCash ? "var(--warn)" : undefined }}>{money(l.diffCash ?? 0)}</div></div>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
     </div>

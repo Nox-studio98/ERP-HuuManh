@@ -10,7 +10,7 @@ import { Button, Sheet } from "./ui";
 
 /* ---------------- PageHeader ---------------- */
 /** Tiêu đề màn hình nằm ở thanh trên cùng (tự lấy từ menu). PageHeader chỉ thêm phụ đề + nút thao tác bên phải. `title` chỉ dùng cho màn con (vd. "Đơn DS-001"). */
-export function PageHeader({ title, subtitle, actions }: { title?: string; subtitle?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ title, subtitle, actions, compact }: { title?: string; subtitle?: ReactNode; actions?: ReactNode; compact?: boolean }) {
   if (!title && !subtitle && !actions) return null;
   return (
     <div className="page-header">
@@ -18,7 +18,7 @@ export function PageHeader({ title, subtitle, actions }: { title?: string; subti
         {title && <h2 className="ph-title">{title}</h2>}
         {subtitle && <div className="ph-sub muted">{subtitle}</div>}
       </div>
-      {actions && <div className="ph-actions">{actions}</div>}
+      {actions && <div className={"ph-actions" + (compact ? " compact" : "")}>{actions}</div>}
     </div>
   );
 }
@@ -141,9 +141,9 @@ export const deltaPct = (cur: number, prev: number): number | null => (prev === 
 /* ---------------- Xuất CSV ---------------- */
 export type ExportCol<T> = { label: string; value: (r: T) => string | number | null | undefined };
 /** Xuất các dòng ĐANG HIỂN THỊ ra CSV (UTF-8 BOM, mở bằng Excel). Số xuất dạng số thật, không kèm "₫". */
-export function ExportButton<T>({ filename, rows, columns, disabled, label = "Xuất CSV" }: { filename: string; rows: T[]; columns: ExportCol<T>[]; disabled?: boolean; label?: string }) {
+export function ExportButton<T>({ filename, rows, columns, disabled, label = "Xuất CSV", className }: { filename: string; rows: T[]; columns: ExportCol<T>[]; disabled?: boolean; label?: string; className?: string }) {
   return (
-    <Button variant="ghost" size="sm" disabled={disabled || !rows.length} onClick={() => downloadCsv(filename, columns.map((c) => c.label), rows.map((r) => columns.map((c) => c.value(r) ?? "")))}>
+    <Button variant="ghost" size="sm" className={className} disabled={disabled || !rows.length} onClick={() => downloadCsv(filename, columns.map((c) => c.label), rows.map((r) => columns.map((c) => c.value(r) ?? "")))}>
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style={{ stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }}><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>
       {label}
     </Button>
@@ -214,4 +214,10 @@ export function usePagedList<T = any>(path: string, query: Q, deps: unknown[]) {
     } catch { /* toast */ } finally { setLoadingMore(false); }
   };
   return { rows, loading, loadingMore, hasMore: !!next, loadMore, reload: () => setTick((x) => x + 1), extra, error };
+}
+
+/** Theo dõi một media query (vd. "(min-width: 1024px)"). */
+export function useMedia(query: string) {
+  const sub = (f: () => void) => { const m = window.matchMedia(query); m.addEventListener("change", f); return () => m.removeEventListener("change", f); };
+  return useSyncExternalStore(sub, () => window.matchMedia(query).matches, () => false);
 }

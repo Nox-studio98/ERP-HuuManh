@@ -5,7 +5,7 @@ import type { AppBindings } from "../env";
 import { requirePerm, maskPhone } from "../lib/rbac";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
-import { guarded, parseBody } from "../services/http";
+import { addVnRange, guarded, parseBody } from "../services/http";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { CUSTOMER_LABEL, type OnlineStatus } from "../services/online-orders";
 import { bankFundId, markOrderPaid } from "../services/online-payments";
@@ -43,6 +43,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     base.push(`o.slot_date = ?`);
     bp.push(q.slotDate);
   }
+  addVnRange(q, "o.created_at", base, bp);
   if (q.q?.trim()) {
     const like = `%${q.q.trim().replace(/[\\%_]/g, (m) => "\\" + m)}%`;
     base.push(`(o.code LIKE ? ESCAPE '\\' OR o.receiver_name LIKE ? ESCAPE '\\' OR o.receiver_phone LIKE ? ESCAPE '\\')`);
@@ -100,9 +101,9 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
   }));
   const cnt = (
     await c.env.DB
-      .prepare(`SELECT o.status, COUNT(*) AS n FROM orders o WHERE ${base.join(" AND ")} GROUP BY o.status`)
+      .prepare(`SELECT o.status, COUNT(*) AS n, COALESCE(SUM(o.total),0) AS s FROM orders o WHERE ${base.join(" AND ")} GROUP BY o.status`)
       .bind(...bp)
-      .all<{ status: string; n: number }>()
+      .all<{ status: string; n: number; s: number }>()
   ).results;
   const counts: Record<string, number> = Object.fromEntries(STATUSES.map((s) => [s, 0]));
   let all = 0;
@@ -111,7 +112,10 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     all += r.n;
   }
   counts.all = all;
-  return c.json({ items, nextCursor: rows.length > limit ? String(page[page.length - 1].id) : null, counts });
+  // Tổng hợp theo bộ lọc (ngày/kênh/tìm kiếm), không phụ thuộc trạng thái đang chọn và phân trang
+  const live = cnt.filter((r) => !["cancelled", "returned", "delivery_failed"].includes(r.status));
+  const summary = { count: all, revenue: cnt.filter((r) => r.status === "completed").reduce((a, r) => a + r.s, 0), pipelineTotal: live.filter((r) => r.status !== "completed").reduce((a, r) => a + r.s, 0), cancelled: (counts.cancelled ?? 0) + (counts.returned ?? 0) + (counts.delivery_failed ?? 0) };
+  return c.json({ items, nextCursor: rows.length > limit ? String(page[page.length - 1].id) : null, counts, summary });
 });
 
 async function orderDetail(c: Ctx, oid: number) {

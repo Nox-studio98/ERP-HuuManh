@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageHeader, SearchInput, FilterBar } from "../../components/list";
 import { del, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, EmptyState, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../../components/ui";
 import { toast } from "../../components/toast";
@@ -12,24 +13,27 @@ export default function Website() {
   if (!can("products.write")) return <EmptyState title="Bạn không có quyền quản lý website" />;
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "banners", label: "Banner" }, { v: "posts", label: "Bài viết" }, { v: "products", label: "Sản phẩm online" }]} />
+      <PageHeader subtitle="Nội dung hiển thị trên website bán hàng: banner trang chủ, bài viết và sản phẩm bán online" />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "banners", label: "Banner" }, { v: "posts", label: "Bài viết" }, { v: "products", label: "Sản phẩm online" }]} />
       {tab === "banners" ? <Banners /> : tab === "posts" ? <Posts /> : <OnlineProducts />}
     </div>
   );
 }
 
 function OnlineProducts() {
-  const [q, setQ] = useState(""); const dq = useDebounced(q);
+  const [q, setQ] = useState(""); const dq = q;
   const l = useAsync(() => get("/products", { q: dq, limit: 50 }).then((r) => items<any>(r)), [dq]);
   const [sel, setSel] = useState<any>(null);
   return (
     <div className="stack">
-      <Input label="Tìm hàng hoá" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
-      {l.loading ? <Spinner /> : (l.data ?? []).map((p) => (
-        <button key={p.id} className="dt-card" onClick={() => setSel(p)}>
-          <div className="row between"><b>{p.name}</b><span className="small muted num">{p.sku}</span></div>
-        </button>
-      ))}
+      <FilterBar dirty={!!q} onReset={() => setQ("")}><SearchInput value={q} onSearch={setQ} placeholder="Tên, SKU, mã vạch…" label="Tìm hàng hoá" /><span className="muted small">Chọn một mặt hàng để cấu hình ảnh, mô tả và hiển thị trên website.</span></FilterBar>
+      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <Card><EmptyState title="Không tìm thấy hàng hoá" action={q ? <Button variant="soft" onClick={() => setQ("")}>Xoá lọc</Button> : undefined} /></Card> : (
+        <div className="cards-grid sm">{(l.data ?? []).map((p) => (
+          <button key={p.id} className="dt-card" onClick={() => setSel(p)}>
+            <div className="row between"><b>{p.name}</b><span className="small muted num">{p.sku}</span></div>
+          </button>
+        ))}</div>
+      )}
       {sel && <Sheet open wide onClose={() => setSel(null)} title={`Bán online · ${sel.name}`}><ProductOnline productId={sel.id} /></Sheet>}
     </div>
   );
@@ -41,9 +45,9 @@ function Banners() {
   const [edit, setEdit] = useState<any>(null);
   return (
     <div className="stack">
-      <div className="row"><Button onClick={() => setEdit({})}>+ Thêm banner</Button></div>
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có banner" hint="Banner hiển thị ở trang chủ website." /> : (
-        <div className="stack" data-testid="banner-list">
+      <div className="row between wrap"><span className="muted small">{(l.data ?? []).length} banner · hiển thị theo thứ tự ở trang chủ website</span><Button onClick={() => setEdit({})}>+ Thêm banner</Button></div>
+      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <Card><EmptyState title="Chưa có banner" hint="Banner hiển thị ở trang chủ website." action={<Button onClick={() => setEdit({})}>+ Thêm banner</Button>} /></Card> : (
+        <div className="cards-grid" data-testid="banner-list">
           {l.data!.map((b) => (
             <button key={b.id} className="dt-card" onClick={() => setEdit(b)}>
               <div className="row"><Img src={b.imageUrl} size={64} /><div className="grow" style={{ minWidth: 0 }}><b>{b.title}</b><div className="small muted truncate">{b.linkUrl ?? "Không liên kết"}</div></div>{b.active ? <Badge tone="ok">Hiện</Badge> : <Badge>Ẩn</Badge>}</div>
@@ -86,9 +90,9 @@ function Posts() {
   const open = async (p: any) => { if (!p.id) return setEdit({}); try { setEdit(await get(`/cms/posts/${p.id}`)); } catch { /* */ } };
   return (
     <div className="stack">
-      <div className="row"><Button onClick={() => open({})}>+ Viết bài</Button></div>
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có bài viết" /> : (
-        <div className="stack" data-testid="post-list">
+      <div className="row between wrap"><span className="muted small">{(l.data ?? []).length} bài viết</span><Button onClick={() => open({})}>+ Viết bài</Button></div>
+      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <Card><EmptyState title="Chưa có bài viết" hint="Viết bài giới thiệu, mẹo chọn trái cây, thông báo khuyến mãi…" action={<Button onClick={() => open({})}>+ Viết bài</Button>} /></Card> : (
+        <div className="cards-grid" data-testid="post-list">
           {l.data!.map((p) => (
             <button key={p.id} className="dt-card" onClick={() => open(p)}>
               <div className="row"><Img src={p.coverUrl} size={56} /><div className="grow" style={{ minWidth: 0 }}><b>{p.title}</b><div className="small muted truncate">/{p.slug}{p.publishedAt ? ` · ${ymdShow(p.publishedAt)}` : ""}</div></div><Badge tone={p.status === "published" ? "ok" : "warn"}>{p.status === "published" ? "Đã đăng" : "Nháp"}</Badge></div>

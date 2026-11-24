@@ -13,7 +13,7 @@ import { assertStmt, onceStmt } from "../services/guard";
 import { freeLotReservations, swapBadReservations } from "../services/reservations";
 import { sysAuditStmt } from "../services/sysaudit";
 import { enqueueJobStmt, kickJobs } from "../services/outbox";
-import { deviceIdOf, getSetting, guarded, isExpired, pageParams, parseBody, unitFactor } from "../services/http";
+import { addVnRange, deviceIdOf, getSetting, guarded, isExpired, pageParams, parseBody, unitFactor } from "../services/http";
 
 export const inventoryRoutes = new Hono<AppBindings>();
 
@@ -90,7 +90,9 @@ inventoryRoutes.get("/stock-docs", requirePerm("inventory.view"), async (c) => {
   const { limit, cursor } = pageParams(c);
   const where: string[] = [];
   const binds: unknown[] = [];
-  const { type, status, day } = c.req.query();
+  const { type, status, day, q: qs } = c.req.query();
+  if (qs?.trim()) (where.push(`d.code LIKE ? ESCAPE '\\'`), binds.push(`%${qs.trim().replace(/[\\%_]/g, (m) => "\\" + m)}%`));
+  if (!day) addVnRange(c.req.query(), "d.created_at", where, binds);
   if (type) (where.push("d.type = ?"), binds.push(type));
   if (status) (where.push("d.status = ?"), binds.push(status));
   if (day) {

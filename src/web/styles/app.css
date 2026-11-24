@@ -433,3 +433,60 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .cmdk-lbl { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmdk-item .sub { min-width: 0; }
 @media (max-width: 767px) { .cmdk-foot { display: none; } }
+
+/* ===== UX 2B: panel giữa màn hình, kanban, lưới thẻ, POS rộng ===== */
+.hero-panel { max-width: 980px; margin: var(--s-4) auto 0; }
+.hero-grid { display: grid; gap: var(--s-4); align-items: start; }
+@media (min-width: 900px) { .hero-grid { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); } .hero-panel { margin-top: var(--s-6); } }
+.hero-main { padding: var(--s-5); }
+.kbd-list { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-size: .9rem; }
+.kbd-hint { display: none; opacity: .7; font-weight: 500; font-size: .8em; margin-left: 4px; }
+@media (min-width: 1024px) { .kbd-hint { display: inline; } }
+.kanban { display: grid; gap: var(--s-4); grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.kanban-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-2); min-height: 240px; }
+.kanban-col > h3 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 var(--s-1); font-size: .95rem; }
+.kanban-card { text-align: left; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s-3); cursor: pointer; display: flex; flex-direction: column; gap: 4px; font: inherit; color: inherit; }
+.kanban-card:hover { border-color: var(--accent); }
+.kanban-card:disabled { opacity: .6; }
+.kanban-empty { color: var(--muted); font-size: .9rem; padding: var(--s-4) var(--s-2); text-align: center; }
+.cards-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
+.cards-grid.sm { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.only-desktop { display: none !important; }
+@media (min-width: 1024px) { .only-desktop { display: initial !important; } .only-narrow { display: none !important; } }
+@media (min-width: 1024px) {
+  .pos { grid-template-columns: minmax(0, 1fr) 420px; }
+  .pos-cart, .pos.show-cart .pos-cart { top: calc(var(--topbar-h) + var(--s-4)); }
+  .pgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+@media (min-width: 1600px) {
+  .pos { grid-template-columns: minmax(0, 1fr) 480px; gap: var(--s-5); }
+  .pgrid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--s-3); }
+  .ptile { min-height: 108px; }
+}
+.pos-cart .totals .grand { font-size: 1.5rem; }
+.tab-bar-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.tab-bar-row .seg { flex: 0 1 auto; }
+@media (min-width: 768px) { .tab-bar-row .seg { min-width: 320px; } }
+@media (min-width: 1024px) { .seg.tabs-d { display: inline-flex; align-self: flex-start; max-width: 100%; } .seg.tabs-d button { flex: 0 0 auto; padding: 0 var(--s-5); min-width: 120px; } }
+.alert-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .alert-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.trace-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .trace-grid { grid-template-columns: 380px minmax(0, 1fr); } }
+@media (min-width: 1024px) { .ph-actions.compact .btn { min-height: 38px; padding: 0 var(--s-4); font-size: .92rem; } }
+.filterbar .fb-end { margin-left: auto; align-self: flex-end; }
+@media (max-width: 767px) { .filterbar .fb-end { margin-left: 0; } }
+.hero-grid { align-items: stretch; }
+.two-col { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.dt-card .kv > span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.dt-card .kv > span.num { white-space: normal; }
+@media (min-width: 1024px) {
+  .pos-cart .cartline .row.wrap { flex-wrap: nowrap; gap: var(--s-2); }
+  .pos-cart .qty button { width: 38px; height: 38px; }
+  .pos-cart .qty input { width: 52px; height: 38px; }
+  .pos-cart .cartline select.input { width: 74px !important; min-height: 38px; padding: 0 6px; }
+  .pos-cart .cartline .input[placeholder^="Giảm"] { width: 84px !important; }
+  .pos-cart .cartline .btn.sm { padding: 0 var(--s-2); }
+}
+.detail-panel .dt-wrap, .split.open .dt-wrap { overflow-x: auto; }
+.detail-panel .dt-table th, .detail-panel .dt-table td { padding: 8px var(--s-2); }

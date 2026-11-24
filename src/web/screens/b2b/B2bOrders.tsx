@@ -5,6 +5,7 @@ import { toast } from "../../components/toast";
 import { ORDER_STATUS, money, todayVN, unitLabel, uuid } from "../../format";
 import { navigate, usePath } from "../../router";
 import Recurring from "./Recurring";
+import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, rangeOf, usePagedList, type DateRange } from "../../components/list";
 import { useCan } from "../../store";
 import {
   Back, CreditBlocked, CustomerSelect, DELIVERY_STATUS, EINVOICE, INVOICE_KIND, LinesEditor, Lnk, QUOTE_STATUS, ReasonSheet, deliveryTone, einvTone, linePayload, orderTone, qparam, q3, qtyU, ymd,
@@ -17,33 +18,62 @@ export default function B2bOrders() {
   return m ? <OrderDetail id={Number(m[1])} /> : <OrderList />;
 }
 
+const OSTATUS = ["new", "confirmed", "preparing", "shipping", "completed", "delivery_failed", "cancelled"];
 function OrderList() {
   const can = useCan();
-  const [status, setStatus] = useState(""), [day, setDay] = useState("");
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [status, setStatus] = useState(""), [day, setDay] = useState(""), [cust, setCust] = useState(""), [q, setQ] = useState("");
   const pre = qparam("new");
   const [creating, setCreating] = useState(!!pre);
   const [tab, setTab] = useState<"orders" | "recurring">("orders");
-  const list = useAsync(() => get("/b2b/orders", { status, deliveryDate: day, limit: 100 }).then((r) => items<any>(r)), [status, day]);
-  const rows = list.data ?? [];
-  if (tab === "recurring") return <div className="stack"><Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} /><Recurring /></div>;
+  const custs = useAsync(() => get("/customers", { type: "b2b", limit: 200 }, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]), []);
+  const list = usePagedList<any>("/b2b/orders", { status, deliveryDate: day, customerId: cust, q, from: range.from, to: range.to, limit: 50 }, [status, day, cust, q, range.from, range.to]);
+  const sum = list.extra?.summary;
+  const by = (k: string) => sum?.byStatus?.[k]?.count ?? 0;
+  const dirty = !!(status || day || cust || q);
+  const reset = () => { setStatus(""); setDay(""); setCust(""); setQ(""); };
+  const tabs = can("b2b.write") ? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} /> : null;
+  if (tab === "recurring") return <div className="stack">{tabs ?? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />}<Recurring /></div>;
+  const rangeLabel = range.from === range.to ? ymd(range.from) : `${ymd(range.from)} – ${ymd(range.to)}`;
   return (
     <div className="stack">
-      {can("b2b.write") && <Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />}
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
-        <div className="grow" style={{ minWidth: 160 }}><Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Tất cả</option>{["new", "confirmed", "preparing", "shipping", "completed", "delivery_failed", "cancelled"].map((s) => <option key={s} value={s}>{ORDER_STATUS[s]}</option>)}</Select></div>
-        <div style={{ minWidth: 160 }}><Input label="Ngày giao" type="date" value={day} onChange={(e) => setDay(e.target.value)} /></div>
-        {day && <Button variant="ghost" onClick={() => setDay("")}>Bỏ lọc ngày</Button>}
-        {can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo đơn sỉ</Button>}
-      </div>
+      <PageHeader compact subtitle={<>Tạo từ {rangeLabel}{sum ? <> · {sum.count} đơn</> : null}</>}
+        actions={<>
+          <ExportButton filename={`don-si-${range.from}_${range.to}`} rows={list.rows} columns={[
+            { label: "Mã đơn", value: (o) => o.code }, { label: "Khách hàng", value: (o) => o.customerName }, { label: "Trạng thái", value: (o) => ORDER_STATUS[o.status] ?? o.status },
+            { label: "Ngày tạo", value: (o) => ymd(o.createdAt) }, { label: "Ngày giao", value: (o) => ymd(o.deliveryDate) }, { label: "Địa chỉ", value: (o) => o.addressLabel }, { label: "Tổng", value: (o) => o.total },
+          ]} />
+          {can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo đơn sỉ</Button>}
+        </>} />
+      {tabs}
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[status, cust, day].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={OSTATUS.map((v) => ({ v, label: ORDER_STATUS[v] ?? v }))} />
+        <FilterSelect label="Khách hàng" value={cust} onChange={setCust} options={(custs.data ?? []).map((c: any) => ({ v: String(c.id), label: c.name }))} />
+        <label className="field"><span className="lbl">Ngày giao</span><input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} style={{ minHeight: 40 }} /></label>
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["today", "7d", "month", "lastMonth", "custom"]} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên khách…" label="Tìm đơn sỉ" />
+      </FilterBar>
+      <KpiRow items={[
+        { label: "Số đơn", value: sum ? sum.count : "—", sub: sum ? `${by("cancelled")} đã huỷ` : undefined },
+        { label: "Giá trị đơn", value: sum ? money(sum.total) : "—", sub: "không tính đơn huỷ", tone: "ok" },
+        { label: "Đang xử lý", value: sum ? by("new") + by("confirmed") + by("preparing") + by("shipping") : "—", sub: sum ? `${by("new")} mới · ${by("shipping")} đang giao` : undefined, tone: "info" },
+        { label: "Đã giao xong", value: sum ? by("completed") : "—", sub: sum && by("delivery_failed") ? `${by("delivery_failed")} giao thất bại` : undefined },
+      ]} />
       {list.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(o) => o.id} onRowClick={(o) => navigate(`/b2b-orders/${o.id}`)} empty="Chưa có đơn sỉ" cols={[
-          { key: "c", label: "Mã đơn", title: true, render: (o) => <b>{o.code}</b> },
-          { key: "k", label: "Khách hàng", render: (o) => o.customerName },
-          { key: "s", label: "Trạng thái", render: (o) => <Badge tone={orderTone(o.status)}>{ORDER_STATUS[o.status] ?? o.status}</Badge> },
-          { key: "d", label: "Ngày giao", render: (o) => ymd(o.deliveryDate) },
-          { key: "a", label: "Địa chỉ", hideMobile: true, render: (o) => o.addressLabel ?? "—" },
-          { key: "t", label: "Tổng", right: true, render: (o) => <span className="money">{money(o.total)}</span> },
-        ]} />
+        <DataTable rows={list.rows} rowKey={(o) => o.id} onRowClick={(o) => navigate(`/b2b-orders/${o.id}`)} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+          footer={`Đang hiển thị ${list.rows.length}${sum ? ` / ${sum.count}` : ""} đơn`}
+          emptyState={<EmptyState title={dirty ? "Không có đơn sỉ nào khớp bộ lọc" : "Chưa có đơn sỉ trong khoảng này"} hint="Đơn sỉ tạo trực tiếp, từ báo giá hoặc từ mẫu đơn lặp sẽ hiện ở đây."
+            action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo đơn sỉ</Button>}{range.preset !== "lastMonth" && <Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button>}</div>} />}
+          cols={[
+            { key: "c", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="nw">{o.code}</b> },
+            { key: "k", label: "Khách hàng", sort: (o) => o.customerName, render: (o) => o.customerName },
+            { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={orderTone(o.status)}>{ORDER_STATUS[o.status] ?? o.status}</Badge> },
+            { key: "cr", label: "Ngày tạo", hideBelow: 1280, sort: (o) => o.createdAt, render: (o) => ymd(o.createdAt) },
+            { key: "d", label: "Ngày giao", sort: (o) => o.deliveryDate, render: (o) => ymd(o.deliveryDate) },
+            { key: "a", label: "Địa chỉ", hideMobile: true, hideBelow: 1024, render: (o) => o.addressLabel ?? "—" },
+            { key: "t", label: "Tổng", num: true, sort: (o) => o.total, render: (o) => <span className="money">{money(o.total)}</span> },
+          ]} />
       )}
       {creating && <OrderForm presetCustomerId={pre ? Number(pre) : undefined} onClose={() => { setCreating(false); if (pre) history.replaceState({}, "", "/b2b-orders"); }} onCreated={(id) => { setCreating(false); if (pre) history.replaceState({}, "", "/b2b-orders"); navigate(`/b2b-orders/${id}`); }} />}
     </div>

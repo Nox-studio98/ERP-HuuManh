@@ -3,6 +3,7 @@ import type { ZodTypeAny, z } from "zod";
 import type { AppBindings } from "../env";
 import { AppError, conflict } from "../lib/errors";
 import { toMilli } from "../lib/money";
+import { vnDayRangeUtc } from "../lib/time";
 
 /** Đọc + kiểm tra JSON body bằng zod. */
 export async function parseBody<S extends ZodTypeAny>(c: Context<AppBindings>, schema: S): Promise<z.infer<S>> {
@@ -24,6 +25,24 @@ export function pageParams(c: Context<AppBindings>) {
   const cursor = Number(c.req.query("cursor") ?? 0) || 0;
   return { limit, cursor };
 }
+
+/** Lọc khoảng ngày VN `from`/`to` (YYYY-MM-DD, gồm cả hai đầu, tối đa 366 ngày) trên cột thời gian UTC `col`. Thêm điều kiện vào conds/params. */
+export function addVnRange(q: Record<string, string | undefined>, col: string, conds: string[], params: unknown[]) {
+  if (!q.from && !q.to) return;
+  const ok = (v: string, n: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v + "T00:00:00Z"))) throw new AppError(422, "validation_error", `${n} phải có dạng YYYY-MM-DD`);
+    return v;
+  };
+  const from = ok((q.from ?? q.to)!, "from"), to = ok((q.to ?? q.from)!, "to");
+  if (to < from) throw new AppError(422, "validation_error", "to phải sau hoặc bằng from");
+  if ((Date.parse(to) - Date.parse(from)) / 86400_000 > 366) throw new AppError(422, "validation_error", "Khoảng ngày tối đa 366 ngày");
+  const a = vnDayRangeUtc(from), b = vnDayRangeUtc(to);
+  conds.push(`${col} >= ? AND ${col} < ?`);
+  params.push(a.from, b.to);
+}
+
+/** Escape LIKE (dùng với ESCAPE '\\'). */
+export const likeOf = (s: string) => `%${s.trim().replace(/[\\%_]/g, (m) => "\\" + m)}%`;
 
 export async function getSetting(db: D1Database, key: string, fallback: number) {
   const r = await db.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>();

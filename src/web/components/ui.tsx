@@ -121,9 +121,9 @@ export const EmptyState = ({ title, hint, action }: { title: string; hint?: stri
 export const Spinner = () => <div className="spinner" role="status" aria-label="Đang tải" />;
 export const Banner = ({ tone, children }: { tone?: "danger" | "info"; children: ReactNode }) => <div className={"banner " + (tone ?? "")} role="alert">{children}</div>;
 
-export function Segmented<T extends string>({ value, onChange, options, wrap }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[]; wrap?: boolean }) {
+export function Segmented<T extends string>({ value, onChange, options, wrap, className }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[]; wrap?: boolean; className?: string }) {
   return (
-    <div className={"seg" + (wrap ? " wrap" : "")} role="tablist">
+    <div className={"seg" + (wrap ? " wrap" : "") + (className ? " " + className : "")} role="tablist">
       {options.map((o) => <button key={o.v} role="tab" aria-selected={value === o.v} onClick={() => onChange(o.v)}>{o.label}</button>)}
     </div>
   );
