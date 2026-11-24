@@ -290,7 +290,7 @@ try {
 
   step("Website: banner + bài viết (markdown)");
   await go(o.page, "/website");
-  await o.page.getByRole("button", { name: "+ Thêm banner" }).click();
+  await o.page.getByRole("button", { name: "+ Thêm banner" }).first().click();
   let d = dlg(o.page);
   await d.getByLabel("Tiêu đề").fill(`Banner ${RUN}`);
   assert(await d.getByRole("button", { name: "Lưu banner" }).isDisabled(), "banner chưa có ảnh → không lưu được");
