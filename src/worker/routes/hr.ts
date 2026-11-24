@@ -900,6 +900,46 @@ const mapLeave = (r: any) => ({
 });
 const LEAVE_SELECT = `SELECT lr.*, lt.code, e.full_name FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.leave_type_id JOIN employees e ON e.id = lr.employee_id`;
 
+// ===================== Loại nghỉ (cấu hình) =====================
+const mapLeaveType = (r: any) => ({ id: r.id, code: r.code, name: r.name, paid: bool(r.paid), usesBalance: bool(r.uses_balance), active: bool(r.active) });
+const leaveTypeBody = z.object({
+  code: z.string().trim().toLowerCase().regex(/^[a-z0-9_]{2,30}$/, "Mã chỉ gồm chữ thường, số, gạch dưới (2-30 ký tự)"),
+  name: z.string().trim().min(1).max(60), paid: z.boolean(), usesBalance: z.boolean(), active: z.boolean().optional(),
+});
+
+hrRoutes.get("/leave-types", async (c) => {
+  const u = c.get("user");
+  if (!u || !(can(u.role, "hr.view") || can(u.role, "hr.self"))) throw forbidden();
+  const all = c.req.query("all") === "1" && can(u.role, "hr.view");
+  const { results } = await c.env.DB.prepare(`SELECT * FROM leave_types ${all ? "" : "WHERE active = 1"} ORDER BY id`).all<any>();
+  return c.json({ items: results.map(mapLeaveType), nextCursor: null });
+});
+
+hrRoutes.post("/leave-types", requirePerm("hr.manage"), async (c) => {
+  const b = await parseBody(c, leaveTypeBody);
+  const db = c.env.DB;
+  if (await db.prepare(`SELECT id FROM leave_types WHERE code=?`).bind(b.code).first()) throw conflict("duplicate", "Mã loại nghỉ đã tồn tại");
+  const [r] = await db.batch([
+    db.prepare(`INSERT INTO leave_types(code, name, paid, uses_balance, active) VALUES (?,?,?,?,?)`).bind(b.code, b.name, b.paid ? 1 : 0, b.usesBalance ? 1 : 0, b.active === false ? 0 : 1),
+    auditStmt(c, { action: "hr.leave_type.create", entity: "leave_type", entityId: b.code, after: b }),
+  ]);
+  return c.json(mapLeaveType(await db.prepare(`SELECT * FROM leave_types WHERE id=?`).bind(r.meta.last_row_id).first()), 201);
+});
+
+hrRoutes.put("/leave-types/:id", requirePerm("hr.manage"), async (c) => {
+  const id = idOf(c);
+  const b = await parseBody(c, leaveTypeBody.omit({ code: true }).partial());
+  const db = c.env.DB;
+  const cur = await db.prepare(`SELECT * FROM leave_types WHERE id=?`).bind(id).first<any>();
+  if (!cur) throw notFound("leave_type_not_found", "Không tìm thấy loại nghỉ");
+  const next = { name: b.name ?? cur.name, paid: b.paid ?? bool(cur.paid), usesBalance: b.usesBalance ?? bool(cur.uses_balance), active: b.active ?? bool(cur.active) };
+  await db.batch([
+    db.prepare(`UPDATE leave_types SET name=?, paid=?, uses_balance=?, active=? WHERE id=?`).bind(next.name, next.paid ? 1 : 0, next.usesBalance ? 1 : 0, next.active ? 1 : 0, id),
+    auditStmt(c, { action: "hr.leave_type.update", entity: "leave_type", entityId: id, before: mapLeaveType(cur), after: next }),
+  ]);
+  return c.json(mapLeaveType(await db.prepare(`SELECT * FROM leave_types WHERE id=?`).bind(id).first()));
+});
+
 hrRoutes.post("/me/leave-requests", requirePerm("hr.self"), async (c) => {
   const b = await parseBody(c, z.object({ leaveTypeCode: z.string().min(1).max(30), fromDate: dateS, toDate: dateS, halfDay: z.boolean().optional(), reason: z.string().trim().max(500).optional() }));
   const db = c.env.DB;
@@ -907,8 +947,8 @@ hrRoutes.post("/me/leave-requests", requirePerm("hr.self"), async (c) => {
   if (b.fromDate > b.toDate) throw new AppError(422, "validation_error", "Ngày bắt đầu sau ngày kết thúc");
   if (eachDate(b.fromDate, b.toDate).length > 120) throw new AppError(422, "validation_error", "Khoảng nghỉ tối đa 120 ngày");
   if (b.halfDay && b.fromDate !== b.toDate) throw new AppError(422, "validation_error", "Nghỉ nửa ngày chỉ áp dụng cho một ngày");
-  const lt = await db.prepare(`SELECT id, uses_balance FROM leave_types WHERE code=?`).bind(b.leaveTypeCode).first<any>();
-  if (!lt) throw new AppError(422, "leave_type_invalid", "Loại nghỉ không tồn tại");
+  const lt = await db.prepare(`SELECT id, uses_balance FROM leave_types WHERE code=? AND active=1`).bind(b.leaveTypeCode).first<any>();
+  if (!lt) throw new AppError(422, "leave_type_invalid", "Loại nghỉ không tồn tại hoặc đã ngừng dùng");
   const hol = new Set((await db.prepare(`SELECT day FROM holidays WHERE day >= ? AND day <= ?`).bind(b.fromDate, b.toDate).all<{ day: string }>()).results.map((h) => h.day));
   // Chỉ bỏ ngày lễ (không bỏ Chủ nhật — ngày nghỉ hằng tuần do lịch ca quyết định)
   const dates = eachDate(b.fromDate, b.toDate).filter((d) => !hol.has(d));

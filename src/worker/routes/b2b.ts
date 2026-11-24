@@ -637,7 +637,16 @@ const recurShape = (r: any) => ({
 
 b2bRoutes.get("/b2b/recurring", requirePerm("b2b.write"), async (c) => {
   const rows = (await c.env.DB.prepare(`SELECT r.*, cu.name AS customer_name FROM recurring_orders r JOIN customers cu ON cu.id = r.customer_id ORDER BY r.id DESC`).all<any>()).results;
-  return c.json({ items: rows.map(recurShape), nextCursor: null });
+  const shaped = rows.map(recurShape);
+  const ids = [...new Set(shaped.flatMap((r) => r.lines.map((l: any) => Number(l.productId))))];
+  const names = new Map<number, string>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50);
+    const res = await c.env.DB.prepare(`SELECT id, name FROM products WHERE id IN (${part.map(() => "?").join(",")})`).bind(...part).all<{ id: number; name: string }>();
+    for (const p of res.results) names.set(p.id, p.name);
+  }
+  for (const r of shaped) for (const l of r.lines) l.productName = names.get(Number(l.productId)) ?? null;
+  return c.json({ items: shaped, nextCursor: null });
 });
 
 b2bRoutes.post("/b2b/recurring", requirePerm("b2b.write"), async (c) => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, errMsg, type Address, type Card, type Me, type OrderView } from "../lib/api";
 import { DistrictOptions, PROVINCE } from "../lib/geo";
-import { fmtDateTime, money } from "../lib/format";
+import { fmtDateTime, money, num } from "../lib/format";
 import { Link, match, navigate, usePageMeta } from "../lib/router";
 import { announce, cartActions, itemFromCard, LOGGED_FLAG, ls, ss, stepInUnit, useAuth } from "../lib/store";
 import { Empty, ErrorBox, Field, Loading, Modal, Notice, useAsync } from "../ui";
@@ -226,7 +226,7 @@ export function AccountPage({ path }: { path: string }) {
     <div className="wrap page account">
       <div className="acc-head">
         <div className="avatar" aria-hidden="true">{me.fullName.trim().charAt(0).toUpperCase()}</div>
-        <div><h1>Xin chào, {me.fullName}</h1><p className="muted">{me.email}{me.kind === "b2b" && me.b2bStatus === "approved" ? " · Khách sỉ" : ""}</p></div>
+        <div><h1>Xin chào, {me.fullName}</h1><p className="muted">{me.email}{me.kind === "b2b" && me.b2bStatus === "approved" ? " · Khách sỉ" : ""}</p>{me.points != null && <p data-testid="points-balance"><strong>{num(me.points)}</strong> điểm thành viên{me.pointValueVnd ? <span className="muted"> (1 điểm = {money(me.pointValueVnd)})</span> : null}</p>}</div>
       </div>
       <nav className="tabs" aria-label="Tài khoản">
         {tabs.map((t) => <Link key={t.k} to={t.to} className={tab === t.k ? "on" : ""} aria-current={tab === t.k ? "page" : undefined}>{t.t}</Link>)}

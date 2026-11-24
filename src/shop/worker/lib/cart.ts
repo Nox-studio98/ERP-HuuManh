@@ -129,7 +129,7 @@ export async function computeTotals(db: D1Database, lines: CartLine[], district:
 }
 
 /** Khuyến mãi / voucher cho giỏ online (engine dùng chung với POS). strict=true (checkout): voucher sai → lỗi; false (báo giá): chỉ trả `rejected`. */
-export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: number, customerId: number | null, voucherCode: string | undefined, strict: boolean, receiverPhone: string | null = null) {
+export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: number, customerId: number | null, voucherCode: string | undefined, strict: boolean, receiverPhone: string | null = null, redeemPoints = 0) {
   const groups = await groupIdsOf(db, lines.map((l) => l.productId));
   return planPromotions(db, {
     channel: "online",
@@ -138,6 +138,15 @@ export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: 
     lines: lines.map((l) => ({ productId: l.productId, groupId: groups.get(l.productId) ?? null, qtyMilli: l.qtyMilli, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
     subtotal,
     voucherCode,
+    redeemPoints,
     strict,
   });
+}
+
+/** Đổi điểm chỉ dành cho tài khoản bán lẻ đã đăng nhập (khách vãng lai / tài khoản sỉ không có). Trả customerId dùng cho engine. */
+export function redeemCustomerId(account: { customerId: number; kind: string } | undefined | null, redeemPoints: number | undefined): number | null {
+  if (!redeemPoints) return account?.customerId ?? null;
+  if (!account) throw new AppError(422, "login_required", "Vui lòng đăng nhập để dùng điểm thành viên");
+  if (account.kind !== "retail") throw new AppError(422, "redeem_not_allowed", "Tài khoản này không áp dụng đổi điểm");
+  return account.customerId;
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AppError } from "../../../worker/lib/errors";
 import { vnDate } from "../../../worker/lib/time";
 import type { ShopBindings } from "../env";
-import { applyStock, computeTotals, priceCart, promoForCart, type CartIssue } from "../lib/cart";
+import { applyStock, computeTotals, priceCart, promoForCart, redeemCustomerId, type CartIssue } from "../lib/cart";
 import { DATE_RE, activeSlots, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { optionalAuth } from "../lib/session";
 import { onlineStoreId, parseBody } from "../lib/util";
@@ -23,6 +23,7 @@ const QuoteSchema = z.object({
   slotDate: z.string().regex(DATE_RE).optional(),
   slotId: z.number().int().positive().optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(),
+  redeemPoints: z.number().int().positive().max(100_000_000).optional(),
 });
 
 const SLOT_MSG: Record<string, string> = {
@@ -61,7 +62,7 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
     if (why) issues.push({ productId: null, code: "slot_unavailable", message: SLOT_MSG[why] ?? "Khung giờ không khả dụng" });
   }
   // Đợt 4: khuyến mãi tự động + voucher (cùng engine với POS)
-  const promo = await promoForCart(db, lines, t.subtotal, c.get("account")?.customerId ?? null, b.voucherCode, false);
+  const promo = await promoForCart(db, lines, t.subtotal, redeemCustomerId(c.get("account"), b.redeemPoints), b.voucherCode, false, null, b.redeemPoints ?? 0);
   const voucherRejected = b.voucherCode ? promo.rejected.find((r) => r.reason !== "not_best_promotion") ?? promo.rejected[0] : undefined;
   return c.json({
     lines: lines.map((l, i) => ({
@@ -70,11 +71,14 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
     })),
     subtotal: t.subtotal,
     discount: promo.promoTotal,
+    pointsRedeemed: promo.points,
+    pointsAmount: promo.pointsAmount,
+    ...(promo.maxRedeemPoints != null && c.get("account")?.kind === "retail" ? { pointsMax: promo.maxRedeemPoints, pointsBalance: promo.pointsBalance } : {}),
     discounts: promo.discounts.map((d) => ({ promotionId: d.promotionId, amount: d.amount, description: d.description })),
     ...(b.voucherCode ? { voucher: voucherRejected ? { code: b.voucherCode, applied: false, reason: voucherRejected.reason } : { code: b.voucherCode, applied: !!promo.voucher } } : {}),
     shippingFee: t.shippingFee,
     zone: t.zone ? { id: t.zone.id, name: t.zone.name } : null,
-    total: t.total - promo.promoTotal,
+    total: t.total - promo.promoTotal - promo.pointsAmount,
     estimated: t.estimated,
     issues,
   });

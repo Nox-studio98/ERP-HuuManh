@@ -1,7 +1,7 @@
 import { AppError, conflict } from "../lib/errors";
 import { assertStmt } from "./guard";
 import { allocate, costFloors, evaluatePromotions, type AppliedDiscount, type EngineLine, type PromoChannel } from "./promotions";
-import { earnFor, planRedeem, pointsStmts } from "./loyalty-points";
+import { earnFor, loyaltyConfig, planRedeem, pointsStmts } from "./loyalty-points";
 
 /** Ghép engine khuyến mãi + voucher + đổi điểm vào luồng thanh toán (POS, website). Đọc ở bước plan, ghi cùng batch với đơn. */
 
@@ -27,6 +27,9 @@ export interface PromoPlan {
   /** Tổng giảm (khuyến mãi + điểm) theo dòng. */
   lineDiscounts: number[];
   promoTotal: number;
+  /** Chỉ ở chế độ báo giá (strict=false) khi có khách và bật tích điểm: số điểm tối đa đổi được cho giỏ này (đã kẹp theo số dư, trần %, giá vốn). */
+  maxRedeemPoints?: number;
+  pointsBalance?: number;
 }
 
 const FATAL_VOUCHER = new Set(["voucher_not_found", "voucher_inactive", "voucher_exhausted", "voucher_wrong_customer", "voucher_customer_limit", "promotion_inactive", "channel_not_allowed", "min_order", "not_applicable", "combo_incomplete", "no_discount"]);
@@ -68,7 +71,20 @@ export async function planPromotions(
     pointsAmount = plan.amount;
     pointsLine = allocate(pointsAmount, rem);
   }
+  let maxRedeemPoints: number | undefined;
+  let pointsBalance: number | undefined;
+  if (!o.strict && o.customerId) {
+    const cfg = await loyaltyConfig(db);
+    if (cfg.enabled) {
+      const floors = await costFloors(db, o.lines);
+      const capByCost = rem.reduce((s, r, i) => s + Math.max(0, r - floors[i]), 0);
+      const payable = rem.reduce((s, x) => s + x, 0);
+      pointsBalance = (await db.prepare(`SELECT points FROM customers WHERE id = ?`).bind(o.customerId).first<{ points: number }>())?.points ?? 0;
+      maxRedeemPoints = Math.max(0, Math.min(pointsBalance, Math.floor(Math.min(Math.floor((payable * cfg.maxRedeemBp) / 10000), capByCost) / cfg.pointValueVnd)));
+    }
+  }
   return {
+    maxRedeemPoints, pointsBalance,
     discounts: res.discounts, rejected: res.rejected, voucher, points, pointsAmount,
     promoLineDiscounts: res.lineDiscounts, pointsLineDiscounts: pointsLine,
     lineDiscounts: res.lineDiscounts.map((x, i) => x + pointsLine[i]), promoTotal: res.total,
