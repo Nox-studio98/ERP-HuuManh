@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppBindings } from "../env";
-import { requirePerm } from "../lib/rbac";
+import { can, requirePerm } from "../lib/rbac";
 import { AppError, notFound } from "../lib/errors";
 import { audit } from "../lib/audit";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
@@ -55,21 +55,36 @@ const builders: Record<string, Builder> = {
 
   "so-quy": async (c, r) => {
     const db = c.env.DB;
+    const sensitive = can(c.get("user").role, "hr.sensitive");
     const fundId = c.req.query("fundId") ? Number(c.req.query("fundId")) : null;
     const funds = (
       await db.prepare(`SELECT id, code, name FROM funds WHERE active=1 ${fundId ? "AND id = ?" : ""} ORDER BY id`).bind(...(fundId ? [fundId] : [])).all<{ id: number; code: string; name: string }>()
     ).results;
     if (fundId && !funds.length) throw notFound("fund_not_found", "Không tìm thấy quỹ");
     const U = `SELECT created_at AS at, code, COALESCE(NULLIF(counterparty,''), NULLIF(note,''), CASE direction WHEN 'in' THEN 'Phiếu thu' ELSE 'Phiếu chi' END) AS descr,
-                      CASE direction WHEN 'in' THEN amount ELSE -amount END AS amt
+                      CASE direction WHEN 'in' THEN amount ELSE -amount END AS amt,
+                      CASE WHEN COALESCE(ref_type,'') IN ('payroll_item','salary_advance','payroll') OR category_id IN (SELECT id FROM cash_categories WHERE code = 'LUONG') THEN 1 ELSE 0 END AS pr
                  FROM cash_vouchers WHERE fund_id = ?1 AND status = 'posted'
                UNION ALL
-               SELECT p.created_at, o.code, 'Thu bán hàng (' || p.method || ')', p.amount
+               SELECT p.created_at, o.code, 'Thu bán hàng (' || p.method || ')', p.amount, 0
                  FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.fund_id = ?1 AND p.status = 'confirmed'`;
     const sheets: XlsxSheet[] = [];
     for (const f of funds) {
       const opening = (await db.prepare(`SELECT COALESCE(SUM(amt),0) AS v FROM (${U}) WHERE at < ?2`).bind(f.id, r.fromIso).first<{ v: number }>())!.v;
-      const { results } = await db.prepare(`SELECT * FROM (${U}) WHERE at >= ?2 AND at < ?3 ORDER BY at, code`).bind(f.id, r.fromIso, r.toIso).all<any>();
+      let { results } = await db.prepare(`SELECT * FROM (${U}) WHERE at >= ?2 AND at < ?3 ORDER BY at, code`).bind(f.id, r.fromIso, r.toIso).all<any>();
+      // C-02: như GET /vouchers — người không có hr.sensitive không thấy lương/tạm ứng từng người (mã NV, số tiền): gộp một dòng "Chi lương (tổng)" mỗi ngày (số dư quỹ vẫn đúng)
+      if (!sensitive) {
+        const out: any[] = [];
+        const byDay = new Map<string, any>();
+        for (const e of results) {
+          if (!e.pr) { out.push(e); continue; }
+          const day = vnDate(new Date(e.at));
+          const g = byDay.get(day);
+          if (g) g.amt += e.amt;
+          else { const n = { at: e.at, code: "", descr: "Chi lương (tổng)", amt: e.amt, pr: 1 }; byDay.set(day, n); out.push(n); }
+        }
+        results = out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : String(a.code).localeCompare(String(b.code))));
+      }
       let bal = opening;
       const rows: unknown[][] = [[null, "", "Số dư đầu kỳ", null, null, opening]];
       for (const e of results) {
@@ -149,19 +164,21 @@ const builders: Record<string, Builder> = {
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='sale' THEN -m.qty_delta_milli END),0) AS sold,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='return' THEN m.qty_delta_milli END),0) AS returned,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli END),0) AS waste,
-           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('adjust','transfer_out') THEN m.qty_delta_milli END),0) AS adj,
+           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS asm,
+           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adj,
            COALESCE(SUM(m.qty_delta_milli),0) AS closing,
            COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS value
-           FROM products p JOIN stock_moves m ON m.product_id = p.id AND m.at < ?2 GROUP BY p.id ORDER BY p.name`,
+           FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
+          WHERE p.merged_into IS NULL GROUP BY p.id ORDER BY p.name`,
       )
       .bind(r.fromIso, r.toIso)
       .all<any>();
     const q = (v: number) => v / 1000;
     return [{
       name: "Nhập xuất tồn",
-      columns: [{ header: "Mã hàng" }, { header: "Tên hàng", width: 30 }, { header: "ĐVT" }, { header: "Tồn đầu kỳ", type: "qty" }, { header: "Nhập", type: "qty" }, { header: "Bán", type: "qty" }, { header: "Khách trả lại", type: "qty" }, { header: "Hao hụt", type: "qty" }, { header: "Điều chỉnh/chuyển", type: "qty" }, { header: "Tồn cuối kỳ", type: "qty" }, { header: "Giá trị tồn cuối", type: "money" }],
-      rows: results.map((x) => [x.sku, x.name, x.base_unit, q(x.opening), q(x.qin), q(x.sold), q(x.returned), q(x.waste), q(x.adj), q(x.closing), Math.round(x.value)]),
-      totalCols: [10],
+      columns: [{ header: "Mã hàng" }, { header: "Tên hàng", width: 30 }, { header: "ĐVT" }, { header: "Tồn đầu kỳ", type: "qty" }, { header: "Nhập", type: "qty" }, { header: "Bán", type: "qty" }, { header: "Khách trả lại", type: "qty" }, { header: "Hao hụt", type: "qty" }, { header: "Lắp/tháo giỏ quà", type: "qty" }, { header: "Điều chỉnh/kiểm kê/chuyển", type: "qty" }, { header: "Tồn cuối kỳ", type: "qty" }, { header: "Giá trị tồn cuối", type: "money" }],
+      rows: results.map((x) => [x.sku, x.name, x.base_unit, q(x.opening), q(x.qin), q(x.sold), q(x.returned), q(x.waste), q(x.asm), q(x.adj), q(x.closing), Math.round(x.value)]),
+      totalCols: [11],
     }];
   },
 

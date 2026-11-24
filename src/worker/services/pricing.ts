@@ -42,10 +42,13 @@ export async function resolvePrice(
 export async function currentAvgCost(db: D1Database, productId: number) {
   const r = await db
     .prepare(
-      `SELECT CASE WHEN SUM(qty_on_hand_milli) > 0
-                   THEN CAST(ROUND(1.0 * SUM(unit_cost * qty_on_hand_milli) / SUM(qty_on_hand_milli)) AS INTEGER)
+      `SELECT CASE WHEN SUM(l.qty_on_hand_milli) > 0
+                   THEN CAST(ROUND(1.0 * SUM(l.unit_cost * l.qty_on_hand_milli) / SUM(l.qty_on_hand_milli)) AS INTEGER)
                    ELSE NULL END AS c
-         FROM lots WHERE product_id = ? AND status = 'active' AND qty_on_hand_milli > 0`,
+         FROM lots l JOIN locations loc ON loc.id = l.location_id
+        -- B-23: chỉ lô bán được (khu bán được, đang active, chưa hết hạn) mới làm giá vốn tham chiếu
+        WHERE l.product_id = ? AND l.status = 'active' AND loc.sellable = 1 AND l.qty_on_hand_milli > 0
+          AND (l.expires_at IS NULL OR l.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
     )
     .bind(productId)
     .first<{ c: number | null }>();

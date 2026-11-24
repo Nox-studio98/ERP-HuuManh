@@ -98,3 +98,13 @@ export async function notifyEmail(env: Env, payload: { to?: string; template?: s
   const r = await sendEmail(env, { to: payload.to, template: payload.template, subject: t.subject, text: `${t.line}:\n${base}${path}\n\nNếu bạn không yêu cầu, hãy bỏ qua thư này.` });
   return { provider: r.provider };
 }
+
+/** notify.managers: push cho người có quyền duyệt kho (quản lý/chủ) — cảnh báo thiếu hàng do lô hỏng (EC-15). */
+export async function notifyManagers(env: Env, payload: { title?: string; body?: string; url?: string }) {
+  const { results } = await env.DB
+    .prepare(`SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, u.role FROM push_subscriptions ps JOIN users u ON u.id = ps.user_id WHERE u.active = 1`)
+    .all<Sub & { role: Role }>();
+  const staff = results.filter((r) => can(r.role, "inventory.approve"));
+  const url = payload.url?.startsWith("/") && !payload.url.startsWith("//") ? payload.url : "/";
+  return { push: await pushAll(env, staff, { title: payload.title ?? "Cảnh báo kho", body: payload.body ?? "", url, tag: "stock-alert" }) };
+}

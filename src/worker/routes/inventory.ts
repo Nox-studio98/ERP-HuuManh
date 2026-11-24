@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { AppBindings, Role } from "../env";
-import { can, requirePerm } from "../lib/rbac";
+import { can, requirePerm, type Permission } from "../lib/rbac";
 import { auditStmt } from "../lib/audit";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { nextCode, PREFIX } from "../lib/codes";
@@ -9,7 +9,10 @@ import { toMilli } from "../lib/money";
 import { addDays } from "../services/debt";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { moveStatements } from "../services/stock";
-import { assertStmt } from "../services/guard";
+import { assertStmt, onceStmt } from "../services/guard";
+import { freeLotReservations, swapBadReservations } from "../services/reservations";
+import { sysAuditStmt } from "../services/sysaudit";
+import { enqueueJobStmt, kickJobs } from "../services/outbox";
 import { deviceIdOf, getSetting, guarded, isExpired, pageParams, parseBody, unitFactor } from "../services/http";
 
 export const inventoryRoutes = new Hono<AppBindings>();
@@ -34,6 +37,7 @@ function docShape(d: any) {
     locationId: d.location_id, toLocationId: d.to_location_id, supplierId: d.supplier_id, supplierRef: d.supplier_ref,
     reason: d.reason, note: d.note, totalAmount: d.total_amount, createdBy: d.created_by, createdByName: d.created_by_name,
     createdAt: d.created_at, approvedBy: d.approved_by, postedAt: d.posted_at, version: d.version, vatAmount: d.vat_amount ?? 0,
+    lockLots: !!d.lock_lots, transferStatus: d.transfer_status ?? null, receivedAt: d.received_at ?? null,
   };
 }
 
@@ -57,6 +61,9 @@ async function loadLines(db: D1Database, docId: number, role: Role) {
     id: l.id, docId: l.doc_id, productId: l.product_id, productName: l.product_name, sku: l.sku,
     lotId: l.lot_id, lotCode: l.lot_code, unit: l.unit, docQtyMilli: l.doc_qty_milli, qtyMilli: l.qty_milli,
     diffMilli: l.doc_qty_milli != null ? l.qty_milli - l.doc_qty_milli : null,
+    // B-02: kiểm kê — tồn hệ thống tại thời điểm đếm (snapshot); chênh lệch khi ghi sổ = số đếm − snapshot
+    systemQtyMilli: l.lot_id != null && l.doc_qty_milli != null ? l.doc_qty_milli : null,
+    receivedQtyMilli: l.received_qty_milli ?? null, receivedLotId: l.received_lot_id ?? null, lostReason: l.lost_reason ?? null,
     expiresAt: l.expires_at, reason: l.reason, ...(cost ? { unitCost: l.unit_cost } : {}),
   }));
 }
@@ -114,6 +121,7 @@ const createDocBody = z.object({
   vatAmount: z.number().int().min(0).max(10_000_000_000).optional(), // B-07: VAT đầu vào (VND) của phiếu nhập, chuyển sang hoá đơn mua khi ghi sổ
   reason: z.string().trim().max(200).nullish(),
   note: z.string().trim().max(500).nullish(),
+  lockLots: z.boolean().optional(), // EC-18: chỉ phiếu kiểm kê — khoá xuất/bán các lô tại vị trí trong lúc đếm
 });
 
 inventoryRoutes.post("/stock-docs", requirePerm("inventory.write"), async (c) => {
@@ -136,10 +144,10 @@ inventoryRoutes.post("/stock-docs", requirePerm("inventory.write"), async (c) =>
     db.batch([
       db
         .prepare(
-          `INSERT INTO stock_docs(code, type, store_id, location_id, to_location_id, supplier_id, supplier_ref, reason, note, created_by, vat_amount)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO stock_docs(code, type, store_id, location_id, to_location_id, supplier_id, supplier_ref, reason, note, created_by, vat_amount, lock_lots)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
-        .bind(code, b.type, loc.store_id, b.locationId, b.type === "transfer" ? b.toLocationId : null, b.type === "receipt" ? (b.supplierId ?? null) : null, b.supplierRef ?? null, b.reason ?? null, b.note ?? null, u.id, b.type === "receipt" && b.supplierId ? (b.vatAmount ?? 0) : 0),
+        .bind(code, b.type, loc.store_id, b.locationId, b.type === "transfer" ? b.toLocationId : null, b.type === "receipt" ? (b.supplierId ?? null) : null, b.supplierRef ?? null, b.reason ?? null, b.note ?? null, u.id, b.type === "receipt" && b.supplierId ? (b.vatAmount ?? 0) : 0, b.type === "count" && b.lockLots ? 1 : 0),
       auditStmt(c, { action: "stock_doc.create", entity: "stock_doc", entityId: code, after: b }),
     ]),
   );
@@ -204,6 +212,7 @@ inventoryRoutes.post("/stock-docs/:id/lines", requirePerm("inventory.write"), as
     if (lot.location_id !== doc.location_id) throw new AppError(422, "not_in_doc", "Lô không thuộc vị trí của chứng từ");
     if (type !== "adjust" && b.qty < 0) throw new AppError(422, "validation_error", "Số lượng phải lớn hơn 0");
     if (type !== "waste" && isExpired(lot)) throw new AppError(422, "lot_expired", "Lô đã hết hạn, chỉ được xuất qua phiếu hao hụt");
+    if (type === "transfer" && lot.status !== "active") throw new AppError(422, "lot_not_active", "Lô đang cách ly / không hoạt động, không thể chuyển kho", { lotId: lot.id, status: lot.status });
     if ((type === "waste" || type === "adjust") && !b.reason) throw new AppError(422, "validation_error", "Cần nhập lý do");
     const f = await unitFactor(db, lot.product_id, b.unit);
     lineSql = db
@@ -277,6 +286,7 @@ inventoryRoutes.post("/stock-docs/:id/scan", requirePerm("inventory.write"), asy
     if (!lot) return fail("unknown", "unknown_code", "Cần quét tem mã lô của hàng", { code: b.code });
     if (lot.location_id !== doc.location_id) return fail("not_in_doc", "not_in_doc", "Lô không thuộc vị trí của chứng từ", { lotId: lot.id });
     if ((type === "adjust" || type === "transfer") && isExpired(lot)) return fail("expired", "lot_expired", "Lô đã hết hạn, chỉ được xuất qua phiếu hao hụt", { lotId: lot.id });
+    if (type === "transfer" && lot.status !== "active") return fail("not_active", "lot_not_active", "Lô đang cách ly / không hoạt động, không thể chuyển kho", { lotId: lot.id, status: lot.status });
     const existing = await db.prepare(`SELECT id FROM stock_doc_lines WHERE doc_id = ? AND lot_id = ?`).bind(doc.id, lot.id).first<any>();
     if (existing) {
       if (type !== "count") return fail("duplicate", "duplicate_scan", "Lô này đã được quét trong chứng từ", { lineId: existing.id });
@@ -306,6 +316,26 @@ interface Plan {
   total: number;
   approvalReason: string | null;
   variances: { lineId: number; productId: number; docQtyMilli: number; qtyMilli: number }[];
+  /** Cảnh báo không chặn (vd. kiểm kê: lô có biến động giữa lúc đếm và lúc ghi sổ). */
+  warnings: { code: string; lotId: number; lotCode: string; snapshotMilli: number; currentMilli: number; deltaMilli: number }[];
+}
+
+/**
+ * B-03: bảo đảm lô còn đủ `out` khả dụng (tồn − đã giữ). Nếu chỉ thiếu vì phần giữ cho đơn → chuyển phần giữ sang lô khác (FEFO);
+ * không chuyển được → 409 kèm reservedQty và gợi ý cách ly lô.
+ */
+async function ensureAvailable(db: D1Database, lotId: number, out: number) {
+  let lot = await loadLot(db, lotId);
+  const detail = (l: any) => ({ lotId, requestedMilli: out, availableMilli: l.qty_on_hand_milli - l.qty_reserved_milli, onHandMilli: l.qty_on_hand_milli, reservedQty: l.qty_reserved_milli });
+  if (out > lot.qty_on_hand_milli) throw conflict("insufficient_stock", "Không đủ tồn khả dụng của lô", detail(lot));
+  if (out > lot.qty_on_hand_milli - lot.qty_reserved_milli) {
+    const left = await freeLotReservations(db, lotId, out);
+    lot = await loadLot(db, lotId);
+    if (left > 0) {
+      throw conflict("insufficient_stock", "Lô đang được giữ cho đơn hàng và không còn lô khác để chuyển phần giữ — hãy cách ly lô hỏng (POST /lots/:id/quarantine) để nhả/đổi lô cho đơn, hoặc xử lý đơn trước", { ...detail(lot), hint: "quarantine" });
+    }
+  }
+  return lot;
 }
 
 async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Plan> {
@@ -319,6 +349,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
   let total = 0;
   let approvalReason: string | null = null;
   const variances: Plan["variances"] = [];
+  const warnings: Plan["warnings"] = [];
   const creator = await db.prepare(`SELECT role FROM users WHERE id = ?`).bind(doc.created_by).first<{ role: Role }>();
   const creatorCanApprove = !!creator && can(creator.role, "inventory.approve");
   const val = (cost: number, qty: number) => Math.round((cost * Math.abs(qty)) / 1000);
@@ -371,10 +402,26 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
   } else if (type === "count") {
     const countDiffMax = await getSetting(db, "approval.count_diff_vnd", 1_000_000);
     let diffValue = 0;
+    const reduceByLot = new Map<number, number>();
+    const counted: { l: any; diff: number }[] = [];
     for (const l of lines) {
       const lot = lots.get(l.lot_id)!;
-      const diff = l.qty_milli - lot.qty_on_hand_milli;
-      stmts.push(db.prepare(`UPDATE stock_doc_lines SET doc_qty_milli = ? WHERE id = ?`).bind(lot.qty_on_hand_milli, l.id));
+      // B-02: chênh lệch = số đếm − tồn hệ thống LÚC ĐẾM (snapshot doc_qty_milli), không phải tồn lúc ghi sổ.
+      // Biến động hợp lệ giữa lúc đếm và lúc post (bán, hao hụt) được giữ nguyên, không thành chênh lệch ảo.
+      const snapshot = l.doc_qty_milli ?? lot.qty_on_hand_milli;
+      const diff = l.qty_milli - snapshot;
+      if (lot.qty_on_hand_milli !== snapshot) {
+        warnings.push({ code: "lot_moved_since_count", lotId: lot.id, lotCode: lot.lot_code, snapshotMilli: snapshot, currentMilli: lot.qty_on_hand_milli, deltaMilli: lot.qty_on_hand_milli - snapshot });
+      }
+      if (lot.qty_on_hand_milli + diff < 0) {
+        throw conflict("count_stale", "Tồn lô đã giảm sau khi đếm — số đếm không còn phù hợp, hãy đếm lại lô này", { lotId: lot.id, snapshotMilli: snapshot, currentMilli: lot.qty_on_hand_milli, countedMilli: l.qty_milli });
+      }
+      if (diff < 0) reduceByLot.set(lot.id, (reduceByLot.get(lot.id) ?? 0) - diff);
+      counted.push({ l, diff });
+    }
+    for (const [lotId, out] of reduceByLot) lots.set(lotId, await ensureAvailable(db, lotId, out));
+    for (const { l, diff } of counted) {
+      const lot = lots.get(l.lot_id)!;
       if (diff !== 0) {
         diffValue += val(lot.unit_cost, diff);
         stmts.push(...moveStatements(db, lot.product_id, [{ lotId: lot.id, qtyMilli: Math.abs(diff), unitCost: lot.unit_cost }], diff > 0 ? 1 : -1, "adjust", "stock_doc", doc.id, doc.created_by));
@@ -382,22 +429,26 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
     }
     total = diffValue;
     if (diffValue > countDiffMax) approvalReason = `Chênh lệch kiểm kê ${diffValue}đ vượt ngưỡng ${countDiffMax}đ`;
+    // B-10: mọi thay đổi tồn phải có người duyệt — người lập không có quyền duyệt mà có chênh lệch thì chờ duyệt
+    else if (counted.some((x) => x.diff !== 0) && !creatorCanApprove) approvalReason = "Người lập phiếu kiểm kê không có quyền duyệt chênh lệch tồn";
   } else {
     // waste | adjust | transfer: kiểm tra khả dụng theo từng lô (gộp các dòng cùng lô)
+    const lock = await db
+      .prepare(`SELECT code FROM stock_docs WHERE type = 'count' AND lock_lots = 1 AND status IN ('draft','pending_approval') AND location_id = ? AND id <> ? LIMIT 1`)
+      .bind(doc.location_id, doc.id)
+      .first<{ code: string }>();
+    if (lock) throw conflict("count_in_progress", `Vị trí đang kiểm kê (${lock.code}) và đã khoá lô — hoàn tất hoặc huỷ phiếu kiểm kê trước`, { countDoc: lock.code });
     const outPerLot = new Map<number, number>();
     for (const l of lines) {
       const lot = lots.get(l.lot_id)!;
       if (type !== "waste" && isExpired(lot, now)) throw new AppError(422, "lot_expired", "Lô đã hết hạn, chỉ được xuất qua phiếu hao hụt", { lotId: lot.id });
+      if (type === "transfer" && lot.status !== "active") throw new AppError(422, "lot_not_active", "Lô đang cách ly / không hoạt động, không thể chuyển kho", { lotId: lot.id, status: lot.status });
       if (lot.location_id !== doc.location_id) throw new AppError(422, "not_in_doc", "Lô không còn ở vị trí của chứng từ", { lotId: lot.id });
       const out = type === "adjust" ? Math.max(-l.qty_milli, 0) : l.qty_milli;
       outPerLot.set(lot.id, (outPerLot.get(lot.id) ?? 0) + out);
     }
-    for (const [lotId, out] of outPerLot) {
-      const lot = lots.get(lotId)!;
-      if (out > lot.qty_on_hand_milli - lot.qty_reserved_milli) {
-        throw conflict("insufficient_stock", "Không đủ tồn khả dụng của lô", { lotId, requestedMilli: out, availableMilli: lot.qty_on_hand_milli - lot.qty_reserved_milli });
-      }
-    }
+    // B-03: vượt phần khả dụng nhưng còn trong tồn → thử chuyển phần giữ của đơn sang lô khác trước khi báo lỗi
+    for (const [lotId, out] of outPerLot) lots.set(lotId, await ensureAvailable(db, lotId, out));
     if (type === "waste") {
       const pct = await getSetting(db, "approval.waste_pct_bp", 500);
       for (const [lotId, out] of outPerLot) {
@@ -420,29 +471,16 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
       if (type === "waste") stmts.push(...moveStatements(db, lot.product_id, alloc, -1, "waste", "stock_doc", doc.id, doc.created_by));
       else if (type === "adjust") stmts.push(...moveStatements(db, lot.product_id, alloc, l.qty_milli > 0 ? 1 : -1, "adjust", "stock_doc", doc.id, doc.created_by));
       else {
-        const tmp = `TMP-${crypto.randomUUID()}`;
-        stmts.push(
-          ...moveStatements(db, lot.product_id, alloc, -1, "transfer_out", "stock_doc", doc.id, doc.created_by),
-          db
-            .prepare(
-              `INSERT INTO lots(lot_code, product_id, location_id, supplier_id, receipt_doc_id, received_at, expires_at, unit_cost, qty_in_milli, qty_on_hand_milli)
-               VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            )
-            .bind(tmp, lot.product_id, doc.to_location_id, lot.supplier_id, lot.receipt_doc_id, lot.received_at, lot.expires_at, lot.unit_cost, l.qty_milli, l.qty_milli),
-          db
-            .prepare(
-              `INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id)
-               SELECT id, product_id, qty_in_milli, unit_cost, 'transfer_in', 'stock_doc', ?, ? FROM lots WHERE lot_code = ?`,
-            )
-            .bind(doc.id, doc.created_by, tmp),
-          db.prepare(`UPDATE lots SET lot_code = 'HML' || substr('00000000' || id, -8) WHERE lot_code = ?`).bind(tmp),
-        );
+        // B-19 / EC-21: chuyển kho 2 bước — chỉ xuất khỏi lô nguồn (đang đi đường, không bán được ở đâu cả);
+        // lô mới tại vị trí đích chỉ được tạo khi nhận hàng (POST /stock-docs/:id/receive)
+        stmts.push(...moveStatements(db, lot.product_id, alloc, -1, "transfer_out", "stock_doc", doc.id, doc.created_by));
       }
     }
+    if (type === "transfer") stmts.push(db.prepare(`UPDATE stock_docs SET transfer_status = 'in_transit' WHERE id = ?`).bind(doc.id));
   }
   void u;
   void approvedBy;
-  return { stmts, total, approvalReason, variances };
+  return { stmts, total, approvalReason, variances, warnings };
 }
 
 function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
@@ -456,7 +494,7 @@ function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
       .prepare(`UPDATE stock_docs SET status='posted', posted_at=?, total_amount=?, approved_by=?, version=version+1 WHERE id=? AND status IN ('draft','pending_approval')`)
       .bind(new Date().toISOString(), plan.total, approvedBy, doc.id),
     ...plan.stmts,
-    auditStmt(c, { action: `stock_doc.post.${doc.type}`, entity: "stock_doc", entityId: doc.id, before: { status: doc.status }, after: { status: "posted", total: plan.total, variances: plan.variances } }),
+    auditStmt(c, { action: `stock_doc.post.${doc.type}`, entity: "stock_doc", entityId: doc.id, before: { status: doc.status }, after: { status: "posted", total: plan.total, variances: plan.variances, ...(plan.warnings.length ? { warnings: plan.warnings } : {}) } }),
   ];
 }
 
@@ -479,11 +517,11 @@ inventoryRoutes.post("/stock-docs/:id/post", requirePerm("inventory.write"), asy
     ]));
     const ap = await db.prepare(`SELECT id FROM approvals WHERE ref_type='stock_doc' AND ref_id=? AND status='pending' ORDER BY id DESC LIMIT 1`).bind(String(id)).first<any>();
     const d = await loadDoc(db, id);
-    return c.json({ ...docShape(d), status: "pending_approval", approvalId: ap?.id ?? null, approvalReason: plan.approvalReason });
+    return c.json({ ...docShape(d), status: "pending_approval", approvalId: ap?.id ?? null, approvalReason: plan.approvalReason, warnings: plan.warnings });
   }
   await guarded(() => db.batch(postedStmts(c, doc, plan, doc.created_by === u.id ? null : u.id)));
   const d = await loadDoc(db, id);
-  return c.json({ ...docShape(d), variances: plan.variances, lines: await loadLines(db, id, u.role) });
+  return c.json({ ...docShape(d), variances: plan.variances, warnings: plan.warnings, lines: await loadLines(db, id, u.role) });
 });
 
 /**
@@ -496,7 +534,7 @@ export async function applyStockDocPost(c: Ctx, docId: number) {
   if (doc.status !== "pending_approval" && doc.status !== "draft") throw conflict("doc_not_pending", "Chứng từ không ở trạng thái chờ duyệt");
   const plan = await planPost(c, doc, c.get("user").id);
   await guarded(() => db.batch(postedStmts(c, doc, plan, c.get("user").id)));
-  return docShape(await loadDoc(db, docId));
+  return { ...docShape(await loadDoc(db, docId)), warnings: plan.warnings };
 }
 
 /** Khi yêu cầu duyệt bị từ chối: trả chứng từ về nháp để người lập chỉnh sửa hoặc huỷ. */
@@ -529,12 +567,154 @@ inventoryRoutes.post("/stock-docs/:id/cancel", requirePerm("inventory.write"), a
   return c.json(docShape(await loadDoc(db, id)));
 });
 
+// ---------------------------------------------------------------- nhận hàng chuyển kho (B-19 / EC-21)
+const receiveBody = z.object({
+  reason: z.string().trim().min(1).max(200).optional(), // lý do hao hụt chung cho các dòng nhận thiếu
+  lines: z
+    .array(z.object({ lineId: z.number().int().positive(), qty: z.number().min(0).max(1_000_000), reason: z.string().trim().min(1).max(200).optional() }))
+    .optional(), // không gửi = nhận đủ; dòng không liệt kê = nhận đủ
+});
+
+inventoryRoutes.post("/stock-docs/:id/receive", requirePerm("inventory.write"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  const id = Number(c.req.param("id"));
+  const b = await parseBody(c, receiveBody.default({}));
+  const doc = await loadDoc(db, id);
+  if (doc.type !== "transfer" || doc.status !== "posted") throw conflict("not_transfer", "Chỉ nhận được phiếu chuyển kho đã xuất");
+  if (doc.transfer_status !== "in_transit") throw conflict("already_received", "Phiếu chuyển kho này đã được nhận");
+  const { results: lines } = await db.prepare(`SELECT * FROM stock_doc_lines WHERE doc_id = ? ORDER BY id`).bind(id).all<any>();
+  const want = new Map((b.lines ?? []).map((x) => [x.lineId, x]));
+  for (const x of b.lines ?? []) if (!lines.some((l) => l.id === x.lineId)) throw new AppError(422, "line_not_in_doc", "Dòng không thuộc phiếu", { lineId: x.lineId });
+  const threshold = await getSetting(db, "approval.count_diff_vnd", 1_000_000);
+  const now = new Date().toISOString();
+  const stmts: D1PreparedStatement[] = [
+    assertStmt(db, "transfer.receive", `SELECT status = 'posted' AND transfer_status = 'in_transit' FROM stock_docs WHERE id = ?`, [id]),
+    onceStmt(db, "transfer.receive", id),
+    db.prepare(`UPDATE stock_docs SET transfer_status = 'received', received_at = ?, received_by = ?, version = version + 1 WHERE id = ?`).bind(now, u.id, id),
+  ];
+  const summary: { lineId: number; sentMilli: number; receivedMilli: number; lostMilli: number }[] = [];
+  let lostValue = 0;
+  for (const l of lines) {
+    const src = await loadLot(db, l.lot_id);
+    const w = want.get(l.id);
+    const received = w ? toMilli(w.qty, await unitFactor(db, l.product_id, l.unit)) : l.qty_milli;
+    if (received > l.qty_milli) throw new AppError(422, "over_receive", "Số nhận vượt số đã chuyển", { lineId: l.id, sentMilli: l.qty_milli });
+    const lost = l.qty_milli - received;
+    const reason = w?.reason ?? b.reason ?? null;
+    if (lost > 0 && !reason) throw new AppError(422, "reason_required", "Nhận thiếu hàng cần ghi lý do hao hụt", { lineId: l.id, lostMilli: lost });
+    lostValue += Math.round((src.unit_cost * lost) / 1000);
+    const tmp = `TMP-${crypto.randomUUID()}`;
+    stmts.push(
+      // giữ nguyên ngày nhập / hạn dùng / giá vốn / qty_in gốc của lô nguồn → % hao hụt tính theo lượng nhập ban đầu
+      db
+        .prepare(
+          `INSERT INTO lots(lot_code, product_id, location_id, supplier_id, receipt_doc_id, received_at, expires_at, unit_cost, qty_in_milli, qty_on_hand_milli)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(tmp, l.product_id, doc.to_location_id, src.supplier_id, src.receipt_doc_id, src.received_at, src.expires_at, src.unit_cost, src.qty_in_milli, l.qty_milli),
+      db
+        .prepare(
+          `INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id)
+           SELECT id, product_id, qty_on_hand_milli, unit_cost, 'transfer_in', 'stock_doc', ?, ? FROM lots WHERE lot_code = ?`,
+        )
+        .bind(id, u.id, tmp),
+    );
+    if (lost > 0) {
+      stmts.push(
+        db.prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli - ? WHERE lot_code = ?`).bind(lost, tmp),
+        db
+          .prepare(
+            `INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id)
+             SELECT id, product_id, ?, unit_cost, 'waste', 'stock_doc', ?, ? FROM lots WHERE lot_code = ?`,
+          )
+          .bind(-lost, id, u.id, tmp),
+      );
+    }
+    stmts.push(
+      db.prepare(`UPDATE stock_doc_lines SET received_qty_milli = ?, received_lot_id = (SELECT id FROM lots WHERE lot_code = ?), lost_reason = ? WHERE id = ?`).bind(received, tmp, lost > 0 ? reason : null, l.id),
+      db.prepare(`UPDATE lots SET lot_code = 'HML' || substr('00000000' || id, -8) WHERE lot_code = ?`).bind(tmp),
+    );
+    summary.push({ lineId: l.id, sentMilli: l.qty_milli, receivedMilli: received, lostMilli: lost });
+  }
+  if (lostValue > threshold && !can(u.role, "inventory.approve")) {
+    throw new AppError(403, "approval_required", `Hao hụt khi nhận hàng ${lostValue}đ vượt ngưỡng ${threshold}đ — cần quản lý xác nhận`, { lostValue });
+  }
+  stmts.push(auditStmt(c, { action: "stock_doc.transfer_receive", entity: "stock_doc", entityId: id, before: { transferStatus: "in_transit" }, after: { transferStatus: "received", lines: summary, lostValue } }));
+  await guarded(() => db.batch(stmts));
+  const d = await loadDoc(db, id);
+  return c.json({ ...docShape(d), received: summary, lines: await loadLines(db, id, u.role) });
+});
+
+// ---------------------------------------------------------------- cách ly lô hỏng (B-03 / EC-15)
+const quarantineBody = z.object({ reason: z.string().trim().min(3).max(200) });
+
+inventoryRoutes.post("/lots/:id/quarantine", requirePerm("inventory.write"), async (c) => {
+  const db = c.env.DB;
+  const u = c.get("user");
+  const lotId = Number(c.req.param("id"));
+  const b = await parseBody(c, quarantineBody);
+  const lot = await db
+    .prepare(`SELECT l.*, loc.store_id FROM lots l JOIN locations loc ON loc.id = l.location_id WHERE l.id = ?`)
+    .bind(lotId)
+    .first<any>();
+  if (!lot) throw notFound("not_found", "Không tìm thấy lô hàng");
+  if (lot.status !== "active") throw conflict("lot_not_active", "Chỉ cách ly được lô đang hoạt động", { status: lot.status });
+  const now = new Date().toISOString();
+  await db.batch([
+    assertStmt(db, "lot.quarantine", `SELECT status = 'active' FROM lots WHERE id = ?`, [lotId]),
+    db.prepare(`UPDATE lots SET status = 'quarantine', quarantine_reason = ?, quarantined_at = ?, quarantined_by = ? WHERE id = ?`).bind(b.reason, now, u.id, lotId),
+    auditStmt(c, { action: "lot.quarantine", entity: "lot", entityId: lotId, before: { status: "active" }, after: { status: "quarantine", lotCode: lot.lot_code }, reason: b.reason }),
+  ]);
+  // Ngay lập tức chuyển phần giữ của các đơn sang lô tốt khác (FEFO); phần không thay được → nhả, đánh dấu đơn, báo quản lý
+  const r = await swapBadReservations(db, lot.store_id, { lotId, actorId: u.id });
+  for (const o of new Set(r.short.map((x) => x.orderId))) await kickJobs(c.env, "order", o).catch(() => {});
+  const after = await db.prepare(`SELECT l.*, p.name AS product_name FROM lots l JOIN products p ON p.id = l.product_id WHERE l.id = ?`).bind(lotId).first<any>();
+  return c.json({ lot: lotShape(after, can(u.role, "prices.view_cost")), swappedOrders: r.swapped, shortOrders: r.short });
+});
+
+inventoryRoutes.post("/lots/:id/release-quarantine", requirePerm("inventory.approve"), async (c) => {
+  const db = c.env.DB;
+  const lotId = Number(c.req.param("id"));
+  const b = await parseBody(c, quarantineBody);
+  const lot = await db.prepare(`SELECT * FROM lots WHERE id = ?`).bind(lotId).first<any>();
+  if (!lot) throw notFound("not_found", "Không tìm thấy lô hàng");
+  if (lot.status !== "quarantine") throw conflict("lot_not_quarantined", "Lô không ở trạng thái cách ly", { status: lot.status });
+  await db.batch([
+    assertStmt(db, "lot.release_quarantine", `SELECT status = 'quarantine' FROM lots WHERE id = ?`, [lotId]),
+    db.prepare(`UPDATE lots SET status = 'active', quarantine_reason = NULL, quarantined_at = NULL, quarantined_by = NULL WHERE id = ?`).bind(lotId),
+    auditStmt(c, { action: "lot.release_quarantine", entity: "lot", entityId: lotId, before: { status: "quarantine", reason: lot.quarantine_reason }, after: { status: "active" }, reason: b.reason }),
+  ]);
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- thông báo trong ứng dụng
+inventoryRoutes.get("/notifications", requirePerm("inventory.view"), async (c) => {
+  const role = c.get("user").role;
+  const unread = c.req.query("unread") === "1";
+  const { results } = await c.env.DB
+    .prepare(`SELECT id, kind, title, body, audience_perm, ref_type, ref_id, created_at, read_at FROM notifications ${unread ? "WHERE read_at IS NULL" : ""} ORDER BY id DESC LIMIT 100`)
+    .all<any>();
+  const items = results
+    .filter((n) => can(role, n.audience_perm as Permission))
+    .map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, refType: n.ref_type, refId: n.ref_id, createdAt: n.created_at, readAt: n.read_at }));
+  return c.json({ items, unread: items.filter((n) => !n.readAt).length });
+});
+
+inventoryRoutes.post("/notifications/:id/read", requirePerm("inventory.view"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const n = await c.env.DB.prepare(`SELECT audience_perm FROM notifications WHERE id = ?`).bind(id).first<{ audience_perm: string }>();
+  if (!n || !can(c.get("user").role, n.audience_perm as Permission)) throw notFound("not_found", "Không tìm thấy thông báo");
+  await c.env.DB.prepare(`UPDATE notifications SET read_at = COALESCE(read_at, ?), read_by = COALESCE(read_by, ?) WHERE id = ?`).bind(new Date().toISOString(), c.get("user").id, id).run();
+  return c.json({ ok: true });
+});
+
 // ---------------------------------------------------------------- tồn kho
 const lotShape = (l: any, seeCost: boolean) => ({
   id: l.id, lotCode: l.lot_code, productId: l.product_id, productName: l.product_name, locationId: l.location_id,
   supplierId: l.supplier_id, receiptDocId: l.receipt_doc_id, receivedAt: l.received_at, expiresAt: l.expires_at,
   qtyInMilli: l.qty_in_milli, qtyOnHandMilli: l.qty_on_hand_milli, qtyReservedMilli: l.qty_reserved_milli,
-  status: l.status, expired: isExpired(l), ...(seeCost ? { unitCost: l.unit_cost } : {}),
+  status: l.status, quarantineReason: l.quarantine_reason ?? null, quarantinedAt: l.quarantined_at ?? null, expired: isExpired(l), ...(seeCost ? { unitCost: l.unit_cost } : {}),
 });
 
 inventoryRoutes.get("/stock/lots", requirePerm("inventory.view"), async (c) => {
@@ -561,11 +741,13 @@ inventoryRoutes.get("/stock/card", requirePerm("inventory.view"), async (c) => {
   const pid = Number(productId);
   const fromUtc = from ? vnDayRangeUtc(from).from : "0000";
   const toUtc = to ? vnDayRangeUtc(to).to : "9999";
-  const opening = await db.prepare(`SELECT COALESCE(SUM(qty_delta_milli),0) q FROM stock_moves WHERE product_id = ? AND at < ?`).bind(pid, fromUtc).first<{ q: number }>();
+  // EC-22: thẻ kho của mã đích gồm cả lịch sử các mã đã gộp vào nó (stock_moves vẫn trỏ về mã nguồn)
+  const fam = `(SELECT id FROM products WHERE id = ?1 OR merged_into = ?1)`;
+  const opening = await db.prepare(`SELECT COALESCE(SUM(qty_delta_milli),0) q FROM stock_moves WHERE product_id IN ${fam} AND at < ?2`).bind(pid, fromUtc).first<{ q: number }>();
   const { results } = await db
     .prepare(
       `SELECT m.*, l.lot_code FROM stock_moves m JOIN lots l ON l.id = m.lot_id
-        WHERE m.product_id = ? AND m.at >= ? AND m.at < ? ORDER BY m.id`,
+        WHERE m.product_id IN ${fam} AND m.at >= ?2 AND m.at < ?3 ORDER BY m.id`,
     )
     .bind(pid, fromUtc, toUtc)
     .all<any>();
@@ -601,7 +783,8 @@ inventoryRoutes.get("/stock/alerts", requirePerm("inventory.view"), async (c) =>
   const seeCost = can(c.get("user").role, "prices.view_cost");
   const { results: exp } = await db.prepare(lotQ(`l.status <> 'closed' AND l.expires_at IS NOT NULL AND l.expires_at > ?1 AND l.expires_at <= ?2 AND l.status = 'active'`)).bind(nowIso, soon).all<any>();
   const { results: dead } = await db.prepare(lotQ(`l.status <> 'closed' AND (l.status = 'expired' OR (l.expires_at IS NOT NULL AND l.expires_at <= ?1))`)).bind(nowIso).all<any>();
-  return c.json({ lowStock: low, expiringSoon: exp.map((l) => lotShape(l, seeCost)), expired: dead.map((l) => lotShape(l, seeCost)) });
+  const { results: quar } = await db.prepare(lotQ(`l.status = 'quarantine'`)).all<any>();
+  return c.json({ lowStock: low, expiringSoon: exp.map((l) => lotShape(l, seeCost)), expired: dead.map((l) => lotShape(l, seeCost)), quarantined: quar.map((l) => lotShape(l, seeCost)) });
 });
 
 inventoryRoutes.get("/stock/lots/:lotCode/trace", requirePerm("inventory.view"), async (c) => {

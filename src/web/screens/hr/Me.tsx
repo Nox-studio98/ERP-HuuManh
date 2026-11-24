@@ -196,7 +196,7 @@ function Today({ onCorrection }: { onCorrection: (p: any) => void }) {
             {d.punches.map((p: any, i: number) => (
               <div key={i} className="row between">
                 <span><b>{KIND[p.kind]}</b> <span className="muted small">{PUNCH_METHOD[p.method] ?? p.method}</span></span>
-                <span className="row"><span className="num">{vnTime(p.serverAt)}</span><Badge tone={p.status === "accepted" ? "ok" : p.status === "pending" ? "warn" : "danger"}>{p.status === "pending" ? "Chờ duyệt" : PUNCH_STATUS[p.status] ?? p.status}</Badge></span>
+                <span className="row"><span className="num">{vnTime(p.effectiveAt ?? p.serverAt)}</span>{p.reviewFlag && p.status === "accepted" ? <Badge tone="info">Đã tính công · chờ xem lại</Badge> : <Badge tone={p.status === "accepted" ? "ok" : p.status === "pending" ? "warn" : "danger"}>{p.status === "pending" ? "Chờ duyệt" : PUNCH_STATUS[p.status] ?? p.status}</Badge>}</span>
               </div>
             ))}
           </div>

@@ -14,6 +14,13 @@ interface LotRow {
 }
 
 /**
+ * EC-18: vị trí đang có phiếu kiểm kê bật "khoá lô" (nháp / chờ duyệt) thì các lô tại đó không được xuất bán / giữ tồn.
+ * Dùng làm điều kiện SQL cho bảng lots đặt bí danh `l`.
+ */
+export const LOT_NOT_LOCKED_SQL = `NOT EXISTS (SELECT 1 FROM stock_docs cd WHERE cd.type = 'count' AND cd.lock_lots = 1
+          AND cd.status IN ('draft','pending_approval') AND cd.location_id = l.location_id)`;
+
+/**
  * Tồn khả dụng = tồn thực − đã giữ, chỉ tính lô active, chưa hết hạn, ở vị trí bán được (M1 quy tắc, M2-06).
  */
 export async function availableQty(db: D1Database, productId: number, storeId: number, at = new Date().toISOString()) {
@@ -22,7 +29,7 @@ export async function availableQty(db: D1Database, productId: number, storeId: n
       `SELECT COALESCE(SUM(l.qty_on_hand_milli - l.qty_reserved_milli), 0) AS q
          FROM lots l JOIN locations loc ON loc.id = l.location_id
         WHERE l.product_id = ? AND loc.store_id = ? AND loc.sellable = 1 AND l.status = 'active'
-          AND (l.expires_at IS NULL OR l.expires_at > ?)`,
+          AND (l.expires_at IS NULL OR l.expires_at > ?) AND ${LOT_NOT_LOCKED_SQL}`,
     )
     .bind(productId, storeId, at)
     .first<{ q: number }>();
@@ -43,34 +50,49 @@ export async function allocateFefo(
   at = new Date().toISOString(),
 ): Promise<LotAllocation[]> {
   if (qtyMilli <= 0) throw new AppError(422, "invalid_qty", "Số lượng phải lớn hơn 0");
+  const { alloc, missingMilli } = await allocateFefoPartial(db, productId, qtyMilli, storeId, { at });
+  if (missingMilli > 0) {
+    throw new AppError(409, "insufficient_stock", "Không đủ tồn khả dụng", {
+      productId,
+      requestedMilli: qtyMilli,
+      availableMilli: qtyMilli - missingMilli,
+    });
+  }
+  return alloc;
+}
+
+/** Như allocateFefo nhưng không ném lỗi khi thiếu: trả phần phân bổ được + số còn thiếu. excludeLotIds: lô không được chọn. */
+export async function allocateFefoPartial(
+  db: D1Database,
+  productId: number,
+  qtyMilli: number,
+  storeId: number,
+  opts: { at?: string; excludeLotIds?: number[] } = {},
+): Promise<{ alloc: LotAllocation[]; missingMilli: number }> {
+  const at = opts.at ?? new Date().toISOString();
+  const ex = opts.excludeLotIds ?? [];
   const { results } = await db
     .prepare(
       `SELECT l.id, l.unit_cost, (l.qty_on_hand_milli - l.qty_reserved_milli) AS available, l.expires_at
          FROM lots l JOIN locations loc ON loc.id = l.location_id
         WHERE l.product_id = ? AND loc.store_id = ? AND loc.sellable = 1 AND l.status = 'active'
           AND (l.expires_at IS NULL OR l.expires_at > ?)
-          AND l.qty_on_hand_milli - l.qty_reserved_milli > 0
+          AND l.qty_on_hand_milli - l.qty_reserved_milli > 0 AND ${LOT_NOT_LOCKED_SQL}
+          ${ex.length ? `AND l.id NOT IN (${ex.map(() => "?").join(",")})` : ""}
         ORDER BY (l.expires_at IS NULL), l.expires_at, l.received_at, l.id`,
     )
-    .bind(productId, storeId, at)
+    .bind(productId, storeId, at, ...ex)
     .all<LotRow>();
 
-  const out: LotAllocation[] = [];
+  const alloc: LotAllocation[] = [];
   let remaining = qtyMilli;
   for (const lot of results) {
     if (remaining <= 0) break;
     const take = Math.min(lot.available, remaining);
-    out.push({ lotId: lot.id, qtyMilli: take, unitCost: lot.unit_cost });
+    alloc.push({ lotId: lot.id, qtyMilli: take, unitCost: lot.unit_cost });
     remaining -= take;
   }
-  if (remaining > 0) {
-    throw new AppError(409, "insufficient_stock", "Không đủ tồn khả dụng", {
-      productId,
-      requestedMilli: qtyMilli,
-      availableMilli: qtyMilli - remaining,
-    });
-  }
-  return out;
+  return { alloc, missingMilli: Math.max(remaining, 0) };
 }
 
 export const allocationCost = (alloc: LotAllocation[]) =>
