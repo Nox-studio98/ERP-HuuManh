@@ -27,7 +27,9 @@ export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
   insuranceCapVnd: 46_800_000,
   pitFamilyDeduction: 15_500_000,
   pitDependentDeduction: 6_200_000,
-  pitBrackets: [[5_000_000, 500], [10_000_000, 1000], [18_000_000, 1500], [32_000_000, 2000], [52_000_000, 2500], [80_000_000, 3000], [null, 3500]],
+  // Luật Thuế TNCN 109/2025/QH15 — áp dụng cho thu nhập tiền lương từ kỳ tính thuế 2026: 5 bậc 5/10/20/30/35%.
+  // Giảm trừ 15,5tr/6,2tr theo NQ 110/2025/UBTVQH15 (từ 01/01/2026).
+  pitBrackets: [[10_000_000, 500], [30_000_000, 1000], [60_000_000, 2000], [100_000_000, 3000], [null, 3500]],
   salesBonusBp: 0,
 };
 
@@ -147,16 +149,19 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
   for (const d of input.days) if (d.overtimeMinutes > 0) otGroups.set(d.overtimeMultiplierBp, (otGroups.get(d.overtimeMultiplierBp) ?? 0) + d.overtimeMinutes);
   if (input.adjustMinutes.overtime !== 0) otGroups.set(s.otWeekdayBp, (otGroups.get(s.otWeekdayBp) ?? 0) + input.adjustMinutes.overtime);
   let overtimePay = 0;
+  // Phần tiền tăng ca trả cao hơn giờ làm việc bình thường được miễn thuế TNCN (chỉ phần chênh lệch, hệ số > 1).
+  let overtimeExempt = 0;
   for (const [bp, mins] of [...otGroups.entries()].sort((a, b) => a[0] - b[0])) {
     if (mins === 0) continue;
     const amt = Math.round(((hourRate * mins) / 60) * (bp / 10000));
     overtimePay += amt;
+    if (bp > 10000 && amt > 0) overtimeExempt += amt - Math.round((hourRate * mins) / 60);
     lines.push({ label: `Tăng ca ×${bp / 10000}`, amount: amt, group: "income", note: `${(mins / 60).toFixed(2)} giờ × ${fmt(Math.round(hourRate))} đ/giờ × ${bp / 10000}` });
   }
 
   // ---- Phụ cấp, thưởng, phạt, điều chỉnh ----
   let allowances = 0;
-  let nonTaxable = 0;
+  let nonTaxable = Math.max(0, overtimeExempt);
   for (const a of input.allowances) {
     allowances += a.amount;
     if (!a.taxable) nonTaxable += a.amount;
@@ -205,7 +210,7 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       label: "Thu nhập tính thuế",
       amount: taxableIncome,
       group: "info",
-      note: `gross − phụ cấp không chịu thuế ${fmt(nonTaxable)} − BH ${fmt(insuranceEmployee)} − giảm trừ bản thân ${fmt(s.pitFamilyDeduction)} − ${e.dependents} người phụ thuộc × ${fmt(s.pitDependentDeduction)}`,
+      note: `gross − khoản không chịu thuế (phụ cấp, phần chênh tăng ca) ${fmt(nonTaxable)} − BH ${fmt(insuranceEmployee)} − giảm trừ bản thân ${fmt(s.pitFamilyDeduction)} − ${e.dependents} người phụ thuộc × ${fmt(s.pitDependentDeduction)}`,
     });
     if (pit > 0) lines.push({ label: "Thuế TNCN", amount: -pit, group: "deduction", note: "biểu thuế luỹ tiến từng phần" });
   }
