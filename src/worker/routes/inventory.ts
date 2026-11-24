@@ -9,6 +9,7 @@ import { toMilli } from "../lib/money";
 import { addDays } from "../services/debt";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { moveStatements } from "../services/stock";
+import { assertStmt } from "../services/guard";
 import { deviceIdOf, getSetting, guarded, isExpired, pageParams, parseBody, unitFactor } from "../services/http";
 
 export const inventoryRoutes = new Hono<AppBindings>();
@@ -149,20 +150,20 @@ inventoryRoutes.post("/stock-docs", requirePerm("inventory.write"), async (c) =>
 const receiptLine = z.object({
   productId: z.number().int().positive(),
   unit: z.string().trim().min(1),
-  qty: z.number().min(0),
-  docQty: z.number().min(0).optional(),
-  unitCost: z.number().min(0),
+  qty: z.number().min(0).max(1_000_000),
+  docQty: z.number().min(0).max(1_000_000).optional(),
+  unitCost: z.number().min(0).max(10_000_000_000),
   expiresAt: z.string().optional(),
 });
 const lotLine = z.object({
   lotId: z.number().int().positive(),
-  qty: z.number().refine((n) => n !== 0, "Số lượng phải khác 0"),
+  qty: z.number().min(-1_000_000).max(1_000_000).refine((n) => n !== 0, "Số lượng phải khác 0"),
   unit: z.string().trim().min(1),
   reason: z.string().trim().min(1).max(100).optional(),
 });
 const countLine = z.object({
   lotId: z.number().int().positive(),
-  countedQty: z.number().min(0),
+  countedQty: z.number().min(0).max(1_000_000),
   unit: z.string().trim().min(1),
 });
 
@@ -182,8 +183,8 @@ inventoryRoutes.post("/stock-docs/:id/lines", requirePerm("inventory.write"), as
     const docQty = b.docQty != null ? toMilli(b.docQty, f) : qty;
     const unitCost = Math.round((b.unitCost * 1000) / f);
     lineSql = db
-      .prepare(`INSERT INTO stock_doc_lines(doc_id, product_id, unit, doc_qty_milli, qty_milli, unit_cost, expires_at) VALUES (?,?,?,?,?,?,?)`)
-      .bind(doc.id, b.productId, b.unit, docQty, qty, unitCost, b.expiresAt ? normDate(b.expiresAt) : null);
+      .prepare(`INSERT INTO stock_doc_lines(doc_id, product_id, unit, doc_qty_milli, qty_milli, unit_cost, expires_at, amount) VALUES (?,?,?,?,?,?,?,?)`)
+      .bind(doc.id, b.productId, b.unit, docQty, qty, unitCost, b.expiresAt ? normDate(b.expiresAt) : null, Math.round(b.qty * b.unitCost));
   } else if (type === "count") {
     const b = await parseBody(c, countLine);
     const lot = await loadLot(db, b.lotId);
@@ -229,7 +230,7 @@ inventoryRoutes.delete("/stock-docs/:id/lines/:lineId", requirePerm("inventory.w
 // ---------------------------------------------------------------- quét mã (M2-16)
 const scanBody = z.object({
   code: z.string().trim().min(1).max(100),
-  qty: z.number().positive().optional(),
+  qty: z.number().positive().max(1_000_000).optional(),
   unit: z.string().trim().min(1).optional(),
   reason: z.string().trim().min(1).max(100).optional(),
 });
@@ -267,7 +268,7 @@ inventoryRoutes.post("/stock-docs/:id/scan", requirePerm("inventory.write"), asy
     const line = await db.prepare(`SELECT id FROM stock_doc_lines WHERE doc_id = ? AND product_id = ? ORDER BY id LIMIT 1`).bind(doc.id, productId).first<any>();
     if (!line) return fail("not_in_doc", "not_in_doc", "Mặt hàng không có trong phiếu nhập", { productId });
     await db.batch([
-      db.prepare(`UPDATE stock_doc_lines SET qty_milli = qty_milli + ? WHERE id = ?`).bind(qtyMilli, line.id),
+      db.prepare(`UPDATE stock_doc_lines SET qty_milli = qty_milli + ?, amount = NULL WHERE id = ?`).bind(qtyMilli, line.id),
       okScan,
       auditStmt(c, { action: "stock_doc.scan", entity: "stock_doc", entityId: doc.id, after: { code: b.code, qtyMilli } }),
     ]);
@@ -331,7 +332,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
       const prod = await db.prepare(`SELECT shelf_life_days FROM products WHERE id = ?`).bind(l.product_id).first<any>();
       const expires = l.expires_at ?? (prod?.shelf_life_days ? new Date(Date.now() + prod.shelf_life_days * 86400_000).toISOString() : null);
       const tmp = `TMP-${crypto.randomUUID()}`;
-      total += val(l.unit_cost, l.qty_milli);
+      total += l.amount ?? val(l.unit_cost, l.qty_milli); // thành tiền theo đơn giá chứng từ, làm tròn một lần (audit #13)
       if (l.doc_qty_milli != null && l.doc_qty_milli !== l.qty_milli) variances.push({ lineId: l.id, productId: l.product_id, docQtyMilli: l.doc_qty_milli, qtyMilli: l.qty_milli });
       stmts.push(
         db
@@ -444,6 +445,8 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
 function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
   const db = c.env.DB;
   return [
+    // Chốt chặn (audit #8): post/huỷ đồng thời — chỉ chứng từ còn nháp/chờ duyệt mới được ghi sổ
+    assertStmt(db, "stock_doc.post", `SELECT status IN ('draft','pending_approval') FROM stock_docs WHERE id = ?`, [doc.id]),
     // Khoá chống post trùng: lần thứ hai vi phạm PRIMARY KEY → cả batch rollback (migrations/0002)
     db.prepare(`INSERT INTO stock_doc_post_guard(doc_id) VALUES (?)`).bind(doc.id),
     db
@@ -461,14 +464,16 @@ inventoryRoutes.post("/stock-docs/:id/post", requirePerm("inventory.write"), asy
   if (doc.status !== "draft") throw conflict("doc_not_draft", doc.status === "pending_approval" ? "Chứng từ đang chờ duyệt" : "Chứng từ đã được xử lý");
   const plan = await planPost(c, doc, null);
   const u = c.get("user");
-  if (plan.approvalReason) {
-    await db.batch([
+  const approvalReason = plan.approvalReason;
+  if (approvalReason) {
+    await guarded(() => db.batch([
+      assertStmt(db, "stock_doc.request", `SELECT status = 'draft' FROM stock_docs WHERE id = ?`, [id]),
       db.prepare(`UPDATE stock_docs SET status='pending_approval', version=version+1 WHERE id=? AND status='draft'`).bind(id),
       db
         .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('stock_doc.post','stock_doc',?,?,?,?)`)
-        .bind(String(id), JSON.stringify({ code: doc.code, type: doc.type, totalAmount: plan.total }), plan.approvalReason, u.id),
-      auditStmt(c, { action: "stock_doc.request_approval", entity: "stock_doc", entityId: id, reason: plan.approvalReason, after: { status: "pending_approval" } }),
-    ]);
+        .bind(String(id), JSON.stringify({ code: doc.code, type: doc.type, totalAmount: plan.total }), approvalReason, u.id),
+      auditStmt(c, { action: "stock_doc.request_approval", entity: "stock_doc", entityId: id, reason: approvalReason, after: { status: "pending_approval" } }),
+    ]));
     const ap = await db.prepare(`SELECT id FROM approvals WHERE ref_type='stock_doc' AND ref_id=? AND status='pending' ORDER BY id DESC LIMIT 1`).bind(String(id)).first<any>();
     const d = await loadDoc(db, id);
     return c.json({ ...docShape(d), status: "pending_approval", approvalId: ap?.id ?? null, approvalReason: plan.approvalReason });
@@ -497,6 +502,7 @@ export async function rejectStockDocPost(c: Ctx, docId: number, note?: string) {
   const doc = await loadDoc(db, docId);
   if (doc.status !== "pending_approval") return docShape(doc);
   await db.batch([
+    assertStmt(db, "stock_doc.reject", `SELECT status = 'pending_approval' FROM stock_docs WHERE id = ?`, [docId]),
     db.prepare(`UPDATE stock_docs SET status='draft', version=version+1 WHERE id=? AND status='pending_approval'`).bind(docId),
     auditStmt(c, { action: "stock_doc.approval_rejected", entity: "stock_doc", entityId: docId, reason: note, after: { status: "draft" } }),
   ]);
@@ -510,6 +516,7 @@ inventoryRoutes.post("/stock-docs/:id/cancel", requirePerm("inventory.write"), a
   if (doc.status !== "draft" && doc.status !== "pending_approval") throw conflict("doc_not_cancellable", "Chỉ huỷ được chứng từ nháp hoặc đang chờ duyệt");
   const u = c.get("user");
   await db.batch([
+    assertStmt(db, "stock_doc.cancel", `SELECT status IN ('draft','pending_approval') FROM stock_docs WHERE id = ?`, [id]),
     db.prepare(`UPDATE stock_docs SET status='cancelled', version=version+1 WHERE id=? AND status IN ('draft','pending_approval')`).bind(id),
     db
       .prepare(`UPDATE approvals SET status='rejected', decided_by=?, decided_at=?, decision_note='Chứng từ đã huỷ' WHERE ref_type='stock_doc' AND ref_id=? AND status='pending'`)

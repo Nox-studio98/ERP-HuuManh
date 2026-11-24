@@ -11,6 +11,7 @@ import { nextCode } from "../lib/codes";
 import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveStmts } from "./reservations";
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
+import { assertStmt } from "./guard";
 import { guardStmts, notifyJob, refundPlan, runOrderBatch } from "./online-payments";
 import { unitFactor } from "./http";
 
@@ -339,7 +340,7 @@ export async function returnToStock(
     extraBinds: refund ? [refund.status, refund.amount] : undefined,
   });
   stmts.unshift(t[0]);
-  if (refund) stmts.push(refund.stmt);
+  if (refund) stmts.push(refund.guard, refund.stmt);
   stmts.push(...t.slice(1), notifyJob(db, id, { status: "returned" }), auditStmt(c, { action: "online_order.return", entity: "order", entityId: id, before: { status: o.status }, after: { status: "returned", lines: summary, refund: refund?.amount ?? 0 } }));
   await runOrderBatch(db, id, o.status, stmts);
   await finish(c, id);
@@ -375,7 +376,7 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
     ...release,
     ...restock,
     db.prepare(`UPDATE payment_intents SET status='cancelled' WHERE order_id=? AND status='pending'`).bind(id),
-    ...(refund ? [refund.stmt] : []),
+    ...(refund ? [refund.guard, refund.stmt] : []),
     ...t.slice(1),
     notifyJob(db, id, { status: "cancelled" }),
     auditStmt(c, { action: "online_order.cancel", entity: "order", entityId: id, before: { status: o.status }, after: { status: "cancelled", refund: refund?.amount ?? 0, restocked: lots.size > 0 }, reason }),
@@ -395,6 +396,7 @@ export async function refundOrder(c: Ctx, id: number) {
   const [g1, g2] = guardStmts(db, id, o.status);
   await runOrderBatch(db, id, o.status, [
     g1,
+    refund.guard,
     refund.stmt,
     db.prepare(`UPDATE orders SET payment_status=?, paid_total = paid_total - ? WHERE id=?`).bind(refund.status, refund.amount, id),
     g2,
@@ -433,8 +435,10 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   const db = c.env.DB;
   const user = c.get("user");
   if (b.clientUuid) {
-    const ex = await db.prepare(`SELECT id, status FROM orders WHERE client_uuid=?`).bind(b.clientUuid).first<{ id: number; status: string }>();
-    if (ex) {
+    const ex = await db.prepare(`SELECT id, status, created_at FROM orders WHERE client_uuid=?`).bind(b.clientUuid).first<{ id: number; status: string; created_at: string }>();
+    if (ex && ex.status === "draft" && Date.parse(ex.created_at) < Date.now() - STALE_DRAFT_REPLAY_MS) {
+      await retireStaleDraft(db, ex.id); // nháp mồ côi (crash giữa chừng): giải phóng clientUuid để thử lại
+    } else if (ex) {
       if (ex.status === "draft") throw conflict("order_in_progress", "Đơn đang được xử lý, vui lòng thử lại");
       return { id: ex.id, created: false };
     }
@@ -523,6 +527,10 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
       const toReserve = items.filter((i) => i.reserve > 0).map((i) => ({ orderLineId: i.lineId!, productId: i.productId, qtyMilli: i.reserve }));
       const plans = await planReservations(db, toReserve, storeId);
       const stmts: D1PreparedStatement[] = [
+        // Chốt chặn sức chứa khung giờ (audit #17): hai đơn đồng thời không được cùng chiếm chỗ cuối
+        ...(b.slotDate && b.slotId
+          ? [assertStmt(db, "slot.capacity", `SELECT (SELECT COUNT(*) FROM orders WHERE slot_date = ? AND slot_id = ? AND status NOT IN ('cancelled','returned','draft')) < (SELECT capacity FROM delivery_slots WHERE id = ?)`, [b.slotDate, b.slotId, b.slotId])]
+          : []),
         ...reserveStmts(db, orderId, plans),
         db.prepare(`UPDATE orders SET status=? WHERE id=? AND status='draft'`).bind(status, orderId),
         db.prepare(`INSERT INTO order_events(order_id, status, note, actor_type, actor_id) VALUES (?,?,?, 'staff', ?)`).bind(orderId, status, "Đơn được tạo bởi cửa hàng (mạng xã hội)", user.id),
@@ -549,11 +557,40 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     }
   } catch (e) {
     await cancelDraft();
+    if (/state_changed/.test(String((e as Error)?.message)) && b.slotDate && b.slotId) throw conflict("slot_full", "Khung giờ giao đã đầy");
     if (/CHECK constraint failed/i.test(String((e as Error)?.message))) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
     throw e;
   }
   await kickJobs(c.env, "order", orderId);
   return { id: orderId, created: true };
+}
+
+// ---------------------------------------------------------------- đơn nháp mồ côi (audit #16)
+
+/** Nháp quá tuổi này khi client gửi lại cùng clientUuid thì coi là mồ côi (crash giữa lúc tạo nháp và batch hoàn tất). */
+export const STALE_DRAFT_REPLAY_MS = 2 * 60_000;
+/** Nháp quá tuổi này bị cron dọn. */
+export const STALE_DRAFT_SWEEP_MS = 10 * 60_000;
+
+/** Huỷ một nháp mồ côi và giải phóng client_uuid (UNIQUE) để lần gửi lại tạo đơn mới. Chỉ tác động khi vẫn là 'draft'. */
+export async function retireStaleDraft(db: D1Database, orderId: number) {
+  await db
+    .prepare(`UPDATE orders SET status='cancelled', client_uuid = CASE WHEN client_uuid IS NULL THEN NULL ELSE client_uuid || ':stale:' || id END WHERE id = ? AND status = 'draft'`)
+    .bind(orderId)
+    .run();
+}
+
+/**
+ * Cron: huỷ các đơn 'draft' quá 10 phút (nháp không bao giờ giữ kho/tiền vì batch hoàn tất là nguyên tử) và
+ * giải phóng clientUuid. Trả số đơn đã dọn.
+ */
+export async function sweepStaleDrafts(db: D1Database, now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_DRAFT_SWEEP_MS).toISOString();
+  const r = await db
+    .prepare(`UPDATE orders SET status='cancelled', client_uuid = CASE WHEN client_uuid IS NULL THEN NULL ELSE client_uuid || ':stale:' || id END WHERE status = 'draft' AND created_at < ?`)
+    .bind(cutoff)
+    .run();
+  return r.meta.changes ?? 0;
 }
 
 export const canCost = (c: Ctx) => can(c.get("user").role, "prices.view_cost");

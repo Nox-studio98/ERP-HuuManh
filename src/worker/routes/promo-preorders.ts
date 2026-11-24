@@ -14,6 +14,7 @@ import { resolvePrice } from "../services/pricing";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
 import { consumeForDeliveryStmts, planReservations, releaseOrderStmts } from "../services/reservations";
 import { getSettingInt } from "../services/settings";
+import { assertStmt } from "../services/guard";
 
 /** M1-12 đặt trước giỏ quà dịp lễ tại quầy: cọc khi đặt → phiếu thu; giao thì trừ cọc, doanh thu ghi nhận khi đơn completed. */
 export const preorderRoutes = new Hono<AppBindings>();
@@ -60,7 +61,7 @@ const preorderSchema = z.object({
   customer: z.object({ name: z.string().trim().min(1).max(100), phone: z.string().trim().min(8).max(20) }).optional(),
   pickupDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   lines: z.array(z.object({ productId: z.number().int().positive(), unit: z.string().min(1).max(20), qty: z.number().positive().max(100000) })).min(1).max(100),
-  deposit: z.object({ amount: z.number().int().positive(), method: z.enum(METHODS) }),
+  deposit: z.object({ amount: z.number().int().positive().max(10_000_000_000), method: z.enum(METHODS) }),
   note: z.string().max(500).optional(),
 });
 
@@ -237,7 +238,7 @@ async function loadPreorder(db: D1Database, id: number) {
 
 preorderRoutes.post("/pos/preorders/:id/fulfill", requirePerm("pos.sell"), async (c) => {
   const id = Number(c.req.param("id"));
-  const b = await parseBody(c, z.object({ payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive(), ref: z.string().max(100).optional() })).max(10).default([]) }));
+  const b = await parseBody(c, z.object({ payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(10_000_000_000), ref: z.string().max(100).optional() })).max(10).default([]) }));
   const db = c.env.DB;
   const user = c.get("user");
   const { o, dep } = await loadPreorder(db, id);
@@ -273,7 +274,12 @@ preorderRoutes.post("/pos/preorders/:id/fulfill", requirePerm("pos.sell"), async
       allocByLine.set(lineId, [...(allocByLine.get(lineId) ?? []), ...alloc]);
       extra.push(...moveStatements(db, line.product_id, alloc, -1, "sale", "order", id, user.id));
     }
-    const stmts: D1PreparedStatement[] = [...consume.stmts, ...extra];
+    // Chốt chặn (audit #7): giao/huỷ/hoàn cọc đồng thời — đơn còn 'confirmed' và cọc còn 'held' mới được xuất kho
+    const stmts: D1PreparedStatement[] = [
+      assertStmt(db, "preorder.fulfill", `SELECT (SELECT status FROM orders WHERE id = ?) = 'confirmed' AND (SELECT status FROM order_deposits WHERE id = ?) = 'held'`, [id, dep.id]),
+      ...consume.stmts,
+      ...extra,
+    ];
     let costTotal = 0;
     for (const l of lines) {
       const alloc = allocByLine.get(l.id) ?? [];
@@ -313,7 +319,11 @@ preorderRoutes.post("/pos/preorders/:id/fulfill", requirePerm("pos.sell"), async
 async function cancelStatements(c: Ctx, o: any, dep: any, mode: "refund" | "forfeit", reason: string) {
   const db = c.env.DB;
   const user = c.get("user");
-  const stmts: D1PreparedStatement[] = [...(await releaseOrderStmts(db, o.id))];
+  const stmts: D1PreparedStatement[] = [
+    // Chốt chặn (audit #7): hoàn cọc hai lần / hoàn cọc sau khi đã giao → rollback, không sinh phiếu chi thứ hai
+    assertStmt(db, "preorder.cancel", `SELECT (SELECT status FROM orders WHERE id = ?) = 'confirmed' AND (SELECT status FROM order_deposits WHERE id = ?) = 'held'`, [o.id, dep.id]),
+    ...(await releaseOrderStmts(db, o.id)),
+  ];
   stmts.push(db.prepare(`UPDATE orders SET status='cancelled', void_reason=?, voided_by=? WHERE id=? AND status='confirmed'`).bind(reason, user.id, o.id));
   if (mode === "refund") {
     const vCode = await nextCode(db, PREFIX.cashOut);

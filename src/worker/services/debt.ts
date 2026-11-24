@@ -76,16 +76,39 @@ export async function customerDebtStatus(db: D1Database, customerId: number, tod
   };
 }
 
+/** Trạng thái đơn sỉ đã cam kết hàng/giá nhưng CHƯA lập hoá đơn → chưa nằm trong công nợ nhưng vẫn là rủi ro tín dụng. */
+export const OPEN_B2B_STATUSES = ["new", "confirmed", "preparing", "shipping"] as const;
+
+/**
+ * Tổng giá trị các đơn sỉ đang mở (chưa có hoá đơn bán) của khách, trừ đơn `excludeOrderId` (đơn đang kiểm tra).
+ * Đơn 'new' chỉ tính nếu tạo TRƯỚC đơn đang xét (id nhỏ hơn) — nếu không hai đơn 'new' sẽ chặn lẫn nhau.
+ */
+export async function openB2bExposure(db: D1Database, customerId: number, excludeOrderId = 0, statuses: readonly string[] = OPEN_B2B_STATUSES) {
+  const r = await db
+    .prepare(
+      `SELECT COALESCE(SUM(o.total), 0) AS s FROM orders o
+        WHERE o.customer_id = ? AND o.channel = 'b2b' AND o.kind = 'sale' AND o.status IN (${statuses.map(() => "?").join(",")}) AND o.id <> ?
+          AND (o.status <> 'new' OR ? = 0 OR o.id < ?)
+          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND i.kind = 'sale' AND i.status = 'open')`,
+    )
+    .bind(customerId, ...statuses, excludeOrderId, excludeOrderId, excludeOrderId)
+    .first<{ s: number }>();
+  return r?.s ?? 0;
+}
+
 /**
  * Kiểm tra hạn mức trước khi tạo/giữ hàng đơn sỉ (EC-23, M4-04, M5-05):
- * chặn nếu có nợ quá hạn hoặc balance + giá trị đơn mới > hạn mức. Chỉ chủ (b2b.credit_override) duyệt tay.
+ * chặn nếu có nợ quá hạn hoặc balance + các đơn đang mở chưa xuất hoá đơn + giá trị đơn mới > hạn mức.
+ * (Audit #9: trước đây bỏ qua đơn đang mở → nhiều đơn nhỏ cùng vượt hạn mức.) Chỉ chủ (b2b.credit_override) duyệt tay.
+ * `exposure` = tổng đơn đang mở (trừ đơn đang xét) đã dùng để so — confirm dùng nó để chốt chặn đồng thời trong batch.
  */
-export async function checkCredit(db: D1Database, customerId: number, newOrderAmount: number) {
+export async function checkCredit(db: D1Database, customerId: number, newOrderAmount: number, excludeOrderId = 0) {
   const s = await customerDebtStatus(db, customerId);
+  const exposure = await openB2bExposure(db, customerId, excludeOrderId);
   const reasons: string[] = [];
   if (s.overdueCount > 0) reasons.push("overdue");
-  if (s.balance + newOrderAmount > s.creditLimit) reasons.push("over_limit");
-  return { ok: reasons.length === 0, reasons, status: s };
+  if (s.balance + exposure + newOrderAmount > s.creditLimit) reasons.push("over_limit");
+  return { ok: reasons.length === 0, reasons, status: s, openOrders: exposure };
 }
 
 export async function supplierDebtStatus(db: D1Database, supplierId: number, today = vnDate()) {
