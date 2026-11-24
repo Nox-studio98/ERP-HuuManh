@@ -38,7 +38,7 @@ function OpenShift({ onOpened, allowed }: { onOpened: () => void; allowed: boole
   const auth = useAuth();
   const last = useAsync(async () => { try { return (await get("/shifts/last", undefined, { silent: true }))?.shift ?? null; } catch { return null; } }, []);
   const l = last.data;
-  const open = async () => { setBusy(true); try { await post("/shifts/open", { openingCash: cash }); toast("Đã mở ca", "ok"); onOpened(); } catch {} finally { setBusy(false); } };
+  const open = async () => { setBusy(true); try { await post("/shifts/open", { openingCash: cash }); toast("Đã mở ca", "ok"); window.dispatchEvent(new Event("hm:shift")); onOpened(); } catch {} finally { setBusy(false); } };
   return (
     <div className="hero-panel">
       <div className="hero-grid">

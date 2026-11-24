@@ -33,7 +33,7 @@ function OrderList() {
   const dirty = !!(status || day || cust || q);
   const reset = () => { setStatus(""); setDay(""); setCust(""); setQ(""); };
   const tabs = can("b2b.write") ? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} /> : null;
-  if (tab === "recurring") return <div className="stack">{tabs ?? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />}<Recurring /></div>;
+  if (tab === "recurring") return <Recurring tabs={tabs ?? <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "orders", label: "Đơn sỉ" }, { v: "recurring", label: "Đơn lặp" }]} />} />;
   const rangeLabel = range.from === range.to ? ymd(range.from) : `${ymd(range.from)} – ${ymd(range.to)}`;
   return (
     <div className="stack">

@@ -74,13 +74,13 @@ function OrderList() {
                 action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}<Lnk to="/online-orders/new" className="btn">+ Tạo đơn mạng xã hội</Lnk>{range.preset !== "lastMonth" && <Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button>}</div>} />}
               cols={[
                 { key: "c", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="num nw">{o.code}</b> },
-                { key: "t", label: "Đặt lúc", hideBelow: 1440, sort: (o) => o.createdAt, render: (o) => fmtDateTime(o.createdAt) },
-                { key: "r", label: "Người nhận", sort: (o) => o.receiverName ?? "", render: (o) => <span>{o.receiverName}<div className="small muted">{o.receiverPhone}</div></span> },
-                { key: "ch", label: "Kênh", hideBelow: 1280, sort: (o) => CHANNEL_LABEL[o.channel] ?? o.channel, render: (o) => CHANNEL_LABEL[o.channel] ?? o.channel },
+                { key: "t", label: "Đặt lúc", hideBelow: 1600, sort: (o) => o.createdAt, render: (o) => <span className="nw">{fmtDateTime(o.createdAt)}</span> },
+                { key: "r", label: "Người nhận", sort: (o) => o.receiverName ?? "", render: (o) => <span><span className="nw">{o.receiverName}</span><div className="small muted">{o.receiverPhone}</div></span> },
+                { key: "ch", label: "Kênh", hideBelow: 1440, sort: (o) => CHANNEL_LABEL[o.channel] ?? o.channel, render: (o) => <span className="nw">{CHANNEL_LABEL[o.channel] ?? o.channel}</span> },
                 { key: "z", label: "Giao", sort: (o) => o.slotDate ?? "", render: (o) => <span>{o.slotDate ? `${ymdShow(o.slotDate)} ${o.slotLabel ?? ""}` : "Chưa hẹn"}<div className="small muted">{o.district ?? "—"}</div></span> },
-                { key: "p", label: "Thanh toán", hideBelow: 1280, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge> },
+                { key: "p", label: "Thanh toán", hideBelow: 1600, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge> },
                 { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => (
-                  <span className="row wrap" style={{ gap: 4 }}>
+                  <span className="row wrap st-badges" style={{ gap: 4 }}>
                     <Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status] ?? o.status}</Badge>
                     {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
                     {o.weightAdjustStatus === "pending_customer" && <Badge tone="warn">Chờ khách xác nhận cân</Badge>}

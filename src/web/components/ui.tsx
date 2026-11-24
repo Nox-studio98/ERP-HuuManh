@@ -134,7 +134,7 @@ export type Col<T> = {
   /** căn phải (số tiền, số lượng) */ right?: boolean; num?: boolean;
   hideMobile?: boolean; hideDesktop?: boolean; title?: boolean;
   /** giá trị dùng để sắp xếp phía client; có thì tiêu đề cột bấm để sắp xếp */ sort?: (r: T) => string | number | null | undefined;
-  /** ẩn cột khi màn hình hẹp hơn (px): 1024 | 1280 | 1440 */ hideBelow?: 1024 | 1280 | 1440;
+  /** ẩn cột khi màn hình hẹp hơn (px): 1024 | 1280 | 1440 */ hideBelow?: 1024 | 1280 | 1440 | 1600;
 };
 export type SortState = { key: string; dir: "asc" | "desc" } | null;
 const cmp = (a: unknown, b: unknown) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), "vi", { numeric: true }));

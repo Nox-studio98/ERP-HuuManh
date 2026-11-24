@@ -57,7 +57,7 @@ export default function Quotes() {
               { key: "k", label: "Khách hàng", sort: (x) => x.customerName, render: (x) => x.customerName },
               { key: "s", label: "Trạng thái", sort: (x) => x.status, render: (x) => <Badge tone={quoteTone(x.status)}>{QUOTE_STATUS[x.status] ?? x.status}</Badge> },
               { key: "d", label: "Ngày tạo", hideBelow: 1280, sort: (x) => x.createdAt, render: (x) => ymd(x.createdAt) },
-              { key: "v", label: "Hiệu lực đến", sort: (x) => x.validUntil, render: (x) => ymd(x.validUntil) },
+              { key: "v", label: "Hiệu lực đến", hideBelow: 1280, sort: (x) => x.validUntil, render: (x) => ymd(x.validUntil) },
               { key: "t", label: "Tạm tính", num: true, sort: (x) => x.subtotal, render: (x) => <span className="money">{money(x.subtotal)}</span> },
             ]} />
         )}
