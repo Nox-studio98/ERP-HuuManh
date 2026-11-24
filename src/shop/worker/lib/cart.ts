@@ -5,6 +5,7 @@ import { availableQty } from "../../../worker/services/stock";
 import { unitFactor } from "../../../worker/services/http";
 import { publicAvail, stepOf } from "./catalog";
 import { findZone, shippingFee, type Zone } from "./delivery";
+import { groupIdsOf, planPromotions } from "../../../worker/services/promo-checkout";
 
 export interface CartItemIn {
   productId: number;
@@ -125,4 +126,18 @@ export async function computeTotals(db: D1Database, lines: CartLine[], district:
   const zone = await findZone(db, district);
   const fee = zone ? shippingFee(zone, subtotal) : 0;
   return { subtotal, shippingFee: fee, total: subtotal + fee, zone, estimated: lines.some((l) => l.sellByWeight) } as Pricing;
+}
+
+/** Khuyến mãi / voucher cho giỏ online (engine dùng chung với POS). strict=true (checkout): voucher sai → lỗi; false (báo giá): chỉ trả `rejected`. */
+export async function promoForCart(db: D1Database, lines: CartLine[], subtotal: number, customerId: number | null, voucherCode: string | undefined, strict: boolean, receiverPhone: string | null = null) {
+  const groups = await groupIdsOf(db, lines.map((l) => l.productId));
+  return planPromotions(db, {
+    channel: "online",
+    customerId,
+    receiverPhone,
+    lines: lines.map((l) => ({ productId: l.productId, groupId: groups.get(l.productId) ?? null, qtyMilli: l.qtyMilli, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
+    subtotal,
+    voucherCode,
+    strict,
+  });
 }

@@ -6,7 +6,8 @@ import { vnDate } from "../src/worker/lib/time";
 export { testEnv };
 export const tomorrow = () => addDays(vnDate(), 1);
 export const today = () => vnDate();
-const baseEnv = (over: Record<string, unknown> = {}) => ({ ...testEnv, APP_ENV: "dev", JOBS: undefined, ...over }) as any;
+// RL_AUTH/RATE_LIMITER: wrangler `ratelimits` được miniflare nạp thật vào testEnv → mặc định tắt, test nào cần thì truyền qua env
+const baseEnv = (over: Record<string, unknown> = {}) => ({ ...testEnv, APP_ENV: "dev", JOBS: undefined, RL_AUTH: undefined, RATE_LIMITER: undefined, ...over }) as any;
 
 export interface CallOpts {
   headers?: Record<string, string>;
@@ -69,6 +70,8 @@ export async function seedShop() {
       (1,'mua-cam','Mùa cam','Tóm tắt','# Cam','published','2026-11-01T00:00:00Z'),(2,'nhap','Nháp','x','y','draft',NULL)`),
     d.prepare(`UPDATE settings SET value='0123456789' WHERE key='payment.bank_account'`),
     d.prepare(`UPDATE settings SET value='HUU MANH' WHERE key='payment.bank_account_name'`),
+    // Trần đơn mở theo SĐT (chống giữ hàng bằng đơn ảo) nâng cao cho bộ test dùng chung một SĐT; test sec-public đặt lại về 3
+    d.prepare(`INSERT INTO settings(key, value) VALUES ('online.max_open_orders_per_phone','1000') ON CONFLICT(key) DO UPDATE SET value = excluded.value`),
   ]);
 }
 

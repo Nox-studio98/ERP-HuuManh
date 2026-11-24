@@ -142,12 +142,12 @@ describe("static endpoints and security headers", () => {
 describe("rate limiting", () => {
   it("returns 429 when RATE_LIMITER rejects, keyed per bucket and IP; no-op without binding", async () => {
     const keys: string[] = [];
-    const limiter = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: !key.startsWith("auth:") }) };
+    const limiter = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: !key.startsWith("auth:login:") }) };
     const ok = await call("GET", "/api/health", undefined, { env: { RATE_LIMITER: limiter }, headers: { "cf-connecting-ip": "1.2.3.4" } });
     expect(ok.status).toBe(200);
     const blocked = await call("POST", "/api/auth/login", { email: "a@b.co", password: "x" }, { env: { RATE_LIMITER: limiter }, headers: { "cf-connecting-ip": "1.2.3.4" } });
     expect(blocked.status).toBe(429);
-    expect(keys).toEqual(["api:1.2.3.4", "auth:1.2.3.4"]);
+    expect(keys).toEqual(["read:1.2.3.4", "auth:login:1.2.3.4"]);
     expect((await call("GET", "/api/health")).status).toBe(200);
   });
 });

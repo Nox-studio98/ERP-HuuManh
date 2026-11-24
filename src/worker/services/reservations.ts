@@ -1,4 +1,5 @@
 import { allocateFefo, type LotAllocation } from "./stock";
+import { assertStmt } from "./guard";
 
 /**
  * Giữ tồn cho đơn chưa giao (M2-06) — dùng chung cho đơn sỉ (M4), đơn sàn Fresco, đơn online (Đợt 3).
@@ -85,10 +86,21 @@ async function activeReservations(db: D1Database, orderId: number) {
 export async function releaseOrderStmts(db: D1Database, orderId: number): Promise<D1PreparedStatement[]> {
   const rows = await activeReservations(db, orderId);
   const now = new Date().toISOString();
-  return rows.flatMap((r) => [
-    db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ?`).bind(r.qty_milli, r.lot_id),
-    db.prepare(`UPDATE reservations SET status='released', closed_at=? WHERE id=? AND status='active'`).bind(now, r.id),
-  ]);
+  if (!rows.length) return [];
+  return [
+    // Chốt chặn (audit #7): các dòng giữ tồn phải còn đúng như lúc đọc, nếu không (nhả đôi) cả batch rollback
+    activeCountGuard(db, orderId, rows.length),
+    ...rows.flatMap((r) => [
+      // Chỉ trừ qty_reserved khi dòng giữ còn 'active' — nhả lần hai không được "ăn" phần giữ của đơn khác
+      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ? AND EXISTS (SELECT 1 FROM reservations WHERE id = ? AND status = 'active')`).bind(r.qty_milli, r.lot_id, r.id),
+      db.prepare(`UPDATE reservations SET status='released', closed_at=? WHERE id=? AND status='active'`).bind(now, r.id),
+    ]),
+  ];
+}
+
+/** Số dòng giữ tồn đang active của đơn phải đúng bằng n (batch rollback 409 state_changed nếu đã bị nhả/xuất ở nơi khác). */
+export function activeCountGuard(db: D1Database, orderId: number, n: number) {
+  return assertStmt(db, "reservations.active", `SELECT COUNT(*) = ? FROM reservations WHERE order_id = ? AND status = 'active'`, [n, orderId]);
 }
 
 export interface ConsumeResult {
@@ -114,7 +126,7 @@ export async function consumeForDeliveryStmts(
 ): Promise<ConsumeResult> {
   const rows = await activeReservations(db, orderId);
   const now = new Date().toISOString();
-  const stmts: D1PreparedStatement[] = [];
+  const stmts: D1PreparedStatement[] = [activeCountGuard(db, orderId, rows.length)];
   const allocByLine = new Map<number, LotAllocation[]>();
   const remaining = new Map(deliveredByLine);
   for (const r of rows) {
@@ -124,8 +136,8 @@ export async function consumeForDeliveryStmts(
     if (take > 0) {
       stmts.push(
         db
-          .prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli - ?1, qty_reserved_milli = qty_reserved_milli - ?2 WHERE id = ?3`)
-          .bind(take, r.qty_milli, r.lot_id),
+          .prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli - ?1, qty_reserved_milli = qty_reserved_milli - ?2 WHERE id = ?3 AND EXISTS (SELECT 1 FROM reservations WHERE id = ?4 AND status = 'active')`)
+          .bind(take, r.qty_milli, r.lot_id, r.id),
         db
           .prepare(
             `INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id)
@@ -138,7 +150,7 @@ export async function consumeForDeliveryStmts(
       allocByLine.set(r.order_line_id, list);
       remaining.set(r.order_line_id, need - take);
     } else {
-      stmts.push(db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ?`).bind(release, r.lot_id));
+      stmts.push(db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ? AND EXISTS (SELECT 1 FROM reservations WHERE id = ? AND status = 'active')`).bind(release, r.lot_id, r.id));
     }
     stmts.push(
       db.prepare(`UPDATE reservations SET status=?, closed_at=? WHERE id=? AND status='active'`).bind(take > 0 ? "consumed" : "released", now, r.id),
@@ -167,7 +179,7 @@ export async function swapBadReservations(db: D1Database, storeId: number) {
   const short: { orderId: number; orderLineId: number; productId: number; missingMilli: number }[] = [];
   for (const r of results) {
     const release = [
-      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ?`).bind(r.qty_milli, r.lot_id),
+      db.prepare(`UPDATE lots SET qty_reserved_milli = qty_reserved_milli - ? WHERE id = ? AND EXISTS (SELECT 1 FROM reservations WHERE id = ? AND status = 'active')`).bind(r.qty_milli, r.lot_id, r.id),
       db.prepare(`UPDATE reservations SET status='released', closed_at=? WHERE id=? AND status='active'`).bind(now, r.id),
     ];
     try {

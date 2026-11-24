@@ -23,7 +23,11 @@ webhookRoutes.post(
     try {
       await verifyFrescoSignature(secret, raw, c.req.header("x-fresco-signature"), c.req.header("x-fresco-timestamp"));
     } catch (e) {
-      await sysAudit(db, { action: "fresco.webhook_rejected", entity: "webhook", after: { reason: (e as AppError).code, ip: c.req.header("cf-connecting-ip") ?? null } });
+      // Chống làm ngập audit_log bằng chữ ký sai: ghi tối đa 1 dòng/phút (còn lại chỉ log)
+      const since = new Date(Date.now() - 60_000).toISOString();
+      const recent = await db.prepare(`SELECT 1 AS x FROM audit_log WHERE action = 'fresco.webhook_rejected' AND at >= ? LIMIT 1`).bind(since).first();
+      if (!recent) await sysAudit(db, { action: "fresco.webhook_rejected", entity: "webhook", after: { reason: (e as AppError).code, ip: c.req.header("cf-connecting-ip") ?? null } });
+      else console.warn("[fresco] webhook bị từ chối:", (e as AppError).code);
       throw e;
     }
 

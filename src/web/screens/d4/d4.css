@@ -1,0 +1,26 @@
+/* Đợt 4: các màn hình khuyến mãi / giỏ quà / giá đối thủ / đặt hàng / tài chính */
+.d4 .tiles { display: grid; gap: var(--s-3); grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 900px) { .d4 .tiles { grid-template-columns: repeat(4, 1fr); } }
+.d4 .diff { font-weight: 700; font-variant-numeric: tabular-nums; }
+.d4 .diff.up { color: var(--danger); } .d4 .diff.down { color: var(--accent); } .d4 .diff.flat { color: var(--muted); }
+.d4 .barrow { display: grid; grid-template-columns: 1fr; gap: 4px; padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
+.d4 .bartrack { position: relative; height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.d4 .bartrack > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); }
+.d4 .bartrack > i.over { background: var(--danger); }
+.d4 .bartrack > b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); }
+.d4 .codebox { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; background: var(--surface-2); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3); max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.d4 .tbl { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.d4 .tbl th { text-align: left; font-size: .78rem; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.d4 .tbl td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.d4 .tbl .r { text-align: right; font-variant-numeric: tabular-nums; }
+.d4 .scrollx { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.d4 .li { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
+.d4 .li:last-child { border-bottom: 0; }
+.d4 .li > .t { min-width: 0; flex: 1; }
+.d4 .li .t b { display: block; overflow-wrap: anywhere; }
+.d4 .checks { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.d4 .checks label { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; }
+.d4 .legend { display: flex; flex-wrap: wrap; gap: var(--s-3); font-size: .8rem; color: var(--muted); }
+.d4 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+.d4 .chart .l1 { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.d4-sheet-wide .sheet { max-width: 720px; }

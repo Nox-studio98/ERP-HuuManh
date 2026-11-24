@@ -7,11 +7,15 @@ import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { lineAmount } from "../lib/money";
-import { vnDayRangeUtc } from "../lib/time";
+import { vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
 import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
 import { salesSummary } from "../services/salesreport";
+import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-checkout";
+import { assertStmt } from "../services/guard";
+import { retireStaleDraft } from "../services/online-ops";
+import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 
 export const posRoutes = new Hono<AppBindings>();
 
@@ -22,6 +26,8 @@ async function parseBody<T extends z.ZodTypeAny>(c: Ctx, schema: T): Promise<z.i
   return schema.parse(raw);
 }
 
+const MAX_VND = 10_000_000_000;
+const MAX_QTY = 1_000_000;
 const METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
 
@@ -87,7 +93,7 @@ posRoutes.get("/shifts/current", requirePerm("pos.shift"), async (c) => {
 });
 
 posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
-  const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0) }));
+  const body = await parseBody(c, z.object({ openingCash: z.number().int().min(0).max(MAX_VND) }));
   const db = c.env.DB;
   const user = c.get("user");
   if (await openShiftOf(db, user.id)) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
@@ -97,14 +103,20 @@ posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
     .bind(storeId)
     .first<{ id: number }>();
   if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ tiền mặt");
-  const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
-  const id = r.meta.last_row_id as number;
+  let id: number;
+  try {
+    const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
+    id = r.meta.last_row_id as number;
+  } catch (e) {
+    if (/UNIQUE/i.test(String((e as Error)?.message))) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
+    throw e;
+  }
   await auditStmt(c, { action: "shift.open", entity: "shift", entityId: id, after: { openingCash: body.openingCash } }).run();
   const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
   return c.json({ shift }, 201);
 });
 
-async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number }) {
+async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number; fund_id?: number; user_id?: number; opened_at?: string; closed_at?: string | null }) {
   const r = await db
     .prepare(
       `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
@@ -112,12 +124,21 @@ async function expectedCash(db: D1Database, shift: { id: number; opening_cash: n
     )
     .bind(shift.id)
     .first<{ s: number }>();
-  return shift.opening_cash + (r?.s ?? 0);
+  // Đặt cọc đơn đặt trước (M1-12): phiếu thu/chi tiền mặt trên quỹ của ca, do người mở ca lập từ lúc mở ca
+  const dep = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s FROM cash_vouchers
+        WHERE status='posted' AND ref_type='order_deposit' AND fund_id = ? AND created_by = ? AND created_at >= ?
+          AND (? IS NULL OR created_at <= ?)`,
+    )
+    .bind((shift as any).fund_id, (shift as any).user_id, (shift as any).opened_at, (shift as any).closed_at ?? null, (shift as any).closed_at ?? null)
+    .first<{ s: number }>();
+  return shift.opening_cash + (r?.s ?? 0) + (dep?.s ?? 0);
 }
 
 posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
   const id = Number(c.req.param("id"));
-  const body = await parseBody(c, z.object({ countedCash: z.number().int().min(0), diffReason: z.string().trim().min(3).max(500).optional() }));
+  const body = await parseBody(c, z.object({ countedCash: z.number().int().min(0).max(MAX_VND), diffReason: z.string().trim().min(3).max(500).optional() }));
   const db = c.env.DB;
   const user = c.get("user");
   const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first<any>();
@@ -160,17 +181,19 @@ const checkoutSchema = z.object({
       z.object({
         productId: z.number().int().positive(),
         unit: z.string().min(1).max(20),
-        qty: z.number().positive().max(1_000_000),
-        unitPriceOverride: z.number().int().min(0).optional(), // VND / đơn vị chính
-        discount: z.number().int().min(0).optional(), // VND, giảm trực tiếp trên dòng
+        qty: z.number().positive().max(MAX_QTY),
+        unitPriceOverride: z.number().int().min(0).max(MAX_VND).optional(), // VND / đơn vị chính
+        discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm trực tiếp trên dòng
       }),
     )
     .min(1)
     .max(200),
-  discount: z.number().int().min(0).optional(), // VND, giảm cả đơn
-  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive(), ref: z.string().max(100).optional() })).max(10),
+  discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm cả đơn
+  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().max(100).optional() })).max(10),
   note: z.string().max(500).optional(),
   approvalId: z.number().int().positive().optional(),
+  voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
+  redeemPoints: z.number().int().positive().max(1_000_000_000).optional(), // Đợt 4: đổi điểm tích luỹ
 });
 
 async function getOrderFull(c: Ctx, orderId: number) {
@@ -203,16 +226,21 @@ async function getOrderFull(c: Ctx, orderId: number) {
       .all<any>()
   ).results;
   const payments = (await db.prepare(`SELECT * FROM payments WHERE order_id = ? ORDER BY id`).bind(orderId).all()).results;
+  const discounts = (
+    await db.prepare(`SELECT id, promotion_id, voucher_id, points_redeemed, amount, description FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(orderId).all()
+  ).results;
   const canCost = can(role, "prices.view_cost");
-  const { customer_phone, ...rest } = o;
+  const { customer_phone, cost_total, ...rest } = o;
   return {
     ...rest,
+    ...(canCost ? { cost_total } : {}),
     customer: o.customer_id ? { id: o.customer_id, name: o.customer_name, phone: maskPhone(customer_phone, role) } : null,
     lines: lines.map((l) => {
       const { cost_amount, ...r } = l;
       return { ...(canCost ? { cost_amount } : {}), ...r, lots: lots.filter((x) => x.order_line_id === l.id).map((x) => (canCost ? x : { ...x, unit_cost: undefined })) };
     }),
     payments,
+    discounts,
   };
 }
 
@@ -220,10 +248,16 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const body = await parseBody(c, checkoutSchema);
   const db = c.env.DB;
   const user = c.get("user");
-  const orderDone = async (id: number, status: 200 | 201, change = 0) => c.json({ ...(await getOrderFull(c, id)), change }, status);
+  const orderDone = async (id: number, status: 200 | 201, change = 0, extra: object = {}) =>
+    c.json({ ...(await getOrderFull(c, id)), change, ...extra }, status);
 
   // EC-04: idempotent theo clientUuid
-  const existing = await db.prepare(`SELECT id, status FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string }>();
+  let existing = await db.prepare(`SELECT id, status, created_at FROM orders WHERE client_uuid = ?`).bind(body.clientUuid).first<{ id: number; status: string; created_at: string }>();
+  // Đơn nháp mồ côi (crash giữa lúc tạo nháp và batch): quá 2 phút thì giải phóng clientUuid để client thử lại
+  if (existing && existing.status === "draft" && Date.parse(existing.created_at) < Date.now() - 120_000) {
+    await retireStaleDraft(db, existing.id);
+    existing = null;
+  }
   if (existing && existing.status !== "cancelled" && existing.status !== "draft") return orderDone(existing.id, 200);
   if (existing) throw conflict("order_in_progress", "Đơn đang xử lý hoặc đã huỷ, vui lòng tạo đơn mới với clientUuid khác");
 
@@ -241,7 +275,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   // Bước A: quy đổi đơn vị, giá, số tiền (không phụ thuộc phân bổ lô)
   const items = [] as {
     productId: number; unit: string; qtyMilli: number; unitPrice: number; listPrice: number; priceListId: number;
-    gross: number; lineDiscount: number; discount: number; lineTotal: number; listGross: number;
+    gross: number; lineDiscount: number; discount: number; lineTotal: number; listGross: number; promoDiscount: number;
   }[];
   for (const l of body.lines) {
     const { factor } = await unitFactor(db, l.productId, l.unit);
@@ -253,7 +287,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const lineDiscount = Math.min(l.discount ?? 0, gross);
     items.push({
       productId: l.productId, unit: l.unit, qtyMilli, unitPrice, listPrice: resolved.unitPrice, priceListId: resolved.priceListId,
-      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli),
+      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli), promoDiscount: 0,
     });
   }
   const baseSum = items.reduce((s, i) => s + i.gross - i.lineDiscount, 0);
@@ -265,6 +299,22 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     given += share;
     it.discount = it.lineDiscount + share;
     it.lineTotal = it.gross - it.discount;
+  });
+  // Đợt 4: khuyến mãi / voucher / đổi điểm (engine dùng chung) — ghi trong cùng batch với đơn
+  const groups = await groupIdsOf(db, items.map((i) => i.productId));
+  const promoPlan = await planPromotions(db, {
+    channel: "pos",
+    customerId: customer?.id ?? null,
+    lines: items.map((i) => ({ productId: i.productId, groupId: groups.get(i.productId) ?? null, qtyMilli: i.qtyMilli, unitPrice: i.unitPrice, lineTotal: i.lineTotal })),
+    subtotal: items.reduce((s, i) => s + i.lineTotal, 0),
+    voucherCode: body.voucherCode,
+    redeemPoints: body.redeemPoints,
+    strict: true,
+  });
+  items.forEach((it, i) => {
+    it.promoDiscount = promoPlan.lineDiscounts[i];
+    it.discount += it.promoDiscount;
+    it.lineTotal -= it.promoDiscount;
   });
   const subtotal = items.reduce((s, i) => s + i.gross, 0);
   const totalDiscount = items.reduce((s, i) => s + i.discount, 0);
@@ -303,12 +353,12 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const costs = lineAllocs.map((a) => allocationCost(a));
     const reasons: string[] = [];
     const listSum = items.reduce((s, i) => s + i.listGross, 0);
-    const discValue = items.reduce((s, i) => s + Math.max(0, i.listGross - i.lineTotal), 0);
+    const discValue = items.reduce((s, i) => s + Math.max(0, i.listGross - i.lineTotal - i.promoDiscount), 0);
     if (listSum > 0 && (discValue * 10000) / listSum > discountBp) reasons.push("discount");
-    if (items.some((it, i) => it.lineTotal < costs[i])) reasons.push("below_cost");
+    if (items.some((it, i) => it.lineTotal + it.promoDiscount < costs[i])) reasons.push("below_cost");
     approvalUsed = null;
     if (reasons.length && !can(user.role, "approvals.decide")) {
-      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue });
+      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue }, await cartHash(body));
     }
     return { lineAllocs, productAllocs, costs, belowCost: reasons.includes("below_cost") };
   };
@@ -335,6 +385,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
 
   const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
 
+  const promoStmts = await promoStatements(db, { sql: "?", bind: orderId }, { plan: promoPlan, customerId: customer?.id ?? null, payableTotal: total, userId: user.id });
+
   const commit = async () => {
     await db.prepare(`DELETE FROM order_lines WHERE order_id = ?`).bind(orderId).run();
     const lineIds: number[] = [];
@@ -357,6 +409,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
       }
     });
     for (const [pid, alloc] of p.productAllocs) stmts.push(...moveStatements(db, pid, alloc, -1, "sale", "order", orderId, user.id));
+    stmts.push(...promoStmts);
     for (const pay of recorded) {
       if (pay.amount <= 0) continue;
       stmts.push(
@@ -379,7 +432,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
         action: "order.checkout",
         entity: "order",
         entityId: orderId,
-        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed },
+        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed, voucher: promoPlan.voucher?.code ?? null, pointsRedeemed: promoPlan.points },
       }),
     );
     await db.batch(stmts);
@@ -389,27 +442,41 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     try {
       await commit();
     } catch (e) {
-      if (!isCheckFail(e)) throw e;
+      if (!isCheckFail(e) || isVoucherExhausted(e)) throw e;
       p = await plan(); // tồn vừa đổi: phân bổ lại 1 lần
       await commit();
     }
   } catch (e) {
     await cancelDraft();
+    if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
+    if (isPointsInsufficient(e)) throw conflict("points_insufficient", "Khách không đủ điểm để đổi");
     if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
     throw e;
   }
-  return orderDone(orderId, 201, change);
+  return orderDone(orderId, 201, change, { promotions: { rejected: promoPlan.rejected } });
 });
 
 /** Yêu cầu duyệt (giá dưới vốn / giảm giá vượt ngưỡng): trả approvalId đã duyệt, hoặc 409 approval_required. */
-async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object): Promise<number> {
+async function cartHash(body: z.infer<typeof checkoutSchema>) {
+  const canon = JSON.stringify({
+    l: body.lines.map((l) => [l.productId, l.unit, l.qty, l.unitPriceOverride ?? null, l.discount ?? 0]),
+    d: body.discount ?? 0,
+    v: body.voucherCode ?? null,
+    r: body.redeemPoints ?? 0,
+  });
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object, hash: string): Promise<number> {
   const db = c.env.DB;
   const user = c.get("user");
   const type = reasons.includes("below_cost") ? "order.below_cost" : "order.discount";
   if (approvalId) {
     const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
-    const okUuid = a && (() => { try { return JSON.parse(a.payload_json ?? "{}").clientUuid === clientUuid; } catch { return false; } })();
-    if (a && okUuid && a.requested_by === user.id && String(a.type).startsWith("order.")) {
+    // Duyệt gắn với đúng giỏ hàng (hash dòng + giảm giá) và đúng loại lý do, không chỉ clientUuid
+    const okUuid = a && (() => { try { const j = JSON.parse(a.payload_json ?? "{}"); return j.clientUuid === clientUuid && j.hash === hash; } catch { return false; } })();
+    if (a && okUuid && a.requested_by === user.id && a.type === type) {
       if (a.status === "approved" && !a.ref_id) return a.id;
       if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt đã bị từ chối", { approvalId: a.id });
       if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt", { approvalId: a.id, reasons });
@@ -417,14 +484,14 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
     throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId });
   }
   const pending = await db
-    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=?`)
-    .bind(user.id, clientUuid)
+    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=? AND json_extract(payload_json,'$.hash')=? AND type=?`)
+    .bind(user.id, clientUuid, hash, type)
     .first<{ id: number }>();
   let id = pending?.id;
   if (!id) {
     const r = await db
       .prepare(`INSERT INTO approvals(type, ref_type, payload_json, reason, requested_by) VALUES (?,?,?,?,?)`)
-      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, ...payload }), reasons.join(","), user.id)
+      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, hash, ...payload }), reasons.join(","), user.id)
       .run();
     id = r.meta.last_row_id as number;
     await auditStmt(c, { action: "approval.request", entity: "approval", entityId: id, after: { type, reasons } }).run();
@@ -488,6 +555,7 @@ posRoutes.get("/pos/receipt/:id", requirePerm("orders.view"), async (c) => {
     })),
     subtotal: o.subtotal,
     discount: o.discount,
+    discounts: (await c.env.DB.prepare(`SELECT description, amount FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(o.id).all<{ description: string; amount: number }>()).results,
     total: o.total,
     payments: o.payments.map((p: any) => ({ method: p.method, amount: p.amount, ref: p.ref })),
     note: o.note,
@@ -501,7 +569,7 @@ const returnSchema = z.object({
     .array(
       z.object({
         orderLineId: z.number().int().positive(),
-        qty: z.number().positive(),
+        qty: z.number().positive().max(MAX_QTY),
         unit: z.string().min(1),
         restock: z.boolean(),
         reason: z.string().trim().min(2).max(300),
@@ -588,7 +656,30 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
         .first<{ id: number }>();
       lineIds.push(row!.id);
     }
-    const stmts: D1PreparedStatement[] = [];
+    // Chốt chặn trong batch (audit #2): trả đồng thời không được vượt số đã bán / số đã thu
+    const stmts: D1PreparedStatement[] = [
+      assertStmt(db, "order.return.status", `SELECT status = 'completed' AND kind = 'sale' FROM orders WHERE id = ?`, [origId]),
+      ...[...claimed].map(([olId, q]) =>
+        assertStmt(
+          db,
+          "order.return.qty",
+          `SELECT (SELECT qty_milli FROM order_lines WHERE id = ?)
+                  - COALESCE((SELECT SUM(r.qty_milli) FROM order_lines r WHERE r.original_line_id = ? AND r.order_id IN (SELECT id FROM orders WHERE kind = 'return' AND status = 'completed')), 0) >= ?`,
+          [olId, olId, q],
+        ),
+      ),
+      assertStmt(
+        db,
+        "order.return.amount",
+        `SELECT (SELECT total FROM orders WHERE id = ?) - COALESCE((SELECT SUM(total) FROM orders WHERE original_order_id = ? AND kind = 'return' AND status = 'completed'), 0) >= ?`,
+        [origId, origId, total],
+      ),
+    ];
+    // Đợt 4: thu hồi điểm tích / hoàn điểm đã đổi / hoàn lượt voucher
+    const priorRet = (
+      await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(origId).first<{ t: number }>()
+    )?.t ?? 0;
+    stmts.push(...(await reversalStatements(db, orig, priorRet + total, user.id, `trả hàng ${code}`)));
     prepared.forEach((x, i) => {
       if (!x.restock) return;
       for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
@@ -627,6 +718,12 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   const o = await db.prepare(`SELECT * FROM orders WHERE id = ?`).bind(id).first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   if (o.kind !== "sale" || o.status !== "completed") throw conflict("not_voidable", "Chỉ huỷ được đơn bán đã hoàn tất");
+  // Đơn online/B2B/fresco có luồng huỷ riêng (giữ tồn, công nợ, COD…) — POS void sẽ làm sai kho/tiền
+  if (o.channel !== "pos") throw conflict("wrong_channel", "Đơn kênh này có luồng huỷ riêng, không huỷ bằng POS");
+  const period = vnPeriod(new Date(o.completed_at ?? o.created_at));
+  if (await db.prepare(`SELECT 1 AS x FROM periods WHERE period = ? AND locked_at IS NOT NULL`).bind(period).first()) {
+    throw new AppError(423, "period_locked", "Kỳ đã khoá sổ, không huỷ được đơn của kỳ này");
+  }
   if (o.shift_id) {
     const sh = await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(o.shift_id).first<{ status: string }>();
     if (sh?.status === "closed" && user.role !== "manager" && user.role !== "owner") {
@@ -646,8 +743,19 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   ).results;
   const byProduct = new Map<number, LotAllocation[]>();
   for (const r of rows) byProduct.set(r.product_id, [...(byProduct.get(r.product_id) ?? []), { lotId: r.lot_id, qtyMilli: r.qty_milli, unitCost: r.unit_cost }]);
-  const stmts: D1PreparedStatement[] = [];
+  const stmts: D1PreparedStatement[] = [
+    // Chốt chặn (audit #1): hai lần huỷ đồng thời không được cùng nhập kho / thu hồi điểm
+    assertStmt(
+      db,
+      "order.void",
+      `SELECT o.status = 'completed' AND NOT EXISTS (SELECT 1 FROM orders r WHERE r.original_order_id = o.id AND r.kind = 'return' AND r.status = 'completed')
+         AND NOT EXISTS (SELECT 1 FROM periods p WHERE p.period = ? AND p.locked_at IS NOT NULL)
+         FROM orders o WHERE o.id = ?`,
+      [period, id],
+    ),
+  ];
   for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
+  stmts.push(...(await reversalStatements(db, o, o.total, user.id, "huỷ đơn")));
   stmts.push(
     db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, id),
     db.prepare(`UPDATE payments SET status='refunded' WHERE order_id=?`).bind(id),

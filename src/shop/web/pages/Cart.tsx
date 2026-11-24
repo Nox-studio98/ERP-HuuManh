@@ -5,6 +5,7 @@ import { Link, navigate, usePageMeta } from "../lib/router";
 import { announce, cartActions, estLine, prefs, ss, unitPriceOf, useCart } from "../lib/store";
 import { cartSubtotalEst, useDelivery, useQuote } from "../lib/quote";
 import { Empty, Icon, Img, Notice, Stepper } from "../ui";
+import { DiscountRows, VoucherBox, useVoucher } from "../lib/voucher";
 import { useState } from "react";
 
 export function DistrictSelect({ value, onChange, id = "district", label = "Giao đến quận/huyện" }: { value: string; onChange: (v: string) => void; id?: string; label?: string }) {
@@ -25,7 +26,8 @@ export function CartPage() {
   const [reNote] = useState(() => { const n = ss.get("hm_reorder_note"); if (n) ss.del("hm_reorder_note"); return n; });
   const [district, setDistrict] = useState(prefs.getDistrict());
   const dl = useDelivery(district);
-  const { quote, loading, error } = useQuote(cart, { district });
+  const vc = useVoucher();
+  const { quote, loading, error } = useQuote(cart, { district, voucherCode: vc.code || undefined });
   const byId = useMemo(() => new Map(quote?.lines.map((l) => [l.productId, l])), [quote]);
   const changed = useMemo(() => cart.filter((c) => { const l = byId.get(c.productId); return l && l.unitPrice !== c.unitPrice; }), [cart, byId]);
 
@@ -92,8 +94,10 @@ export function CartPage() {
               <DistrictOptions />
             </select>
           </div>
+          <VoucherBox code={vc.code} onChange={vc.set} quote={quote} loading={loading} />
           <dl className="totals" aria-live="polite">
             <div><dt>Tạm tính</dt><dd>{money(subtotal)}</dd></div>
+            <DiscountRows quote={quote} />
             <div><dt>Phí giao hàng{quote?.zone ? ` (${quote.zone.name})` : ""}</dt><dd data-testid="ship-fee">{!district ? "Chọn khu vực" : quote?.zone ? (quote.shippingFee === 0 ? "Miễn phí" : money(quote.shippingFee)) : loading ? "…" : "Chưa hỗ trợ"}</dd></div>
             <div className="grand"><dt>Tổng cộng</dt><dd data-testid="grand-total">{money(quote?.total ?? subtotal)}</dd></div>
           </dl>

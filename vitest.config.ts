@@ -9,7 +9,7 @@ export default defineConfig(async () => {
         main: "./src/worker/index.ts",
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations, BOOTSTRAP_TOKEN: "test-bootstrap-token", APP_ENV: "dev" },
+          bindings: { TEST_MIGRATIONS: migrations, BOOTSTRAP_TOKEN: "test-bootstrap-token", APP_ENV: "dev", ATTENDANCE_QR_SECRET: "" }, // không phụ thuộc .dev.vars
         },
       }),
     ],
