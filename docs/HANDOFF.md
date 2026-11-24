@@ -11,7 +11,7 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4 và audit toàn 
 | Audit bảo mật & toàn vẹn dữ liệu (3 mảng) | ✅ Xong — 36 phát hiện đã sửa, mỗi lỗi có test hồi quy (mục 2.5) |
 | Kiểm thử | ✅ 507 unit/integration test (workerd + D1 thật), 6 kịch bản E2E Playwright đạt trên DB mới |
 | CI (GitHub Actions) | ✅ typecheck, test, `npm audit`, gitleaks; job deploy demo/staging/production |
-| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0010 chưa áp** — job deploy sẽ tự áp |
+| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0013 chưa áp** — job deploy sẽ tự áp |
 | R2 `huu-manh-erp-files` | ✅ Đã tạo (CI demo tự tải font PDF) |
 | **Deploy Worker ERP + Worker website** | ❌ **Chưa** — token Cloudflare lưu trong môi trường cloud bị sai định dạng (mục 4) |
 | Secrets, tên miền, Cloudflare Access | ❌ Chưa |
@@ -43,6 +43,11 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4 và audit toàn 
 - **M2-11** gợi ý đặt hàng theo tốc độ bán + thời gian giao → tạo phiếu nhập nháp.
 - **Khuyến mãi** (%, số tiền, đồng giá, combo, xả cuối ngày), **voucher** (sinh hàng loạt, giới hạn lượt/khách), **tích & đổi điểm** — áp ở POS và website; giỏ quà (đóng giỏ tiêu thụ thành phần FEFO) & **đặt cọc** đơn đặt trước tại quầy.
 - **Tài chính**: dòng tiền, lãi lỗ theo kênh (phân bổ chi phí chung), tổng hợp GTGT, ngân sách & thực tế; đơn sỉ lặp tự sinh lúc 08:00.
+
+### 2.4 Bổ sung sau Đợt 4 (24/11/2026)
+- **Website tích/đổi điểm**: khách lẻ đăng nhập dùng điểm khi thanh toán (chốt chặn đồng thời), cộng điểm khi giao xong, hoàn/thu hồi điểm tự động khi huỷ/trả (trigger migration 0011). E2E cổng khách sỉ `e2e/shop-b2b.mjs`.
+- **ERP**: quản lý đơn sỉ lặp; tạo/sửa bảng giá; danh sách phiếu thu/chi công nợ (lọc + đảo phiếu); sửa hợp đồng lao động; cấu hình loại nghỉ phép (migration 0012); chọn nhân viên phụ trách khách sỉ. E2E `e2e/hr-swap.mjs` (đổi ca đầy đủ), `e2e/gaps2.mjs`.
+- **Thuế TNCN** theo Luật 109/2025/QH15 (migration 0013), miễn thuế phần chênh tiền tăng ca.
 
 ### 2.5 Audit (24/11/2026)
 3 agent audit độc lập (phân quyền/IDOR, toàn vẹn tiền-kho khi đồng thời, bề mặt công khai) → 36 phát hiện, tất cả đã sửa kèm test hồi quy. Nổi bật:
@@ -80,8 +85,8 @@ CSP/HSTS cho cả API lẫn HTML, cookie `__Host-` + chống CSRF, rate limit/Tu
 - **Không còn đợt phát triển** theo tài liệu nghiệp vụ. Tiếp theo là **tuần 10**: đào tạo, chạy song song, nghiệm thu, go-live.
 - **Biểu thuế TNCN**: đã cập nhật theo Luật Thuế TNCN 109/2025/QH15 (tiền lương áp dụng từ kỳ tính thuế 2026): 5 bậc 5/10/20/30/35% với ngưỡng 10/30/60/100 tr; giảm trừ 15,5 tr/6,2 tr theo NQ 110/2025/UBTVQH15 (migration 0013 chỉ ghi đè khi còn giá trị mặc định cũ). Phần tiền tăng ca cao hơn giờ thường được trừ khỏi thu nhập chịu thuế. Kế toán vẫn nên đối chiếu nghị định/thông tư hướng dẫn khi ban hành; tất cả là tham số cấu hình.
 - Máy chấm công vân tay / khuôn mặt (M9-24, Could) — chưa làm (cần thiết bị, [Cần xác nhận]).
-- Đổi ca: NV gửi/nhận được, nhưng chưa có kịch bản E2E đầy đủ; hợp đồng lao động thêm được nhưng chưa sửa trên giao diện; loại nghỉ phép cố định 3 loại.
-- Website chưa tích/đổi điểm (chỉ POS); voucher/điểm chưa in trên hoá đơn điện tử.
+- Hoá đơn điện tử chỉ phát hành cho đơn sỉ (giá thoả thuận, không có KM/voucher) nên không có dòng chiết khấu; nếu sau này xuất HĐĐT cho đơn lẻ/online thì cần thêm dòng chiết khấu thương mại.
+- `loyalty.enabled` mặc định 0 — bật trong Cài đặt khi cửa hàng chốt quy tắc tích điểm.
 - Rủi ro còn lại có chủ đích (ghi trong báo cáo audit): kiểm hạn mức khi xác nhận đơn sỉ đồng thời trả 409 để thử lại (ưu tiên chặn); quỹ chờ đối soát chỉ rút phần tiền đã ghi vào quỹ đó.
 
 ### 3.4 Điểm [Cần xác nhận] với chủ cửa hàng (ảnh hưởng cấu hình)
