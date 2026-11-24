@@ -11,7 +11,7 @@ import { priceOf, type Product } from "./Pos";
 type UnitRow = { unit: string; factor: number | ""; barcode: string };
 export default function Products() {
   const can = useCan();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => new URLSearchParams(location.search).get("q") ?? "");
   const dq = useDebounced(q);
   const list = useAsync(() => get("/products", { q: dq, limit: 100 }).then((r) => items<Product>(r)), [dq]);
   const [edit, setEdit] = useState<Product | "new" | null>(null);

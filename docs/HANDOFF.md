@@ -1,6 +1,6 @@
 # Handoff — ERP Hữu Mạnh (cập nhật 24/11/2026)
 
-Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: **`docs/GO-LIVE.md` (kế hoạch go-live)**, `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
+Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: **`docs/GO-LIVE.md` (kế hoạch go-live)**, **`docs/WIP-UX-PC.md` (việc đang dở: giao diện PC)**, `docs/UI-KIT.md`, `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
 
 ## 1. Tóm tắt nhanh
 
@@ -11,11 +11,13 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 | Audit bảo mật & toàn vẹn dữ liệu (3 mảng) | ✅ Xong — 36 phát hiện đã sửa, mỗi lỗi có test hồi quy (mục 2.5) |
 | Bổ sung sau Đợt 4 (website tích điểm, màn hình ERP còn thiếu, thuế TNCN 2026) | ✅ Xong, đã merge (PR #4) |
 | **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **cả 3 nhóm lỗi nghiêm trọng/cao + 9 lỗi tiền/lương đã sửa**, có màn Cài đặt; còn 45 lỗi trung bình/thấp (mục 3.0) |
-| Kiểm thử | ✅ 631 unit/integration test (workerd + D1 thật), 10 kịch bản E2E Playwright đạt trên DB mới |
+| **Bản demo trên tên miền riêng** | ✅ ERP `https://huumanh.noxelis.co`, website `https://huumanhfruit.noxelis.co` (deploy bằng tag `demo-*` tạo trên GitHub); tài khoản `chu`, `admin` (mật khẩu giao riêng) |
+| **Giao diện PC** | ⏸ **Đang dở** — bước 1 (khung, Tổng quan, bộ kit danh sách, Đơn hàng) đã gộp; bước 2 (≈35 màn còn lại) ở nhánh `ux-2b`, `ux-2c` chưa kiểm thử — xem `docs/WIP-UX-PC.md` |
+| Kiểm thử | ✅ 642 unit/integration test (workerd + D1 thật), 10 kịch bản E2E Playwright đạt trên DB mới |
 | CI (GitHub Actions) | ✅ typecheck, test, `npm audit`, gitleaks; job deploy demo/staging/production |
-| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. **Migration 0005–0020 chưa áp** — job deploy sẽ tự áp |
+| D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. Migration 0001–0020 đã áp trên D1 demo — job deploy sẽ tự áp |
 | R2 `huu-manh-erp-files` | ✅ Đã tạo (CI demo tự tải font PDF) |
-| **Deploy Worker ERP + Worker website** | ❌ **Chưa** — token Cloudflare lưu trong môi trường cloud bị sai định dạng (mục 4) |
+| **Deploy Worker ERP + Worker website** | ✅ Bản demo đã deploy (tag `demo-2026-11-24`); production chưa (theo `docs/GO-LIVE.md`) |
 | Secrets, tên miền, Cloudflare Access | ❌ Chưa |
 
 ## 2. Đã xong
@@ -70,8 +72,11 @@ Audit 24/11/2026 (3 mảng, có probe test tái hiện). Lõi bán hàng/B2B/ph�
 
 Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạng thái sửa) xử lý trong tuần chạy song song. Script khôi phục từ R2 (`scripts/restore-from-r2.mjs`) **phải chạy thử một lần trên D1 staging** trước go-live.
 
+### 3.0b Việc đang dở — giao diện PC
+Xem **`docs/WIP-UX-PC.md`**: bước 1 xong; nhánh `ux-2b` (bán hàng/kho/sỉ/online) và `ux-2c` (tài chính/nhân sự/quản trị) đã có code, tsc sạch, nhưng **chưa chạy vitest/e2e/rà ảnh** — người tiếp nhận rebase lên `main`, hoàn tất checklist rồi mở PR.
+
 ### 3.1 Hạ tầng / deploy (việc cần làm ngay)
-1. **Deploy 2 Worker** (`huu-manh-erp`, `huu-manh-shop`) — cần API token (mục 4).
+1. **Deploy production** 2 Worker (`huu-manh-erp`, `huu-manh-shop`) với D1/R2 production mới — GitHub Secrets đã có token; làm theo `docs/GO-LIVE.md` bước 1–2.
 2. **Tạo Queues**: `huu-manh-erp-jobs`, `huu-manh-erp-jobs-dlq` (wrangler cần chúng tồn tại trước khi deploy ERP).
 3. **Secrets**: `BOOTSTRAP_TOKEN` (tạo tài khoản chủ lần đầu rồi xoá), `ATTENDANCE_QR_SECRET` (mã QR chấm công), `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRIVATE_KEY`; vars `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`, `SHOP_BASE_URL` (bắt buộc — link trong email); khi có: `MISA_*`, `FRESCO_WEBHOOK_SECRET`. Rate limiting (`RL_AUTH`, `RATE_LIMITER`) đã khai báo trong wrangler, không cần thao tác thêm.
 4. **Font PDF** lên R2: `fonts/BeVietnamPro-Regular.ttf`, `fonts/BeVietnamPro-Bold.ttf`.

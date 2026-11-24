@@ -1,14 +1,16 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { useAuth, loadMe, logout, useCan } from "./store";
-import { navigate, onLink, usePath } from "./router";
+import { navigate, onLink, usePath, useSearch } from "./router";
 import { Toaster } from "./components/toast";
 import { Badge, Button, Sheet, Spinner } from "./components/ui";
 import { useQueue, syncQueue } from "./offline";
 import { get } from "./api";
 import { ROLES } from "./format";
 import { PushToggle } from "./components/PushToggle";
+import { ChangePasswordSheet, CommandPalette, NotificationBell, SearchButtons, ShiftIndicator, UserMenu, useCommandK, type CmdScreen } from "./components/shell";
 import Login, { ChangePassword } from "./screens/Login";
 
+const Dashboard = lazy(() => import("./screens/Dashboard"));
 const Pos = lazy(() => import("./screens/Pos"));
 const ShiftClose = lazy(() => import("./screens/ShiftClose"));
 const Orders = lazy(() => import("./screens/Orders"));
@@ -53,6 +55,7 @@ const I = (d: string) => <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d}
 type Nav = { path: string; label: string; icon: ReactNode; perms: string[]; el: ReactNode; hidden?: boolean; group?: string; pri?: number };
 const G = { retail: "Bán lẻ", stock: "Kho & hàng", b2b: "Bán sỉ", fin: "Tài chính", admin: "Quản trị", online: "Bán online", hr: "Nhân sự" };
 const NAV: Nav[] = [
+  { path: "/dashboard", label: "Tổng quan", pri: 5, perms: ["reports.view"], icon: I("M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z"), el: <Dashboard /> },
   { path: "/pos", label: "Bán hàng", group: G.retail, pri: 1, perms: ["pos.sell"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z"), el: <Pos /> },
   { path: "/orders", label: "Đơn hàng", group: G.retail, pri: 3, perms: ["orders.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"), el: <Orders /> },
   { path: "/inventory", label: "Kho", group: G.stock, pri: 4, perms: ["inventory.view"], icon: I("M3 8l9-5 9 5v10l-9 5-9-5zM3 8l9 5 9-5M12 13v10"), el: <Inventory /> },
@@ -100,12 +103,24 @@ export function SyncBadge() {
   return <button className="badge warn" style={{ border: 0, cursor: "pointer", minHeight: 32 }} onClick={() => syncQueue(true)} aria-label={`Chờ đồng bộ ${q.length} đơn, bấm để thử lại`}>Chờ đồng bộ ({q.length})</button>;
 }
 
+const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* bộ nhớ bị chặn */ } };
+const lsJson = <T,>(k: string, d: T): T => { try { return JSON.parse(lsGet(k) ?? "") as T; } catch { return d; } };
+const CHEV = "M6 9l6 6 6-6";
+const STAR = "M12 3l2.8 5.8 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.3l1.1-6.2L3 9.7l6.2-.9z";
+
 function Shell() {
   const { user } = useAuth();
   const can = useCan();
   const path = usePath();
+  const search = useSearch();
   const [more, setMore] = useState(false);
+  const [pw, setPw] = useState(false);
   const [pending, setPending] = useState(0);
+  const [collapsed, setCollapsed] = useState(() => lsGet("hm_sb_collapsed") === "1");
+  const [closedGroups, setClosedGroups] = useState<string[]>(() => lsJson<string[]>("hm_nav_closed", []));
+  const [favs, setFavs] = useState<string[]>(() => lsJson<string[]>("hm_nav_fav", []));
+  const k = useCommandK();
   const nav = NAV.filter((n) => can(...n.perms));
   const visible = nav.filter((n) => !n.hidden);
   const cur = nav.find((n) => path === n.path || path.startsWith(n.path + "/"));
@@ -114,40 +129,75 @@ function Shell() {
     if (!canApprove) return;
     get("/approvals", { status: "pending" }, { silent: true }).then((r: any) => setPending((r.items ?? r ?? []).length)).catch(() => {});
   }, [canApprove, path]);
-  useEffect(() => { if (!cur && nav.length && (path === "/" || path === "")) navigate(nav[0].path, true); }, [cur, path, nav.length]); // eslint-disable-line
+  // Trang đích mặc định: chủ/quản lý/kế toán (có báo cáo) vào Tổng quan; thu ngân vào Bán hàng; nhân viên vào Của tôi
+  useEffect(() => {
+    if (!cur && nav.length && (path === "/" || path === "")) navigate(nav.find((n) => n.path === "/dashboard")?.path ?? nav[0].path, true);
+  }, [cur, path, nav.length]); // eslint-disable-line
   useEffect(() => { document.title = (cur ? cur.label + " · " : "") + "Hữu Mạnh ERP"; }, [cur]);
+  const setColl = (v: boolean) => { setCollapsed(v); lsSet("hm_sb_collapsed", v ? "1" : "0"); };
+  const toggleGroup = (g: string) => setClosedGroups((c) => { const n = c.includes(g) ? c.filter((x) => x !== g) : [...c, g]; lsSet("hm_nav_closed", JSON.stringify(n)); return n; });
+  const toggleFav = (p: string) => setFavs((c) => { const n = c.includes(p) ? c.filter((x) => x !== p) : [...c, p]; lsSet("hm_nav_fav", JSON.stringify(n)); return n; });
   // Thanh dưới: 4 mục ưu tiên + "Thêm" = 5 nút; phần còn lại nằm trong menu Thêm (gom nhóm)
   const mobileMain = [...visible].sort((a, b) => (a.pri ?? 99) - (b.pri ?? 99)).slice(0, 4), mobileMore = visible.filter((n) => !mobileMain.includes(n));
   const groups = (list: Nav[]) => [...new Set(list.map((n) => n.group ?? ""))].map((g) => ({ g, items: list.filter((n) => (n.group ?? "") === g) }));
+  const badge = (n: Nav) => n.path === "/approvals" && pending > 0 && <span className="dot" aria-label={`${pending} chờ duyệt`}>{pending}</span>;
   const link = (n: Nav) => (
-    <a key={n.path} href={n.path} className={cur === n ? "active" : ""} aria-current={cur === n ? "page" : undefined} onClick={(e) => { onLink(e, n.path); setMore(false); }}>
-      {n.icon}<span>{n.label}</span>
-      {n.path === "/approvals" && pending > 0 && <span className="dot" aria-label={`${pending} chờ duyệt`}>{pending}</span>}
+    <a key={n.path} href={n.path} className={cur === n ? "active" : ""} aria-current={cur === n ? "page" : undefined} title={collapsed ? n.label : undefined} onClick={(e) => { onLink(e, n.path); setMore(false); }}>
+      {n.icon}<span>{n.label}</span>{badge(n)}
     </a>
   );
+  const sideItem = (n: Nav) => (
+    <div className="navitem" key={n.path}>
+      {link(n)}
+      <button type="button" className={"pin" + (favs.includes(n.path) ? " on" : "")} aria-label={favs.includes(n.path) ? `Bỏ ghim ${n.label}` : `Ghim ${n.label} lên đầu`} aria-pressed={favs.includes(n.path)} onClick={() => toggleFav(n.path)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d={STAR} /></svg>
+      </button>
+    </div>
+  );
+  const favItems = favs.map((p) => visible.find((n) => n.path === p)).filter(Boolean) as Nav[];
+  const sideGroup = (g: string, items: Nav[], label: string) => {
+    const closed = !collapsed && closedGroups.includes(g);
+    const shown = closed ? items.filter((n) => n === cur) : items; // nhóm gập vẫn hiện mục đang mở
+    return (
+      <div key={g || "_"} className="navgroup">
+        {label && (
+          <button type="button" className="navgroup-h btn-h" aria-expanded={!closed} onClick={() => toggleGroup(g)}>
+            <span>{label}</span>
+            <svg className="chev" viewBox="0 0 24 24" aria-hidden="true" style={{ transform: closed ? "rotate(-90deg)" : undefined }}><path d={CHEV} /></svg>
+          </button>
+        )}
+        {shown.map(sideItem)}
+      </div>
+    );
+  };
+  const screens: CmdScreen[] = nav.map((n) => ({ path: n.path, label: n.label, group: n.group, icon: n.icon }));
   return (
-    <div className="shell">
-      <nav className="sidebar" aria-label="Điều hướng chính">
-        <div className="brand"><img src="/icon.svg" alt="" /> Hữu Mạnh</div>
-        {groups(visible).map(({ g, items }) => (
-          <div key={g} className="navgroup">
-            {g && <div className="navgroup-h">{g}</div>}
-            {items.map(link)}
-          </div>
-        ))}
-        <div className="foot stack">
-          <div className="small muted">{user?.fullName} · {ROLES[user?.role ?? ""] ?? user?.role}</div>
-          <PushToggle />
-          <Button variant="ghost" size="sm" onClick={logout}>Đăng xuất</Button>
+    <div className={"shell" + (collapsed ? " sb-collapsed" : "")}>
+      <nav className={"sidebar" + (collapsed ? " collapsed" : "")} aria-label="Điều hướng chính">
+        <div className="brand">
+          <img src="/icon.svg" alt="" /><span className="brand-name">Hữu Mạnh</span>
+          <button type="button" className="sidebar-toggle" onClick={() => setColl(!collapsed)} aria-label={collapsed ? "Mở rộng thanh bên" : "Thu gọn thanh bên"} title={collapsed ? "Mở rộng" : "Thu gọn"}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d={collapsed ? "M13 6l6 6-6 6M5 6l6 6-6 6" : "M11 6l-6 6 6 6M19 6l-6 6 6 6"} /></svg>
+          </button>
         </div>
+        {favItems.length > 0 && sideGroup("__fav", favItems, "Ghim")}
+        {groups(visible).map(({ g, items }) => sideGroup(g, items, g))}
       </nav>
       <header className="topbar">
         <h1>{cur?.label ?? "Hữu Mạnh"}</h1>
+        <span className="tb-store" title="Cửa hàng">{user?.storeName ?? ""}</span>
+        <ShiftIndicator path={path} />
         <SyncBadge />
         {pending > 0 && <Badge tone="warn">{pending} chờ duyệt</Badge>}
+        <span className="grow tb-spacer" />
+        <div className="tb-right">
+          <SearchButtons onOpen={() => k.setOpen(true)} />
+          <NotificationBell path={path} />
+          <UserMenu />
+        </div>
       </header>
       <main className="main" id="main">
-        <Suspense fallback={<Spinner />}>{cur ? cur.el : nav.length ? <Spinner /> : <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div>}</Suspense>
+        <Suspense fallback={<Spinner />}>{cur ? <Fragment key={cur.path + search}>{cur.el}</Fragment> : nav.length ? <Spinner /> : <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div>}</Suspense>
       </main>
       <nav className="tabbar" aria-label="Điều hướng nhanh">
         {mobileMain.map(link)}
@@ -158,6 +208,7 @@ function Shell() {
           </button>
         )}
       </nav>
+      {k.open && <CommandPalette screens={screens} onClose={() => k.setOpen(false)} />}
       <Sheet open={more} onClose={() => setMore(false)} title="Menu">
         <div className="stack">
           {groups(mobileMore).map(({ g, items }) => (
@@ -174,9 +225,11 @@ function Shell() {
           {can("pos.shift") && <a href="/shift-close" className="btn ghost" style={{ justifyContent: "flex-start" }} onClick={(e) => { onLink(e, "/shift-close"); setMore(false); }}>Chốt ca</a>}
           <div className="small muted">{user?.fullName} · {ROLES[user?.role ?? ""] ?? user?.role}</div>
           <PushToggle />
+          <Button variant="ghost" onClick={() => { setMore(false); setPw(true); }}>Đổi mật khẩu</Button>
           <Button variant="danger" onClick={logout}>Đăng xuất</Button>
         </div>
       </Sheet>
+      {pw && <ChangePasswordSheet onClose={() => setPw(false)} />}
     </div>
   );
 }

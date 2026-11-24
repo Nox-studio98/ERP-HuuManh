@@ -14,7 +14,7 @@ export function BarChart({ data, height = 180, format = money }: { data: { label
           <g key={i}>
             <rect className="bar" x={x} y={height - padB - h} width={w} height={h} rx={3}><title>{`${d.label}: ${format(d.value)}`}</title></rect>
             {data.length <= 12 && <text x={x + w / 2} y={height - 6} textAnchor="middle">{d.label.length > 8 ? d.label.slice(-5) : d.label}</text>}
-            {data.length <= 7 && <text x={x + w / 2} y={height - padB - h - 4} textAnchor="middle">{num(Math.round(d.value / 1000))}k</text>}
+            {data.length <= 7 && d.value > 0 && <text x={x + w / 2} y={height - padB - h - 4} textAnchor="middle">{num(Math.round(d.value / 1000))}k</text>}
           </g>
         );
       })}
