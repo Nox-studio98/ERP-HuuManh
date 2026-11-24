@@ -59,7 +59,7 @@ async function pnl(c: Ctx) {
                 SUM(CASE WHEN v.direction='out' THEN v.amount WHEN v.reverses_id IS NOT NULL THEN -v.amount ELSE 0 END) AS amount
            FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status='posted' AND v.created_at >= ? AND v.created_at < ?
-            AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
+            AND cc.direction = 'out' AND COALESCE(cc.pnl_line,'other') NOT IN ('cogs','revenue','transfer','other_income')
           GROUP BY line`,
       )
       .bind(...p)
@@ -80,11 +80,13 @@ async function pnl(c: Ctx) {
   const adj = await pnlAdjustments(db, fromIso, toIso);
   if (adj.badDebt) expenses.badDebt = (expenses.badDebt ?? 0) + adj.badDebt;
   if (adj.stockCount) expenses.stockCount = (expenses.stockCount ?? 0) + adj.stockCount;
+  if (adj.purchaseVariance) expenses.purchaseVariance = (expenses.purchaseVariance ?? 0) + adj.purchaseVariance; // B-09
   const otherIncome = {
     forfeitedDeposits: adj.forfeitedDeposits,
     payableDiscounts: adj.payableIncome,
     settlementSurplus: adj.voucherIncome,
-    total: adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome,
+    otherReceipts: adj.otherReceipts,
+    total: adj.forfeitedDeposits + adj.payableIncome + adj.voucherIncome + adj.otherReceipts,
   };
   const revenueDeductions = { paymentDiscount: adj.paymentDiscount };
   const revenue = rev!.sales - rev!.returns;
@@ -130,7 +132,7 @@ async function pnl(c: Ctx) {
   };
 }
 
-const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê" };
+const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
 reportRoutes.get("/reports/pnl", requirePerm("reports.view"), async (c) => c.json(await pnl(c)));
 
 async function inventoryReport(c: Ctx) {
@@ -214,7 +216,7 @@ reportRoutes.get("/reports/export/:file", requirePerm("reports.view"), async (c)
       ["Doanh thu bán", r.salesTotal], ["Trả hàng", r.returnsTotal], ["Doanh thu thuần", r.revenue], ["Giá vốn", r.cogs], ["Lãi gộp", r.grossProfit],
       ["Chiết khấu thanh toán", r.revenueDeductions.paymentDiscount],
       ...Object.entries(r.expenses).map(([k, v]) => [`Chi phí - ${EXP_NAMES[k] ?? k}`, v]), ["Tổng chi phí", r.totalExpenses],
-      ["Cọc không hoàn", r.otherIncome.forfeitedDeposits], ["Chiết khấu/xoá nợ nhà cung cấp", r.otherIncome.payableDiscounts], ["Chênh lệch đối soát thừa", r.otherIncome.settlementSurplus], ["Lợi nhuận", r.netProfit],
+      ["Cọc không hoàn", r.otherIncome.forfeitedDeposits], ["Chiết khấu/xoá nợ nhà cung cấp", r.otherIncome.payableDiscounts], ["Chênh lệch đối soát thừa", r.otherIncome.settlementSurplus], ["Thu khác (phiếu thu)", r.otherIncome.otherReceipts], ["Lợi nhuận", r.netProfit],
     ]);
   } else if (name === "inventory") {
     const r = await inventoryReport(c);
