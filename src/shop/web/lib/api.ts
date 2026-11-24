@@ -29,6 +29,7 @@ export interface OrderView {
   code: string; trackingToken: string | null; status: string; statusLabel: string; createdAt: string; slotDate: string | null; slotLabel: string | null;
   receiverName: string | null; receiverPhoneMasked: string; shipAddress: string | null; paymentMethod: string | null; paymentStatus: string;
   estimated: boolean; estimatedTotal: number; subtotal: number; shippingFee: number; discount: number; total: number; pointsRedeemed?: number; pointsAmount?: number; pointsEarned?: number; pointsEarnable?: number; weightAdjustStatus: string;
+  diffAmount?: number; diffKind?: "collect" | "refund" | null; returnedTotal?: number;
   lines: OrderLine[]; events: { at: string; status: string; statusLabel: string; note: string | null }[]; canCancel: boolean; transfer?: Transfer;
 }
 export interface Me { id: number; fullName: string; email: string; phone: string | null; kind: "retail" | "b2b"; b2bStatus: "pending" | "approved" | "rejected" | null; customerGroup: string | null; marketingOptIn: boolean; points?: number; pointValueVnd?: number }
