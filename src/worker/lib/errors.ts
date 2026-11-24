@@ -29,6 +29,18 @@ export function onError(err: Error, c: Context) {
       423,
     );
   }
+  if (msg.includes("state_changed")) {
+    return c.json({ error: { code: "state_changed", message: "Dữ liệu vừa được người khác thay đổi — vui lòng tải lại và thử lại" }, requestId }, 409);
+  }
+  if (msg.includes("UNIQUE constraint failed: once_keys")) {
+    return c.json({ error: { code: "already_done", message: "Thao tác này đã được thực hiện" }, requestId }, 409);
+  }
+  if (msg.includes("overallocated")) {
+    return c.json({ error: { code: "overallocated", message: "Số tiền gạch vượt số còn nợ của chứng từ" }, requestId }, 409);
+  }
+  if (msg.includes("idx_vouchers_reverse_once") || msg.includes("cash_vouchers.reverses_id")) {
+    return c.json({ error: { code: "already_reversed", message: "Phiếu này đã được đảo" }, requestId }, 409);
+  }
   if (msg.includes("CHECK constraint failed")) {
     return c.json(
       { error: { code: "constraint_violation", message: "Vi phạm ràng buộc dữ liệu (tồn kho có thể vừa thay đổi)" }, requestId },
