@@ -141,3 +141,16 @@ Ghi chú: bản sao lưu R2 có thể còn toạ độ/CCCD cũ trong tối đa 
 
 ## 12. Bổ sung — SePay (xác nhận chuyển khoản)
 Secret thêm (ERP, `wrangler secret put`): `SEPAY_WEBHOOK_SECRET` (khoá HMAC-SHA256 của webhook; **rỗng = từ chối mọi request**) và `SEPAY_API_KEY` (API key v2 để đối soát; thiếu thì không đối soát). Không đưa vào code/commit/log; nghi lộ → tạo lại ở my.sepay.vn rồi `wrangler secret put` khoá mới. Bề mặt công khai mới: `POST /api/integrations/sepay/webhook` (chữ ký HMAC trên bytes gốc + timestamp ±5 phút, so sánh thời gian hằng, body ≤ 64 KB). Giao dịch lưu ở `sepay_events` (có nội dung chuyển khoản = dữ liệu cá nhân, chỉ người có quyền tài chính xem; log chỉ có id/mã/số tiền/4 số cuối tài khoản). Tiền chỉ ghi nhận khi đúng mã, đúng tài khoản, đúng số tiền; còn lại vào danh sách chưa khớp / chờ hoàn để người xử lý (có audit). Chi tiết: `docs/SEPAY.md`.
+
+## Cổng nhà cung cấp `/ncc` (bề mặt công khai mới)
+
+Worker website, `/api/ncc/*` + SPA `/ncc/*` (robots `Disallow: /ncc`, meta noindex). Chi tiết hợp đồng: `docs/API-po.md` mục 9; thiết kế: `docs/PO-NCC.md` mục 12.
+
+| # | Rủi ro | Biện pháp |
+|---|---|---|
+| T30 | Đoán/dò mật khẩu, dò tài khoản NCC | Turnstile + `RL_AUTH` (login/invite/accept/đổi mật khẩu); khoá 5 lần sai/15' theo (tài khoản + IP); phản hồi + thời gian y hệt cho sai mật khẩu / không tồn tại / chưa đặt mật khẩu / bị khoá; mật khẩu ≥ 10 ký tự (PBKDF2) |
+| T31 | Link mời bị lộ/dùng lại | Token 256 bit, chỉ lưu SHA-256, so bằng `timingSafeEqual`, hết hạn 72h, dùng một lần (`assertStmt`), thu hồi/gửi lại thu hồi link cũ, nằm ở `#fragment`; audit không chứa token |
+| T32 | Truy cập chéo NCC (IDOR) | Mọi truy vấn lọc theo `supplier_id` của phiên; id của NCC khác / không tồn tại / PO nháp cùng một 404; test từng route (`test/ncc-idor.test.ts`) |
+| T33 | Lộ dữ liệu nội bộ qua cổng | Allow-list trường trả về; không giá bán, khách/SO nguồn, tồn kho, giá vốn lô, nhân viên, quỹ, ghi chú/lý do nội bộ; PO nháp/chờ duyệt không hiện |
+| T34 | Dùng chung phiên / CSRF | Cookie riêng `__Host-ncc` SameSite=Strict, bảng riêng, không Bearer; header `X-Requested-With` bắt buộc cho request ghi (kể cả có Authorization); khoá từ ERP thu hồi phiên ngay; `ncc.portal_enabled = 0` tắt toàn bộ |
+| T35 | Phủ nhận thao tác của NCC | Audit `actor = supplier_account:<id>` + IP cho đăng nhập, đổi mật khẩu, phản hồi PO, tải PDF (trong cùng batch với thay đổi) |

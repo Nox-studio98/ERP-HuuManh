@@ -521,3 +521,9 @@ table.qo { width: 100%; border-collapse: collapse; }
   table.rt .ncc-allocs li { max-width: none; }
   .ncc-filter-row .ncc-reset { grid-column: 1 / -1; }
 }
+.ncc-head h1.mono { font-size: clamp(1.35rem, 4.5vw, 1.9rem); letter-spacing: .02em; }
+.ncc .timeline time { display: block; margin-top: 2px; }
+.ncc .cv { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 759px) { .ncc-late { margin-left: 0; } }
+.ncc-top-in { padding-top: 10px; padding-bottom: 10px; }
+@media (max-width: 759px) { table.rt td::before, table.rt th::before { font-family: var(--font); letter-spacing: 0; } }

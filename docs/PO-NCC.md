@@ -1,6 +1,6 @@
 # Thiết kế: Đơn đặt hàng NCC (PO) tự động và Cổng nhà cung cấp
 
-Trạng thái (25/11/2026): thiết kế đã duyệt. **Bước 1–3 (phía ERP) đã làm** — hợp đồng API ở `docs/API-po.md`, ghi chú triển khai ở mục 11. **Bước 4–5 (cổng NCC `/ncc`) chưa làm.**
+Trạng thái (25/11/2026): thiết kế đã duyệt. **Bước 1–3 (phía ERP) đã làm** — hợp đồng API ở `docs/API-po.md`, ghi chú triển khai ở mục 11. **Bước 4–5 (cổng NCC `/ncc`) đã làm** — ghi chú ở mục 12.
 
 ## 1. Bối cảnh và mục tiêu
 
@@ -242,8 +242,8 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 | 1 ✅ | Migration + phần thiếu khi xác nhận SO (sỉ + online đặt trước) | vitest: giữ một phần, chống bán quá tồn đồng thời, hạn mức nợ, huỷ SO |
 | 2 ✅ | PO: CRUD nháp, job chốt đêm, duyệt/gửi, màn "Đơn đặt NCC" + "Phần thiếu" | vitest job (idempotent, trừ hàng sắp về, làm tròn), phân quyền, giá vốn ẩn |
 | 3 ✅ | Nhận hàng theo PO + tự giữ hàng cho SO chờ + hoá đơn mua | vitest nguyên tử, khoá sổ, phân bổ thứ tự |
-| 4 | Cổng NCC `/ncc`: mời, đăng nhập, PO (xác nhận/đề xuất/từ chối), công nợ, sao kê, thanh toán | vitest IDOR, CSRF, rate limit; E2E `e2e/ncc.mjs` |
-| 5 | Tài liệu `docs/API-po.md`, ảnh 1440/390, cập nhật HANDOFF/GO-LIVE | 10 bộ E2E cũ + bộ mới |
+| 4 ✅ | Cổng NCC `/ncc`: mời, đăng nhập, PO (xác nhận/đề xuất/từ chối), công nợ, sao kê, thanh toán | vitest IDOR, CSRF, rate limit; E2E `e2e/ncc.mjs` |
+| 5 ✅ | Tài liệu `docs/API-po.md`, ảnh 1440/390, cập nhật HANDOFF/GO-LIVE | 10 bộ E2E cũ + bộ mới |
 
 Ước lượng: 2 đợt agent (bước 1–3 phía ERP; bước 4–5 cổng NCC), mỗi đợt một PR.
 
@@ -279,3 +279,21 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 | 14 | `Sheet` (`components/ui.tsx`) thêm prop tuỳ chọn `portal` (render ra `document.body`); chỉ các sheet của màn Đơn đặt NCC và Nhận hàng theo PO bật | Sheet mở từ trong khung chi tiết bị tiêu đề bảng sticky che; dùng prop tuỳ chọn để không đổi hành vi các màn khác |
 
 Việc còn lại cho đợt cổng NCC (bước 4–5): `supplier_accounts`/`supplier_sessions`, mời NCC từ màn Nhà cung cấp, `/api/ncc/*` (xem PO, xác nhận/đề xuất/từ chối qua `applySupplierResponse`, công nợ, sao kê, thanh toán), thông báo NCC, màn hình `/ncc`, test IDOR/CSRF/rate limit, `e2e/ncc.mjs`.
+
+## 12. Ghi chú triển khai (bước 4–5, cổng NCC)
+
+Hợp đồng API: `docs/API-po.md` mục 8–9. Làm đúng mục 3.3, 4.4, 5; lệch/bổ sung:
+
+| # | Lệch / bổ sung | Lý do |
+|---|---|---|
+| 1 | `supplier_accounts.email` bắt buộc (NOT NULL, duy nhất toàn hệ thống), không nullable như mục 3.3 | Là tên đăng nhập; không có tự đăng ký |
+| 2 | Thêm bảng `supplier_invites` (token băm, hạn, dùng một lần, thu hồi) và cột `audit_log.actor` | Lời mời cần thu hồi/gửi lại; audit NCC cần người thực hiện không phải `users` |
+| 3 | Link mời dạng `/ncc/dat-mat-khau#<id>.<bí mật>` (fragment); tra theo id rồi so SHA-256 bằng `timingSafeEqual` | Không lộ token qua log/Referer; so sánh thời gian hằng |
+| 4 | Quyền ERP dùng `purchasing.approve` (chủ, quản lý) cho cả mời/khoá; không thêm quyền mới | Chưa có `suppliers.write`; thủ kho (`inventory.write`) không nên mời người ngoài |
+| 5 | Khoá đăng nhập: 5 lần sai / 15' theo (tài khoản + IP), giống đăng nhập khách (chống DoS); `status='locked'` là khoá tay từ ERP | Kẻ tấn công không khoá được chủ tài khoản từ IP khác; cần nâng cấp nếu muốn khoá theo tài khoản |
+| 6 | Mật khẩu NCC tối thiểu 10 ký tự; phiên 7 ngày; không nhận Bearer | Cổng có dữ liệu tài chính; không có app native |
+| 7 | Thông báo ERP khi NCC phản hồi nằm trong `applySupplierResponse` (cùng batch) — chỉ khi `actor.type = 'supplier'` | Nhân viên ghi nhận hộ không cần tự báo mình |
+| 8 | Sửa `GET /debts/statements/supplier/:id` của ERP: `return_credit` của NCC (trả hàng) là bút toán giảm nợ phải trả (trước đây ghi 0 nên số dư cuối lệch `payables`) | Phát hiện khi làm sao kê cổng NCC; chỉ đổi nhánh NCC |
+| 9 | Cổng chỉ hiện `note` PO (in trên PDF gửi NCC), không hiện `line_note`; không hiện lý do huỷ/đóng | Ghi chú dòng/lý do có thể là nội bộ |
+| 10 | Chưa gửi email mời (email thật chưa có): ERP hiện link để sao chép; quên mật khẩu = cửa hàng cấp link đặt lại | Quyết định #5 mục 10 |
+| 11 | Tham số `ncc.portal_enabled`, `ncc.invite_ttl_hours` (nhóm Online/website, nhãn "Cần xác nhận") | Theo yêu cầu |

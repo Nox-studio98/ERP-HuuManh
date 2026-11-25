@@ -170,3 +170,5 @@ Không có tài nguyên nào khác trong account bị thay đổi.
 - Trước khi go-live thật: xoá dữ liệu demo hoặc tạo D1 mới; đặt Turnstile thật, tài khoản ngân hàng thật; chuyển sang môi trường production (có Queues).
 
 **⚠️ Quan trọng về dữ liệu:** D1 `huu-manh-erp` hiện là **database demo** (dữ liệu mẫu, tài khoản ngân hàng giả) và được dùng chung cho môi trường `demo` lẫn cấu hình gốc (production) trong hai file wrangler. Trước khi chạy thật: tạo D1 + R2 production mới, đổi `database_id`/`bucket_name` ở cấu hình gốc, áp migration, KHÔNG nạp `seed/*.sql`, nhập danh mục thật; để `demo` tiếp tục trỏ DB demo (hoặc xoá). Bản demo công khai trên `*.workers.dev` với Turnstile thử nghiệm luôn cho qua — đừng nhập dữ liệu thật vào đó.
+
+- Cổng nhà cung cấp `/ncc` (nhánh `ncc`): mời từ màn Nhà cung cấp (link sao chép), NCC xem/xác nhận/đề xuất/từ chối PO, công nợ, sao kê, thanh toán; migration 0030; xem `docs/PO-NCC.md` mục 12, `docs/API-po.md` mục 8–9, `e2e/ncc.mjs`.

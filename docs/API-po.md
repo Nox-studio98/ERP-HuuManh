@@ -1,6 +1,6 @@
 # Hợp đồng API — Đơn đặt NCC (PO) tự động từ phần thiếu SO
 
-Thiết kế: `docs/PO-NCC.md`. Đợt này làm bước 1–3 (ERP). Cổng NCC `/ncc` là đợt sau và sẽ gọi lại `applySupplierResponse` (xem mục 6).
+Thiết kế: `docs/PO-NCC.md`. Đợt này làm bước 1–3 (ERP). Cổng NCC `/ncc` đã làm (mục 8, 9).
 
 Quy ước như các hợp đồng trước: base `/api/v1`, camelCase, `{items, nextCursor, ...}`, tiền VND nguyên, số lượng `qtyMilli` (1 kg = 1000, **đơn vị chính**), ngày `YYYY-MM-DD` giờ VN, lỗi `{error:{code,message,details}}`.
 Schema: `migrations/0029_po_orders.sql`. Code: `services/shortages.ts`, `services/po.ts`, `services/po-pdf.ts`, `routes/purchase-orders.ts`.
@@ -87,3 +87,39 @@ Cổng chỉ cần kiểm tra `po.supplier_id` thuộc phiên rồi gọi hàm n
 ## 7. Kiểm thử
 
 `test/po-shortage.test.ts` (xác nhận thiếu, đồng thời, hạn mức, huỷ/sửa SO, online), `test/po-orders.test.ts` (job, ngày chốt, trừ hàng sắp về, làm tròn, duyệt/ngưỡng/thông báo, phản hồi NCC, phân quyền, PDF), `test/po-receive.test.ts` (nguyên tử, khoá sổ, thứ tự phân bổ, nhận một phần, đóng PO). E2E: `e2e/po.mjs`.
+
+## 8. Cổng NCC — route mời (ERP, `/api/v1`, quyền `purchasing.approve`: chủ, quản lý)
+
+Code: `routes/supplier-portal.ts`, migration `0030_ncc_portal.sql`. Link mời: `<SHOP_BASE_URL>/ncc/dat-mat-khau#<id>.<bí mật>` (phần `#` không gửi lên máy chủ). Token **chỉ trả một lần** trong response; DB chỉ lưu SHA-256; audit không ghi token. Hạn `ncc.invite_ttl_hours` (72). Chưa có email thật nên cửa hàng sao chép link gửi Zalo/email.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | /suppliers/:id/portal | `{enabled, shopConfigured, items:[{id, fullName, email, phone, status ('invited'\|'active'\|'locked'), hasPassword, lastLoginAt, failedLogins, invitedByName, pendingInvite:{id, expiresAt, expired}\|null}]}` |
+| POST | /suppliers/:id/portal/invites | `{fullName, email, phone?}` → 201 `{account, invite:{id, path, link\|null, expiresAt, ttlHours}}`. Email trùng toàn hệ thống → 409 `email_taken` |
+| POST | /suppliers/:id/portal/accounts/:accId/invite | Gửi lại link (chưa đặt mật khẩu) hoặc cấp link đặt lại mật khẩu; link cũ chưa dùng bị thu hồi. Tài khoản khoá → 409 |
+| POST | /suppliers/:id/portal/accounts/:accId/revoke-invite | Thu hồi lời mời còn hiệu lực |
+| POST | /suppliers/:id/portal/accounts/:accId/lock `{reason?}` / unlock | Khoá thu hồi mọi phiên + lời mời ngay |
+
+Mọi route kiểm tài khoản thuộc đúng NCC trên đường dẫn (khác NCC → 404). Khi NCC phản hồi PO trên cổng: dòng `notifications` (kind `po_supplier_confirm|propose|reject`, `audience_perm = purchasing.approve`, url `/purchase-orders?open=ID`) + job `notify.managers`, **cùng batch** với đổi trạng thái; audit `actor = supplier_account:<id>` + IP (cột mới `audit_log.actor`).
+
+## 9. Cổng NCC — `/api/ncc/*` (Worker website)
+
+Phiên riêng: cookie `__Host-ncc` (HttpOnly, Secure, SameSite=Strict), bảng `supplier_sessions`, 7 ngày, **không nhận Bearer**; request ghi bắt buộc header `X-Requested-With: hm-shop` (kể cả khi có Authorization); NCC ngừng giao dịch / tài khoản khoá / `ncc.portal_enabled = 0` → phiên bị từ chối (503 `ncc_disabled` hoặc 401). Mọi truy vấn lọc theo `supplier_id` **của phiên**; không route nào nhận supplier id từ client. PO chỉ hiện khi `sent_at` có giá trị và không còn `draft/pending_approval`; PO của NCC khác, nháp và id không tồn tại đều trả cùng `404 po_not_found`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| POST | /auth/login | `{email, password}` + Turnstile, nhóm `RL_AUTH`. Sai mật khẩu / không tồn tại / chưa đặt mật khẩu / bị khoá / bị khoá tạm: cùng `401 invalid_credentials`. Khoá tạm 5 lần sai trong 15' theo (tài khoản + IP) như đăng nhập khách |
+| POST | /auth/invite | `{token}` → `{fullName, email, supplierName, expiresAt, firstTime}`; sai/hết hạn/đã dùng/thu hồi: `400 invalid_token` đồng nhất |
+| POST | /auth/accept | `{token, password ≥10}` + Turnstile: đặt mật khẩu (dùng một lần, `assertStmt` chống hai request đồng thời), thu hồi phiên cũ, đăng nhập luôn |
+| POST | /auth/logout | |
+| GET | /me · POST /me/password | `{currentPassword, newPassword}`: thu hồi phiên khác |
+| GET | /users | Người dùng cùng NCC (chỉ xem): `id, fullName, email, phone, status, lastLoginAt, isMe` |
+| GET | /orders?status=&from=&to=&q=&cursor=&limit= | `{items:[{id, code, status, sentAt, expectedDate, proposedExpectedDate, overdue, total, version, awaitingYou, lineCount}], nextCursor, counts, summary:{awaitingYou, proposed, confirmed, overdue, openValue}}` |
+| GET | /orders/:id | Chi tiết: dòng (tên hàng, SL, giá PO của chính NCC, đề xuất, đã chốt, đã nhận), `note` (ghi chú in trên PDF), `storeReply`, `bills`, `history` (nhãn cố định; lý do chỉ với hành động của NCC / lời đáp đề xuất). **Không** có SKU, ghi chú dòng nội bộ, SO/khách nguồn, người lập/duyệt, lý do huỷ/đóng nội bộ |
+| POST | /orders/:id/respond | `{action:'confirm'\|'propose'\|'reject', version, expectedDate?, note?, lines?:[{lineId, qtyMilli?, unitCost?, note?}]}` → gọi `applySupplierResponse`. 409 `version_conflict` / `invalid_status`, 422 `reason_required` / `line_not_in_po` / `invalid_date` |
+| GET | /orders/:id/pdf | PDF PO của mình (có đơn giá); audit `ncc.po_pdf` |
+| GET | /debt?state=open\|all | `{summary:{balance, outstanding, overdueAmount, overdueCount, prepaid}, bills:[{code, supplierRef, provisional, issueDate, dueDate, total, outstanding, poCode, overdueDays}]}` (dùng `supplierDebtStatus` của ERP) |
+| GET | /statement?from=&to= | Sao kê (`services/supplier-statement.ts`): hoá đơn, thanh toán, chiết khấu, xoá nợ, trả hàng, cấn trừ; `opening/closing/totals`; ≤366 ngày, ≤1000 dòng |
+| GET | /payments?from=&to=&cursor= | Thanh toán đã ghi sổ: `code, paidAt, paidDate, amount, method, allocations[{billCode, amount}]`; **không** có quỹ, người lập, ghi chú, tham chiếu |
+
+Test: `test/ncc-auth.test.ts`, `ncc-orders.test.ts`, `ncc-idor.test.ts`, `ncc-debt.test.ts`; E2E `e2e/ncc.mjs`.

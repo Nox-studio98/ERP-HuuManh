@@ -46,8 +46,8 @@ export function NccDebtPage() {
                   <tbody>
                     {data.bills.map((b) => (
                       <tr key={b.code}>
-                        <th scope="row" data-label="Mã hoá đơn" className="mono">{b.code}{b.poCode && <small className="n">Đơn {b.poCode}</small>}</th>
-                        <td data-label="Số HĐ của bạn">{b.supplierRef ?? <span className="muted">—</span>}{b.provisional && <span className="status warn ncc-late">Tạm tính</span>}</td>
+                        <th scope="row" data-label="Mã hoá đơn" className="mono"><span className="cv">{b.code}{b.poCode && <small className="n">Đơn {b.poCode}</small>}</span></th>
+                        <td data-label="Số HĐ của bạn"><span className="cv">{b.supplierRef ?? <span className="muted">—</span>}{b.provisional && <span className="status warn ncc-late">Tạm tính</span>}</span></td>
                         <td data-label="Ngày">{fmtDate(b.issueDate)}</td>
                         <td data-label="Hạn thanh toán">{fmtDate(b.dueDate)}</td>
                         <td data-label="Tổng" className="r">{money(b.total)}</td>

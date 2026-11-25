@@ -214,13 +214,13 @@ function LineRow({ l, proposed, confirmed, showRecv }: { l: NccLine; proposed: b
   const orderQty = l.orderUnit !== l.baseUnit ? ` (${num(l.orderQty)} ${l.orderUnit})` : "";
   return (
     <tr>
-      <th data-label="Mặt hàng" scope="row">{l.productName}{l.supplierNote && <small className="n wrap-any">Ghi chú của bạn: {l.supplierNote}</small>}</th>
-      <td data-label="Số lượng đặt" className="r">{qtyKg(l.qtyMilli, l.baseUnit)}<small className="n">{orderQty}</small></td>
-      <td data-label="Đơn giá" className="r">{l.unitCost == null ? <span className="muted">Chưa có giá</span> : <>{money(l.unitCost)}<small className="n">/ {l.baseUnit}</small></>}</td>
-      {proposed && <td data-label="Bạn đề xuất" className="r">{l.proposedQtyMilli != null ? qtyKg(l.proposedQtyMilli, l.baseUnit) : "—"}<small className="n">{l.proposedUnitCost != null ? `${money(l.proposedUnitCost)} / ${l.baseUnit}` : ""}</small></td>}
-      {confirmed && <td data-label="Đã chốt" className="r">{l.confirmedQtyMilli != null ? qtyKg(l.confirmedQtyMilli, l.baseUnit) : "—"}<small className="n">{l.confirmedUnitCost != null ? `${money(l.confirmedUnitCost)} / ${l.baseUnit}` : ""}</small></td>}
-      {showRecv && <td data-label="Đã nhận" className="r">{qtyKg(l.receivedMilli, l.baseUnit)}{l.remainingMilli > 0 && <small className="n">còn {qtyKg(l.remainingMilli, l.baseUnit)}</small>}</td>}
-      <td data-label="Thành tiền" className="r"><strong>{l.lineTotal == null ? "—" : money(l.lineTotal)}</strong></td>
+      <th data-label="Mặt hàng" scope="row"><span className="cv">{l.productName}{l.supplierNote && <small className="n wrap-any">Ghi chú của bạn: {l.supplierNote}</small>}</span></th>
+      <td data-label="Số lượng đặt" className="r"><span className="cv">{qtyKg(l.qtyMilli, l.baseUnit)}<small className="n">{orderQty}</small></span></td>
+      <td data-label="Đơn giá" className="r"><span className="cv">{l.unitCost == null ? <span className="muted">Chưa có giá</span> : <>{money(l.unitCost)}<small className="n">/ {l.baseUnit}</small></>}</span></td>
+      {proposed && <td data-label="Bạn đề xuất" className="r"><span className="cv">{l.proposedQtyMilli != null ? qtyKg(l.proposedQtyMilli, l.baseUnit) : "—"}<small className="n">{l.proposedUnitCost != null ? `${money(l.proposedUnitCost)} / ${l.baseUnit}` : ""}</small></span></td>}
+      {confirmed && <td data-label="Đã chốt" className="r"><span className="cv">{l.confirmedQtyMilli != null ? qtyKg(l.confirmedQtyMilli, l.baseUnit) : "—"}<small className="n">{l.confirmedUnitCost != null ? `${money(l.confirmedUnitCost)} / ${l.baseUnit}` : ""}</small></span></td>}
+      {showRecv && <td data-label="Đã nhận" className="r"><span className="cv">{qtyKg(l.receivedMilli, l.baseUnit)}{l.remainingMilli > 0 && <small className="n">còn {qtyKg(l.remainingMilli, l.baseUnit)}</small>}</span></td>}
+      <td data-label="Thành tiền" className="r"><span className="cv"><strong>{l.lineTotal == null ? "—" : money(l.lineTotal)}</strong></span></td>
     </tr>
   );
 }
