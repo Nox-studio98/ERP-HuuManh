@@ -17,7 +17,7 @@ describe("danh sách ngân hàng nhận tiền (SePay)", () => {
     expect(bankByGateway("ACB")?.bin).toBe("970416");
     expect(bankByGateway("Kienlong Bank")?.bin).toBe("970452"); // alias, bỏ khoảng trắng, không phân biệt hoa thường
     expect(bankByGateway("")).toBeUndefined();
-    expect(bankOptionLabel(bankByBin("970436")!)).toContain("chỉ nhận qua VA");
+    expect(bankOptionLabel(bankByBin("970436")!)).toContain("API: chỉ qua VA");
   });
 
   it("Cài đặt: ô ngân hàng là danh sách chọn, chỉ nhận BIN trong danh sách", () => {

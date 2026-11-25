@@ -59,7 +59,7 @@ export default function Sepay() {
       )}
       {cfg.data?.bankCheck?.selected?.vaOnly && (
         <Banner>
-          <b>{cfg.data.bankCheck.selected.shortName}</b>: {cfg.data.bankCheck.selected.note} Nếu tài khoản của cửa hàng thuộc loại này, ô Số tài khoản nhận tiền phải là <b>số VA</b>, không phải số tài khoản chính.
+          <b>{cfg.data.bankCheck.selected.shortName}</b>: {cfg.data.bankCheck.selected.note} Nếu tài khoản liên kết SePay bằng <b>kết nối API không có SMS</b> và thuộc loại này, ô Số tài khoản nhận tiền phải là <b>số VA</b>. Tài khoản có kết nối SMS nhận cả số tài khoản chính.
         </Banner>
       )}
       <KpiRow cols={2} items={[

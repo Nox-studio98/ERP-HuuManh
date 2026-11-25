@@ -45,7 +45,7 @@ Cron mỗi 30 phút gọi `GET {sepay.api_base}/transactions?since_id=<con trỏ
 Chọn ở ô **Ngân hàng nhận tiền**: danh sách chỉ gồm 12 ngân hàng SePay hỗ trợ webhook (nguồn và ngày lấy ghi trong `src/worker/lib/vn-banks.ts`). Mã BIN dùng tạo VietQR lấy tự động, không gõ tay.
 
 - Phải **trùng ngân hàng của tài khoản đã liên kết trên SePay**. Nếu lệch, QR khách quét chuyển sang ngân hàng khác; màn **Giao dịch SePay** báo đỏ khi giao dịch SePay gần nhất đến từ ngân hàng khác ngân hàng đã chọn.
-- Ngân hàng **chỉ nhận qua VA** (Vietcombank, MSB, OCB, KienlongBank; BIDV cá nhân/hộ kinh doanh; VietinBank doanh nghiệp dùng MAP; VPBank NEO tuỳ cách liên kết): ô **Số tài khoản nhận tiền** phải là **số VA**, không phải số tài khoản chính, nếu không SePay sẽ không báo về giao dịch.
+- Ngân hàng **chỉ nhận qua VA khi kết nối API không có SMS** (Vietcombank, MSB, OCB, KienlongBank; BIDV cá nhân/hộ kinh doanh; VietinBank doanh nghiệp dùng MAP — riêng MAP thì kể cả có SMS; VPBank NEO tuỳ cách liên kết): ô **Số tài khoản nhận tiền** phải là **số VA**, nếu không SePay sẽ không báo về giao dịch. Tài khoản **có kết nối SMS** (chỉ SMS hoặc API + SMS) ở các ngân hàng này nhận cả giao dịch vào số tài khoản chính (tài liệu SePay: `sepay-webhooks/tai-khoan-ngan-hang`). Trong ô chọn, các ngân hàng này ghi "API: chỉ qua VA".
 - VietinBank cá nhân / hộ kinh doanh: nội dung chuyển khoản phải có `SEVQR` (QR hiện chưa tự thêm `SEVQR` — xem bước 1 của phần go-live bên dưới).
 
 ## 2. Cấu trúc mã thanh toán cần tạo trên my.sepay.vn
