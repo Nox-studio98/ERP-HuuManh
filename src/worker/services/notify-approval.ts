@@ -32,6 +32,7 @@ const APPROVAL_TYPES: Record<string, TypeInfo> = {
   "preorder.forfeit": { label: "Giữ cọc đặt trước", group: "sales", perm: "approvals.decide" },
   "stock_doc.post": { label: "Phiếu kho / kiểm kê lệch", group: "stock", perm: "inventory.approve" },
   "purchase_return.post": { label: "Trả hàng nhà cung cấp", group: "stock", perm: "inventory.approve" },
+  "purchase_order.approve": { label: "Đơn đặt NCC vượt ngưỡng", group: "stock", perm: "purchasing.approve_high" },
 };
 
 const HR_LABEL: Record<string, string> = {

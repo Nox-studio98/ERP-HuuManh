@@ -14,6 +14,7 @@ import {
   overrideWeight, redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
 } from "../services/online-ops";
 import { b64uDecode, pushConfigured } from "../services/webpush";
+import { openShortLinesFor, shortageView } from "../services/shortages";
 
 export const onlineOrderRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -66,7 +67,8 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
       .prepare(
         `SELECT o.id, o.code, o.channel, o.status, o.payment_method, o.payment_status, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
                 o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status, o.refund_due,
-                EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight
+                EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight,
+                (SELECT COALESCE(SUM(s.qty_milli), 0) FROM so_shortages s WHERE s.order_id = o.id AND s.status = 'open') AS short_milli
            FROM orders o LEFT JOIN delivery_slots s ON s.id = o.slot_id LEFT JOIN delivery_zones z ON z.id = o.zone_id
           WHERE ${conds.join(" AND ")} ORDER BY o.id DESC LIMIT ?`,
       )
@@ -74,6 +76,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
       .all<any>()
   ).results;
   const page = rows.slice(0, limit);
+  const shorts = await openShortLinesFor(c.env.DB, page.map((r) => r.id));
   const items = page.map((r) => ({
     id: r.id,
     code: r.code,
@@ -94,6 +97,9 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     weightAdjustStatus: r.weight_adjust_status,
     createdAt: r.created_at,
     isPreorder: !!r.is_preorder,
+    awaitingStock: r.short_milli > 0,
+    shortMilli: r.short_milli,
+    shortLines: shorts.get(r.id) ?? [],
     needsRefund: r.refund_due > 0,
     refundDue: r.refund_due,
     diffAmount: r.diff_status === "pending" ? r.diff_amount : 0,
@@ -149,6 +155,9 @@ async function orderDetail(c: Ctx, oid: number) {
   const returnedTotal = returns.reduce((s, r) => s + r.total, 0);
   const slot = o.slot_id ? await db.prepare(`SELECT id, label, start_time, end_time FROM delivery_slots WHERE id = ?`).bind(o.slot_id).first<any>() : null;
   const zone = o.zone_id ? await db.prepare(`SELECT id, name FROM delivery_zones WHERE id = ?`).bind(o.zone_id).first<any>() : null;
+  const shorts = await shortageView(db, oid);
+  const shortOf = (lineId: number) => shorts.find((x) => x.orderLineId === lineId && x.status === "open");
+  const awaiting = shorts.filter((x) => x.status === "open" && x.qtyMilli > 0);
   return {
     id: o.id,
     code: o.code,
@@ -186,6 +195,8 @@ async function orderDetail(c: Ctx, oid: number) {
     returnedTotal,
     fullyReturned: o.status === "completed" && returnedTotal > 0 && returnedTotal >= o.total,
     isPreorder: !!o.is_preorder,
+    awaitingStock: awaiting.length > 0,
+    shortMilli: awaiting.reduce((a, x) => a + x.qtyMilli, 0),
     carrier: o.carrier,
     carrierTrackingNo: o.carrier_tracking_no,
     cancelReason: o.cancel_reason,
@@ -207,6 +218,10 @@ async function orderDetail(c: Ctx, oid: number) {
       orderedQtyMilli: l.ordered_qty_milli ?? l.qty_milli,
       qtyMilli: l.qty_milli,
       preorderMilli: l.preorder_milli,
+      shortMilli: shortOf(l.id)?.qtyMilli ?? 0,
+      poCode: shortOf(l.id)?.poCode ?? null,
+      poStatus: shortOf(l.id)?.poStatus ?? null,
+      poExpectedDate: shortOf(l.id)?.poExpectedDate ?? null,
       unitPrice: l.unit_price,
       discount: l.discount,
       lineTotal: l.line_total,

@@ -8,7 +8,7 @@ import Recurring from "./Recurring";
 import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, rangeOf, usePagedList, type DateRange } from "../../components/list";
 import { useCan } from "../../store";
 import {
-  Back, CreditBlocked, CustomerSelect, DELIVERY_STATUS, EINVOICE, INVOICE_KIND, LinesEditor, Lnk, QUOTE_STATUS, ReasonSheet, deliveryTone, einvTone, linePayload, orderTone, qparam, q3, qtyU, ymd,
+  Back, CreditBlocked, CustomerSelect, DELIVERY_STATUS, waitLabel, EINVOICE, INVOICE_KIND, LinesEditor, Lnk, QUOTE_STATUS, ReasonSheet, deliveryTone, einvTone, linePayload, orderTone, qparam, q3, qtyU, ymd,
   type CustomerLite, type EditLine,
 } from "./kit";
 
@@ -68,7 +68,7 @@ function OrderList() {
           cols={[
             { key: "c", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="nw">{o.code}</b> },
             { key: "k", label: "Khách hàng", sort: (o) => o.customerName, render: (o) => o.customerName },
-            { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={orderTone(o.status)}>{ORDER_STATUS[o.status] ?? o.status}</Badge> },
+            { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => <span className="row wrap st-badges" style={{ gap: 4 }}><Badge tone={orderTone(o.status)}>{ORDER_STATUS[o.status] ?? o.status}</Badge>{o.awaitingStock && <Badge tone="warn">{waitLabel(o.shortLines)}</Badge>}</span> },
             { key: "cr", label: "Ngày tạo", hideBelow: 1280, sort: (o) => o.createdAt, render: (o) => ymd(o.createdAt) },
             { key: "d", label: "Ngày giao", sort: (o) => o.deliveryDate, render: (o) => ymd(o.deliveryDate) },
             { key: "a", label: "Địa chỉ", hideMobile: true, hideBelow: 1024, render: (o) => o.addressLabel ?? "—" },
@@ -199,6 +199,7 @@ function OrderDetail({ id }: { id: number }) {
   const rs = (l: any) => {
     if (["completed"].includes(d.status)) return <Badge tone="ok">Đã giao {qtyU((l.deliveredMilli * l.qty) / l.qtyMilli, l.unit)}</Badge>;
     if (["cancelled"].includes(d.status)) return <Badge>—</Badge>;
+    if (l.shortMilli > 0) return <span className="row wrap" style={{ gap: 4 }}><Badge tone="warn">Chờ hàng {qtyU((l.shortMilli * l.qty) / l.qtyMilli, l.unit)}</Badge>{l.poCode && <Badge tone="info">{l.poCode}{l.poExpectedDate ? ` · về ${ymd(l.poExpectedDate)}` : ""}</Badge>}</span>;
     const r = lineReserved(l);
     return r >= 1 ? <Badge tone="ok">Đã giữ đủ</Badge> : r > 0 ? <Badge tone="warn">Giữ {Math.round(r * 100)}%</Badge> : <Badge tone={d.status === "new" ? "warn" : undefined}>Chưa giữ</Badge>;
   };
@@ -211,6 +212,9 @@ function OrderDetail({ id }: { id: number }) {
       </div>
       {(blocked || (d.status === "new" && d.credit && (d.credit.overdueCount > 0 || d.credit.available < d.total))) && !blocked && (
         <Banner>Đơn chưa giữ hàng. Khách {d.credit.overdueCount > 0 ? "đang có nợ quá hạn" : "có thể vượt hạn mức"} — nếu bị chặn, đơn sẽ được gửi chủ duyệt.</Banner>
+      )}
+      {d.awaitingStock && ["confirmed", "preparing"].includes(d.status) && (
+        <Banner>Đơn đang <b>chờ hàng về</b> — đã giữ phần có tồn, phần thiếu được gom vào đơn đặt NCC. {d.lines.filter((l: any) => l.poCode).length ? "" : "Chưa có PO phủ phần thiếu (chạy “Chốt ngay” ở màn Đơn đặt NCC). "}Chỉ giao được phần đã giữ; khi hàng về hệ thống tự giữ thêm cho đơn.</Banner>
       )}
       {blocked && <CreditBlocked details={blocked} />}
       {stockMsg && <Banner tone="danger">{stockMsg} — nhập thêm hàng rồi bấm "Giữ hàng lại".</Banner>}

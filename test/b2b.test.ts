@@ -106,9 +106,11 @@ describe("b2b orders: access, stock and credit", () => {
     expect(inv.body.items[0].overdueDays).toBeGreaterThan(0);
   });
 
-  it("returns insufficient_stock and leaves the order in `new`", async () => {
+  it("returns insufficient_stock and leaves the order in `new` (po.allow_short_confirm = 0: hành vi cũ)", async () => {
+    await testEnv.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'po.allow_short_confirm'`).run();
     const c = await newCustomer("KH thiếu hàng");
     const r = await order(c, [{ productId: 813, unit: "kg", qty: 5 }]); // chỉ còn 2kg
+    await testEnv.DB.prepare(`UPDATE settings SET value = '1' WHERE key = 'po.allow_short_confirm'`).run();
     expect(r.status).toBe(409);
     expect(r.body.error.code).toBe("insufficient_stock");
     const list = await api("manager", "GET", `/api/v1/b2b/orders?customerId=${c.id}`);

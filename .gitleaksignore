@@ -1,0 +1,8 @@
+# Cảnh báo nhầm đã kiểm tra: mật khẩu GIẢ trong test cổng NCC (commit 6b0376d), không phải bí mật thật.
+# Từ commit sau, các chuỗi này đã chuyển thành hằng số trong test/ncc-helpers.ts.
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-idor.test.ts:generic-api-key:120
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-idor.test.ts:generic-api-key:123
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-auth.test.ts:generic-api-key:197
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-auth.test.ts:generic-api-key:201
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-auth.test.ts:generic-api-key:223
+6b0376dbfb93d9b86ce918cf6540e769f2220b74:test/ncc-auth.test.ts:generic-api-key:226

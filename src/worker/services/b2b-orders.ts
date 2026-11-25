@@ -9,6 +9,7 @@ import { can } from "../lib/rbac";
 import { checkCredit, customerDebtStatus, openB2bExposure } from "./debt";
 import { assertStmt } from "./guard";
 import { planReservations, reserveStmts } from "./reservations";
+import { allowShortConfirm, planPartialReservations, shortageUpsertStmts, shortageView } from "./shortages";
 import { currentAvgCost, resolvePrice } from "./pricing";
 import { unitFactor } from "./http";
 
@@ -236,33 +237,51 @@ export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApproval
   }
 
   const lines = (await db.prepare(`SELECT id, product_id, qty_milli FROM order_lines WHERE order_id = ? ORDER BY id`).bind(orderId).all<any>()).results;
-  const plans = await planReservations(db, lines.map((l) => ({ orderLineId: l.id, productId: l.product_id, qtyMilli: l.qty_milli })), o.store_id);
+  const toReserve = lines.map((l) => ({ orderLineId: l.id, productId: l.product_id, qtyMilli: l.qty_milli }));
+  // PO tự động (docs/PO-NCC.md 4.1): thiếu hàng không bị từ chối nữa — giữ phần có tồn, ghi phần thiếu; tắt po.allow_short_confirm = 409 như cũ.
+  // Hạn mức nợ ở trên vẫn tính trên TOÀN BỘ giá trị đơn.
+  const allowShort = await allowShortConfirm(db);
   // Chốt chặn đồng thời (audit #7/#9): trạng thái đơn còn như đã đọc; và khi KHÔNG có duyệt vượt hạn mức, tổng các đơn đã
   // cam kết (confirmed/preparing/shipping) của khách chưa đổi so với lúc kiểm hạn mức — hai đơn cùng confirm song song không
   // thể cùng lọt hạn mức (đơn thứ hai nhận 409 state_changed, thử lại sẽ tính lại). Đơn 'new' không đổi bất biến này nên không gây xung đột.
   const committed = override ? null : await openB2bExposure(db, o.customer_id, orderId, ["confirmed", "preparing", "shipping"]);
-  try {
-    await db.batch([
-      assertStmt(db, "b2b.confirm", `SELECT status = ? FROM orders WHERE id = ?`, [o.status, orderId]),
-      ...(committed == null
-        ? []
-        : [
-            assertStmt(
-              db,
-              "b2b.credit",
-              `SELECT COALESCE(SUM(o.total), 0) = ? FROM orders o
-                WHERE o.customer_id = ? AND o.channel = 'b2b' AND o.kind = 'sale' AND o.status IN ('confirmed','preparing','shipping') AND o.id <> ?
-                  AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND i.kind = 'sale' AND i.status = 'open')`,
-              [committed, o.customer_id, orderId],
-            ),
-          ]),
-      ...reserveStmts(db, orderId, plans),
-      db.prepare(`UPDATE orders SET status='confirmed', credit_override_approval_id = COALESCE(?, credit_override_approval_id) WHERE id = ? AND status IN ('new','delivery_failed')`).bind(override, orderId),
-      auditStmt(c, { action: "b2b_order.confirm", entity: "b2b_order", entityId: o.code, before: { status: o.status }, after: { status: "confirmed", creditOverrideApprovalId: override } }),
-    ]);
-  } catch (e) {
-    if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
-    throw e;
+  for (let attempt = 0; ; attempt++) {
+    let plans: Awaited<ReturnType<typeof planReservations>>;
+    let short: Awaited<ReturnType<typeof planPartialReservations>>["short"] = [];
+    if (allowShort) ({ plans, short } = await planPartialReservations(db, toReserve, o.store_id));
+    else plans = await planReservations(db, toReserve, o.store_id);
+    try {
+      await db.batch([
+        assertStmt(db, "b2b.confirm", `SELECT status = ? FROM orders WHERE id = ?`, [o.status, orderId]),
+        ...(committed == null
+          ? []
+          : [
+              assertStmt(
+                db,
+                "b2b.credit",
+                `SELECT COALESCE(SUM(o.total), 0) = ? FROM orders o
+                  WHERE o.customer_id = ? AND o.channel = 'b2b' AND o.kind = 'sale' AND o.status IN ('confirmed','preparing','shipping') AND o.id <> ?
+                    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND i.kind = 'sale' AND i.status = 'open')`,
+                [committed, o.customer_id, orderId],
+              ),
+            ]),
+        ...reserveStmts(db, orderId, plans),
+        ...shortageUpsertStmts(db, orderId, o.delivery_date ?? null, short),
+        db.prepare(`UPDATE orders SET status='confirmed', credit_override_approval_id = COALESCE(?, credit_override_approval_id) WHERE id = ? AND status IN ('new','delivery_failed')`).bind(override, orderId),
+        auditStmt(c, {
+          action: "b2b_order.confirm", entity: "b2b_order", entityId: o.code, before: { status: o.status },
+          after: { status: "confirmed", creditOverrideApprovalId: override, ...(short.length ? { shortages: short.map((x) => ({ productId: x.productId, missingMilli: x.missingMilli })) } : {}) },
+        }),
+      ]);
+      break;
+    } catch (e) {
+      if (isCheckFail(e)) {
+        // tồn vừa đổi giữa lúc đọc và ghi (EC-02): với phần thiếu cho phép thì tính lại một lần (đơn kia giữ trước, đơn này nhận phần còn lại)
+        if (allowShort && attempt === 0) continue;
+        throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
+      }
+      throw e;
+    }
   }
 }
 
@@ -294,6 +313,9 @@ export async function loadOrderDetail(db: D1Database, id: number) {
     await db.prepare(`SELECT id, code, kind, issue_date, due_date, total, einvoice_status, einvoice_no FROM invoices WHERE order_id = ? ORDER BY id`).bind(id).all<any>()
   ).results;
   const credit = await customerDebtStatus(db, o.customer_id);
+  const shorts = await shortageView(db, id);
+  const shortOf = (lineId: number) => shorts.find((x) => x.orderLineId === lineId && x.status === "open");
+  const awaiting = shorts.filter((x) => x.status === "open" && x.qtyMilli > 0);
   return {
     id: o.id, code: o.code, customerId: o.customer_id, customerName: o.customer_name, status: o.status,
     deliveryDate: o.delivery_date, subtotal: o.subtotal, total: o.total, note: o.note,
@@ -304,7 +326,10 @@ export async function loadOrderDetail(db: D1Database, id: number) {
     lines: lines.map((l) => ({
       id: l.id, productId: l.product_id, productName: l.product_name, unit: l.unit, qty: l.qty_milli / l.factor, qtyMilli: l.qty_milli,
       unitPrice: l.unit_price, lineTotal: l.line_total, reservedMilli: l.reserved_milli, deliveredMilli: l.delivered_milli,
+      shortMilli: shortOf(l.id)?.qtyMilli ?? 0, poCode: shortOf(l.id)?.poCode ?? null, poStatus: shortOf(l.id)?.poStatus ?? null, poExpectedDate: shortOf(l.id)?.poExpectedDate ?? null,
     })),
+    awaitingStock: awaiting.length > 0,
+    shortMilli: awaiting.reduce((s, x) => s + x.qtyMilli, 0),
     deliveries: deliveries.map((d) => ({ id: d.id, code: d.code, status: d.status, shipper: d.shipper, receiverName: d.receiver_name, deliveredAt: d.delivered_at, createdAt: d.created_at })),
     invoices: invoices.map((i) => ({ id: i.id, code: i.code, kind: i.kind, issueDate: i.issue_date, dueDate: i.due_date, total: i.total, einvoiceStatus: i.einvoice_status, einvoiceNo: i.einvoice_no })),
     credit,

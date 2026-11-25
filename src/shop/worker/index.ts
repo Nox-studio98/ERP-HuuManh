@@ -11,6 +11,8 @@ import { cartRoutes } from "./routes/cart";
 import { catalogRoutes, imgRoutes, seoRoutes } from "./routes/catalog";
 import { checkoutRoutes } from "./routes/checkout";
 import { meRoutes } from "./routes/me";
+import { nccAuthRoutes } from "./routes/ncc-auth";
+import { nccRoutes } from "./routes/ncc";
 import { orderRoutes } from "./routes/orders";
 import { paymentRoutes } from "./routes/payments";
 
@@ -19,6 +21,7 @@ const app = new Hono<ShopBindings>();
 app.use("*", async (c, next) => {
   c.set("requestId", c.req.header("cf-ray") ?? crypto.randomUUID());
   c.set("account", null);
+  c.set("supplier", null);
   await next();
 });
 
@@ -53,6 +56,8 @@ app.use("/api/*", csrfGuard);
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 app.route("/api/auth", authRoutes);
+app.route("/api/ncc/auth", nccAuthRoutes);
+app.route("/api/ncc", nccRoutes);
 app.route("/api", catalogRoutes);
 app.route("/api", cartRoutes);
 app.route("/api", checkoutRoutes);

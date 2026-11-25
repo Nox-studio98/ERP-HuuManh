@@ -5,7 +5,7 @@ import { toast } from "../../components/toast";
 import { fmtDateTime, money, todayVN, unitLabel, uuid } from "../../format";
 import { navigate, usePath } from "../../router";
 import { useCan } from "../../store";
-import { Back, Lnk, q3 } from "../b2b/kit";
+import { Back, Lnk, q3, waitLabel } from "../b2b/kit";
 import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, useWide, type DateRange } from "../../components/list";
 import { CHANNEL_LABEL, PAY_METHOD, PAY_STATUS, STATUS_LABEL, TABS, WEIGHT_LABEL, statusTone, ymdShow } from "./kit";
 
@@ -83,6 +83,7 @@ function OrderList() {
                   <span className="row wrap st-badges" style={{ gap: 4 }}>
                     <Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status] ?? o.status}</Badge>
                     {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
+                    {o.awaitingStock && <Badge tone="warn">{waitLabel(o.shortLines)}</Badge>}
                     {o.weightAdjustStatus === "pending_customer" && <Badge tone="warn">Chờ khách xác nhận cân</Badge>}
                     {o.needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
                     {o.diffAmount > 0 && <Badge tone="warn">Thu thêm {money(o.diffAmount)}</Badge>}
@@ -142,10 +143,12 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
       <div className="row wrap" style={{ gap: 6 }}>
         <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
         {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
+        {o.awaitingStock && <Badge tone="warn">Chờ hàng về</Badge>}
         {WEIGHT_LABEL[o.weightAdjustStatus] && <Badge tone={weightBlock ? "warn" : "info"}>{WEIGHT_LABEL[o.weightAdjustStatus]}</Badge>}
         {needsRefund && <Badge tone="danger">Chờ hoàn tiền</Badge>}
       </div>
 
+      {o.awaitingStock && ["confirmed", "preparing"].includes(st) && <Banner>Đơn đặt trước đang <b>chờ hàng về</b> ({o.lines.filter((l: any) => l.shortMilli > 0).map((l: any) => `${l.name} thiếu ${q3(l.shortMilli / 1000)} ${unitLabel(l.baseUnit)}`).join("; ")}). Chưa soạn / giao được tới khi hàng về đủ — hệ thống tự giữ hàng khi nhận theo đơn đặt NCC.</Banner>}
       {shipBlock(st, shipBlocked)}
       {o.diffKind === "collect" && <Banner tone="info">Thu thêm {money(o.diffAmount)}: khách đã chuyển khoản theo giá tạm tính, sau cân tổng cao hơn — thu phần chênh khi giao (ghi nhận khi bấm "Đã giao").</Banner>}
       {o.diffKind === "refund" && <Banner tone="danger">Hoàn lại {money(-o.diffAmount)}: sau cân tổng thấp hơn số khách đã chuyển. Cần hoàn phần dư hoặc miễn (người có quyền duyệt) trước khi hoàn tất đơn.</Banner>}
@@ -155,7 +158,7 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
 
       <div className="row wrap action-bar" data-testid="action-bar">
         {st === "new" && <Act onClick={() => run("confirm", {}, "Đã xác nhận đơn")}>Xác nhận</Act>}
-        {st === "confirmed" && <Act onClick={() => run("prepare", {}, "Bắt đầu soạn hàng")}>Bắt đầu soạn</Act>}
+        {st === "confirmed" && <Act disabled={!!o.awaitingStock} onClick={() => run("prepare", {}, "Bắt đầu soạn hàng")}>Bắt đầu soạn</Act>}
         {st === "preparing" && <Act variant="soft" onClick={() => setMode("pack")}>Cân &amp; đóng gói</Act>}
         {st === "preparing" && <Act disabled={shipBlocked.length > 0} onClick={() => setMode("ship")}>Giao cho shipper</Act>}
         {st === "shipping" && <Act onClick={() => run("deliver", {}, "Đã giao hàng")}>Đã giao</Act>}
@@ -189,7 +192,7 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
             return (
               <div key={l.id} className="card flat" style={{ padding: 12 }}>
                 <div className="row between"><b>{l.name}</b><span className="money">{money(l.lineTotal)}</span></div>
-                <div className="small muted">{money(l.unitPrice)}/{unitLabel(l.baseUnit)}{l.preorderMilli ? ` · đặt trước ${q3(l.preorderMilli / 1000)}` : ""}</div>
+                <div className="small muted">{money(l.unitPrice)}/{unitLabel(l.baseUnit)}{l.preorderMilli ? ` · đặt trước ${q3(l.preorderMilli / 1000)}` : ""}{l.shortMilli > 0 ? <> · <b style={{ color: "var(--warn)" }}>chờ hàng {q3(l.shortMilli / 1000)}</b>{l.poCode ? ` (${l.poCode}${l.poExpectedDate ? `, về ${ymdShow(l.poExpectedDate)}` : ""})` : ""}</> : null}</div>
                 <div className="small">Đặt {q3(ord)} {unitLabel(l.baseUnit)}{changed && <> → <b>cân thực {q3(act)} {unitLabel(l.baseUnit)}</b></>}</div>
                 {l.lots.length > 0 && (
                   <div className="stack" style={{ gap: 2, marginTop: 6 }}>

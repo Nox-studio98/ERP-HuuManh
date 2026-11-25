@@ -455,3 +455,75 @@ table.qo { width: 100%; border-collapse: collapse; }
 .qty-in { width: 84px !important; min-height: 40px !important; text-align: right; display: inline-block; }
 .b2b-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .lead-sm { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+
+/* ---------- cổng nhà cung cấp /ncc ---------- */
+.ncc-top-in { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ncc-nav { display: none; }
+.ncc-nav a { padding: 8px 14px; border-radius: 999px; font-weight: 650; text-decoration: none; color: var(--ink-2); }
+.ncc-nav a:hover { background: var(--surface-2); } .ncc-nav a.on { background: var(--brand-soft); color: var(--brand-deep); }
+.ncc-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ncc-who-name { display: none; flex-direction: column; text-align: right; line-height: 1.2; min-width: 0; } .ncc-who-name small { color: var(--muted); }
+.ncc-who .btn .lbl { display: none; }
+@media (min-width: 820px) {
+  .ncc-top-in { flex-wrap: nowrap; padding-top: 10px; padding-bottom: 10px; }
+  .ncc-nav { display: flex; gap: 4px; margin: 0 auto 0 12px; }
+  .ncc-who-name { display: flex; max-width: 260px; } .ncc-who-name strong, .ncc-who-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ncc-who .btn .lbl { display: inline; }
+}
+.ncc-main { padding-top: 22px; }
+.ncc-page > .back { margin-bottom: 8px; }
+.ncc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.ncc-head h1 { margin-bottom: 4px; } .ncc-head p { margin: 0; max-width: 62ch; }
+.ncc-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
+.ncc-kpis > div { background: var(--surface); border-radius: 18px; padding: 14px 16px; box-shadow: var(--shadow); display: grid; gap: 2px; align-content: start; min-width: 0; }
+.ncc-kpis dt { font-size: .8rem; font-weight: 650; color: var(--muted); } .ncc-kpis dd { margin: 0; font: 800 1.45rem/1.2 var(--font); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; } .ncc-kpis small { color: var(--muted); }
+.ncc-kpis .hot { background: var(--accent-soft); } .ncc-kpis .hot dd { color: var(--accent-ink); }
+.ncc-kpis .bad dd { color: var(--bad); } .ncc-kpis .wide { grid-column: 1 / -1; }
+@media (min-width: 820px) { .ncc-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); } .ncc-kpis .wide { grid-column: auto; } .ncc-kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 640px; } }
+.ncc-filters { margin-bottom: 14px; }
+.ncc-filter-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; align-items: end; margin-top: 10px; }
+.ncc-filter-row .field:first-child:nth-last-child(n+3) { grid-column: 1 / -1; }
+.ncc-filter-btns { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.ncc-reset { align-self: end; margin-bottom: 14px; justify-self: start; }
+@media (min-width: 820px) { .ncc-filter-row { grid-template-columns: minmax(160px, 1.2fr) repeat(2, minmax(150px, 1fr)) auto; } .ncc-filter-row .field:first-child:nth-last-child(n+3) { grid-column: auto; } .ncc-filter-btns { grid-column: auto; margin-bottom: 14px; align-items: end; } }
+.ncc-sec-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; } .ncc-sec-head h2 { margin: 0; }
+.ncc-late { margin-left: 8px; padding: 2px 10px; font-size: .75rem; }
+.table-wrap.flat { box-shadow: none; border-radius: 0; background: transparent; margin-bottom: 8px; }
+.qo tr.hot { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+.qo tr.sum td { background: var(--surface-2); font-weight: 650; }
+.qo .n { font-weight: 400; } .qo .mono { white-space: nowrap; }
+.ncc-act { text-align: right; }
+.ncc-allocs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; } .ncc-allocs li { display: flex; gap: 10px; justify-content: space-between; font-variant-numeric: tabular-nums; max-width: 340px; }
+.ncc-action { border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.ncc-action h2 { font-family: var(--serif); }
+.ncc-users { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.ncc-users li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px dashed var(--line); } .ncc-users li:last-child { border: 0; padding-bottom: 0; }
+.ncc-u-st { display: grid; gap: 4px; justify-items: end; } .ncc-u-st small { font-size: .78rem; }
+.ncc-pl { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 10px; }
+.card-box.flat { box-shadow: none; border: 1px solid var(--line); padding: 14px; margin: 0; display: grid; gap: 6px; }
+.ncc-pl-in { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.ncc-auth { min-height: 100dvh; padding: 22px 0 40px; }
+.ncc-auth-in { display: grid; justify-items: center; gap: 22px; max-width: 520px; }
+.ncc-auth-in .auth-card { max-width: 100%; }
+.ncc-auth-foot { text-align: center; margin: 0; max-width: 40ch; }
+.ncc .modal { max-width: min(640px, calc(100vw - 24px)); }
+/* bảng đáp ứng: ≥760px là bảng, nhỏ hơn mỗi dòng là một thẻ có nhãn */
+@media (max-width: 759px) {
+  table.rt, table.rt tbody, table.rt tr, table.rt td, table.rt th { display: block; width: 100%; }
+  table.rt thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table.rt tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  table.rt tbody tr:last-child { border-bottom: 0; }
+  table.rt td, table.rt th { border: 0; padding: 4px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 14px; text-align: right !important; }
+  table.rt td::before, table.rt th[data-label]::before { content: attr(data-label); flex: none; color: var(--muted); font-size: .82rem; font-weight: 650; text-align: left; }
+  table.rt td[data-label=""]::before { content: none; }
+  table.rt .n { display: block; }
+  table.rt .ncc-act { text-align: right; padding-top: 8px; }
+  table.rt .ncc-allocs li { max-width: none; }
+  .ncc-filter-row .ncc-reset { grid-column: 1 / -1; }
+}
+.ncc-head h1.mono { font-size: clamp(1.35rem, 4.5vw, 1.9rem); letter-spacing: .02em; }
+.ncc .timeline time { display: block; margin-top: 2px; }
+.ncc .cv { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 759px) { .ncc-late { margin-left: 0; } }
+.ncc-top-in { padding-top: 10px; padding-bottom: 10px; }
+@media (max-width: 759px) { table.rt td::before, table.rt th::before { font-family: var(--font); letter-spacing: 0; } }

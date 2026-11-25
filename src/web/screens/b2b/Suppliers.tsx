@@ -3,10 +3,11 @@ import { get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, usePagedList } from "../../components/list";
 import { toast } from "../../components/toast";
-import { money } from "../../format";
+import { fmtDateTime, money } from "../../format";
 import { useCan } from "../../store";
 import { PaymentSheet } from "./Debts";
 import { ymd } from "./kit";
+import { copyText } from "../d4/shared";
 
 export default function Suppliers() {
   const can = useCan();
@@ -104,6 +105,7 @@ function SupplierPanel({ s, onClose, onEdit }: { s: any; onClose: () => void; on
           {can("inventory.write") && <Button size="sm" variant="soft" onClick={onEdit}>Sửa thông tin</Button>}
         </div>
         <div className="muted small">{s.code} · Hạn trả {s.paymentTermsDays ?? 0} ngày{s.taxCode ? ` · MST ${s.taxCode}` : ""}{s.phone ? ` · ${s.phone}` : ""}{s.address ? ` · ${s.address}` : ""}</div>
+        {can("purchasing.approve") && <PortalBox supplier={s} />}
         {canDebt && (b.loading ? <Spinner /> : <DataTable rows={b.data ?? []} rowKey={(x) => x.id} empty="Chưa có hoá đơn mua — hoá đơn sinh khi nhập hàng có nhà cung cấp" cols={[
           { key: "c", label: "Mã", title: true, render: (x) => <span><b>{x.code}</b>{x.isProvisional ? <div className="row" style={{ gap: 6, marginTop: 4 }}><Badge tone="warn">Tạm tính</Badge>{x.status === "open" && can("debt.write") ? <Button size="sm" onClick={(e) => { e.stopPropagation(); setFin(x); }}>Chốt hoá đơn</Button> : null}</div> : null}</span> },
           { key: "r", label: "Số HĐ NCC", hideBelow: 1280, render: (x) => x.supplierRef || "—" },
@@ -136,3 +138,102 @@ function FinalizeSheet({ bill, onClose, onDone }: { bill: any; onClose: () => vo
   );
 }
 export { Card };
+
+/** Cổng nhà cung cấp (/ncc): mời người của NCC, gửi lại link, thu hồi lời mời, khoá/mở khoá. Link chỉ hiện MỘT lần. */
+const ACC_ST: Record<string, { label: string; tone?: "ok" | "warn" | "danger" }> = {
+  invited: { label: "Chưa đặt mật khẩu", tone: "warn" }, active: { label: "Đang hoạt động", tone: "ok" }, locked: { label: "Đã khoá", tone: "danger" },
+};
+
+function PortalBox({ supplier }: { supplier: any }) {
+  const r = useAsync(() => get(`/suppliers/${supplier.id}/portal`).then((x) => x as { enabled: boolean; shopConfigured: boolean; items: any[] }), [supplier.id]);
+  const [inviting, setInviting] = useState(false);
+  const [shown, setShown] = useState<{ account: any; invite: any; reset?: boolean } | null>(null);
+  const [busy, setBusy] = useState<string>("");
+  const act = async (a: any, what: "reinvite" | "revoke" | "lock" | "unlock") => {
+    setBusy(`${what}-${a.id}`);
+    try {
+      const base = `/suppliers/${supplier.id}/portal/accounts/${a.id}`;
+      if (what === "reinvite") { const x = await post(`${base}/invite`, {}); setShown({ ...x, reset: a.hasPassword }); }
+      else if (what === "revoke") { await post(`${base}/revoke-invite`, {}); toast("Đã thu hồi lời mời", "ok"); }
+      else if (what === "lock") { await post(`${base}/lock`, {}); toast("Đã khoá tài khoản, phiên đang mở bị đăng xuất", "ok"); }
+      else { await post(`${base}/unlock`, {}); toast("Đã mở khoá", "ok"); }
+      r.reload();
+    } catch { /* toast từ api */ } finally { setBusy(""); }
+  };
+  return (
+    <div className="stack" data-testid="portal-box" style={{ gap: 8 }}>
+      <div className="row between">
+        <b>Cổng nhà cung cấp</b>
+        <Button size="sm" variant="soft" onClick={() => setInviting(true)} data-testid="portal-invite">Mời vào cổng</Button>
+      </div>
+      {r.data && !r.data.enabled && <Banner>Cổng đang <b>tắt</b> trong Cài đặt (ncc.portal_enabled) — NCC chưa đăng nhập được.</Banner>}
+      {r.loading ? <Spinner /> : !(r.data?.items.length) ? (
+        <div className="muted small">Chưa có tài khoản nào. Mời người của nhà cung cấp để họ xem và xác nhận đơn đặt hàng, đối chiếu công nợ trên website (/ncc).</div>
+      ) : (
+        <div className="stack" style={{ gap: 6 }}>
+          {r.data.items.map((a) => {
+            const st = ACC_ST[a.status] ?? { label: a.status };
+            return (
+              <div key={a.id} className="card flat" style={{ padding: "8px 12px" }} data-testid="portal-account">
+                <div className="row between wrap" style={{ gap: 8 }}>
+                  <span style={{ minWidth: 0 }}><b>{a.fullName}</b> <span className="muted small" style={{ overflowWrap: "anywhere" }}>{a.email}</span></span>
+                  <Badge tone={st.tone}>{st.label}</Badge>
+                </div>
+                <div className="muted small">
+                  {a.lastLoginAt ? `Vào lần cuối ${fmtDateTime(a.lastLoginAt)}` : "Chưa từng đăng nhập"}
+                  {a.pendingInvite ? ` · ${a.pendingInvite.expired ? "Link mời đã hết hạn" : `Link mời còn hiệu lực đến ${fmtDateTime(a.pendingInvite.expiresAt)}`}` : ""}
+                </div>
+                <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+                  {a.status !== "locked" && <Button size="sm" variant="ghost" loading={busy === `reinvite-${a.id}`} onClick={() => act(a, "reinvite")}>{a.hasPassword ? "Cấp link đặt lại mật khẩu" : "Gửi lại link mời"}</Button>}
+                  {a.pendingInvite && <Button size="sm" variant="ghost" loading={busy === `revoke-${a.id}`} onClick={() => act(a, "revoke")}>Thu hồi lời mời</Button>}
+                  {a.status === "locked"
+                    ? <Button size="sm" variant="ghost" loading={busy === `unlock-${a.id}`} onClick={() => act(a, "unlock")}>Mở khoá</Button>
+                    : <Button size="sm" variant="ghost" loading={busy === `lock-${a.id}`} onClick={() => { if (confirm(`Khoá tài khoản ${a.fullName}? Phiên đang mở sẽ bị đăng xuất ngay.`)) void act(a, "lock"); }}>Khoá</Button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {inviting && <InviteSheet supplier={supplier} onClose={() => setInviting(false)} onDone={(x) => { setInviting(false); setShown(x); r.reload(); }} />}
+      {shown && <LinkSheet data={shown} shopConfigured={r.data?.shopConfigured ?? true} onClose={() => setShown(null)} />}
+    </div>
+  );
+}
+
+function InviteSheet({ supplier, onClose, onDone }: { supplier: any; onClose: () => void; onDone: (x: any) => void }) {
+  const [f, setF] = useState({ fullName: "", email: "", phone: "" });
+  const [busy, setBusy] = useState(false);
+  const ok = f.fullName.trim() && /^\S+@\S+\.\S+$/.test(f.email.trim());
+  return (
+    <Sheet portal open onClose={onClose} title={`Mời vào cổng — ${supplier.name}`} footer={<Button block size="lg" loading={busy} disabled={!ok} onClick={async () => {
+      setBusy(true);
+      try { onDone(await post(`/suppliers/${supplier.id}/portal/invites`, { fullName: f.fullName.trim(), email: f.email.trim(), phone: f.phone.trim() || null })); } catch { /* toast */ } finally { setBusy(false); }
+    }}>Tạo link mời</Button>}>
+      <div className="stack">
+        <Banner tone="info">Hệ thống tạo một link đặt mật khẩu dùng một lần. Bạn sao chép và gửi cho người được mời qua Zalo hoặc email (hệ thống chưa tự gửi email).</Banner>
+        <Input label="Họ tên người được mời" value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} autoFocus />
+        <Input label="Email (dùng để đăng nhập)" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+        <Input label="Số điện thoại (không bắt buộc)" inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
+      </div>
+    </Sheet>
+  );
+}
+
+function LinkSheet({ data, shopConfigured, onClose }: { data: { account: any; invite: any; reset?: boolean }; shopConfigured: boolean; onClose: () => void }) {
+  const { account: a, invite: i } = data;
+  const msg = `Hữu Mạnh mời ${a.fullName} vào cổng nhà cung cấp. Mở link để đặt mật khẩu (dùng một lần, hết hạn ${fmtDateTime(i.expiresAt)}):\n${i.link ?? i.path}`;
+  return (
+    <Sheet portal open onClose={onClose} title="Link mời đã sẵn sàng" footer={<Button block size="lg" onClick={onClose}>Xong</Button>}>
+      <div className="stack" data-testid="portal-link">
+        <Banner tone="info">Link <b>chỉ hiện một lần</b> và hết hạn lúc <b>{fmtDateTime(i.expiresAt)}</b> ({i.ttlHours} giờ). Gửi cho <b>{a.fullName}</b> ({a.email}) qua Zalo hoặc email. Nếu mất link, bấm "Gửi lại link" để cấp link mới (link cũ sẽ bị thu hồi).</Banner>
+        {!shopConfigured && !i.link && <Banner>Chưa cấu hình địa chỉ website (biến SHOP_BASE_URL) nên link chỉ có phần đường dẫn. Hãy ghép với địa chỉ website bán hàng khi gửi.</Banner>}
+        <TextArea label={data.reset ? "Link đặt lại mật khẩu" : "Link đặt mật khẩu"} readOnly rows={3} value={i.link ?? i.path} onFocus={(e) => e.currentTarget.select()} data-testid="portal-link-text" />
+        <div className="row wrap">
+          <Button onClick={() => void copyText(i.link ?? i.path)}>Sao chép link</Button>
+          <Button variant="soft" onClick={() => void copyText(msg)}>Sao chép cả lời nhắn</Button>
+        </div>
+      </div>
+    </Sheet>
+  );
+}

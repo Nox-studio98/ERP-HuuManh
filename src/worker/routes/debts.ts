@@ -640,8 +640,8 @@ debtRoutes.get("/debts/statements/:partnerType/:partnerId", requirePerm("debt.vi
   // Hoàn tiền dư có cho khách (direction='out', partner customer) làm số dư tăng lại → ghi bên phát sinh tăng
   for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: r.direction === "out" && pt === "customer" ? "customer_refund" : "payment", docCode: r.code, debit: r.direction === "out" && pt === "customer" ? r.amount : 0, credit: r.direction === "out" && pt === "customer" ? 0 : r.amount });
   const adjs = (await db.prepare(`SELECT id, code, type, created_at, amount FROM debt_adjustments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
-  // 'return_credit' chỉ chuyển số dư có sang hoá đơn khác (tổng nợ không đổi) → hiển thị nhưng không phát sinh
-  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.type === "return_credit" ? 0 : r.amount });
+  // 'return_credit' của KHÁCH chỉ chuyển số dư có sang hoá đơn khác (tổng nợ không đổi) → hiển thị nhưng không phát sinh; của NCC (trả hàng) là bút toán giảm nợ phải trả
+  for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.type === "return_credit" && pt === "customer" ? 0 : r.amount });
   ev.sort((a, b) => a.date.localeCompare(b.date) || a.ord - b.ord || a.id - b.id);
 
   let opening = 0;

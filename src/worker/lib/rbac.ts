@@ -27,6 +27,8 @@ export const PERMISSIONS = [
   "timesheet.close",
   // M7 giá đối thủ, M2-11 gợi ý đặt hàng, khuyến mãi / tích điểm (Đợt 4)
   "competitors.view", "competitors.write", "purchasing.view", "promotions.write", "promotions.approve", "loyalty.adjust",
+  // Đơn đặt NCC (PO): write = tạo/sửa nháp, chốt đêm, nhận hàng; approve = duyệt/gửi/xử lý đề xuất NCC; approve_high = duyệt PO vượt ngưỡng (chỉ chủ)
+  "purchasing.write", "purchasing.approve", "purchasing.approve_high",
   // Chung
   "reports.view", "customers.view_pii", "users.manage", "audit.view", "approvals.decide",
   // Cài đặt hệ thống: xem (chủ + quản lý), sửa (chỉ chủ)
@@ -47,11 +49,11 @@ export const ROLE_PERMS: Record<Role, ReadonlySet<Permission>> = {
     "b2b.view", "b2b.write", "b2b.approve", "b2b.deliver", "debt.view", "debt.write", "invoices.issue",
     // M9: quản lý xem chấm công, xếp ca, duyệt quên chấm/phép/tăng ca (không xem lương)
     "hr.self", "hr.view", "hr.schedule",
-    "competitors.view", "competitors.write", "purchasing.view", "promotions.write", "promotions.approve", "loyalty.adjust",
+    "competitors.view", "competitors.write", "purchasing.view", "purchasing.write", "purchasing.approve", "promotions.write", "promotions.approve", "loyalty.adjust",
   ]),
   cashier: new Set<Permission>(["pos.sell", "pos.return", "pos.shift", "orders.view", "prices.view_sell", "inventory.view", "finance.shift_reconcile", "hr.self"]),
   // Thủ kho: xem đơn sỉ cần xuất, soạn/giao hàng; xem công nợ (mục 12)
-  warehouse: new Set<Permission>(["inventory.view", "inventory.write", "prices.view_cost", "orders.view", "b2b.view", "b2b.deliver", "debt.view", "hr.self", "purchasing.view"]),
+  warehouse: new Set<Permission>(["inventory.view", "inventory.write", "prices.view_cost", "orders.view", "b2b.view", "b2b.deliver", "debt.view", "hr.self", "purchasing.view", "purchasing.write"]),
   accountant: new Set<Permission>([
     "orders.view", "inventory.view", "prices.view_sell", "prices.view_cost",
     "finance.view", "finance.write", "reports.view", "customers.view_pii",
