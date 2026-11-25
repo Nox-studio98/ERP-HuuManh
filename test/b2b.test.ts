@@ -10,7 +10,7 @@ let seq = 0;
 const uuid = () => `b2b-test-${Date.now()}-${++seq}`;
 
 async function newCustomer(name: string, over: Record<string, unknown> = {}) {
-  const r = await api("manager", "POST", "/api/v1/customers", {
+  const r = await api("owner", "POST", "/api/v1/customers", {
     name, type: "b2b", customerGroupId: 1, creditLimit: 100_000_000, paymentTermsDays: 15,
     contacts: [{ name: "Người nhận", phone: "0900000001", isReceiver: true }],
     addresses: [{ label: "Kho", address: "1 Lê Lợi", isDefault: true }], ...over,

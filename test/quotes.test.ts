@@ -17,7 +17,7 @@ beforeAll(async () => {
     d.prepare(`INSERT INTO lots(id, lot_code, product_id, location_id, received_at, expires_at, unit_cost, qty_in_milli, qty_on_hand_milli) VALUES (830,'LOT-Q830',830,1,?,?,40000,100000,100000)`).bind(new Date().toISOString(), exp),
     d.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by) VALUES (1,830,50000,'2020-01-01T00:00:00Z','active',1)`),
   ]);
-  const c = await api("manager", "POST", "/api/v1/customers", {
+  const c = await api("owner", "POST", "/api/v1/customers", {
     name: "Khách báo giá", type: "b2b", customerGroupId: 1, creditLimit: 100_000_000, paymentTermsDays: 15,
     contacts: [{ name: "A", isReceiver: true }], addresses: [{ label: "Kho", address: "1 Trần Hưng Đạo", isDefault: true }],
   });

@@ -107,7 +107,24 @@ function Sell({ shift }: { shift: any }) {
     return () => document.removeEventListener("keydown", k);
   }, []);
 
-  const subtotal = useMemo(() => lines.reduce((s, l) => s + Math.round(l.qty * unitPrice(l.product, l.unit)) - l.discount, 0), [lines]);
+  // A-22: có khách → lấy giá riêng của khách (bảng giá kind=customer, kênh pos/all) từ máy chủ; không lấy được thì giữ giá hiển thị
+  const [custPrices, setCustPrices] = useState<Record<number, number>>({});
+  const prodKey = lines.map((l) => l.product.id).join(",");
+  useEffect(() => {
+    if (!customer) { setCustPrices({}); return; }
+    let live = true;
+    (async () => {
+      const out: Record<number, number> = {};
+      await Promise.all([...new Set(lines.map((l) => l.product.id))].map(async (id) => {
+        try { const r = await get("/prices/quote", { productId: id, channel: "pos", customerId: customer.id }, { silent: true }); if (typeof r?.unitPrice === "number") out[id] = r.unitPrice; } catch { /* giữ giá hiển thị */ }
+      }));
+      if (live) setCustPrices(out);
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.id, prodKey]);
+  const shown = useMemo(() => lines.map((l) => (custPrices[l.product.id] != null ? { ...l, product: { ...l.product, price: custPrices[l.product.id] } } : l)), [lines, custPrices]);
+  const subtotal = useMemo(() => shown.reduce((s, l) => s + Math.round(l.qty * unitPrice(l.product, l.unit)) - l.discount, 0), [shown]);
   const total = Math.max(0, subtotal - discount);
   totalRef.current = total;
   const count = lines.length;
@@ -139,6 +156,9 @@ function Sell({ shift }: { shift: any }) {
     ...(customer ? { customerId: customer.id } : {}),
     ...(discount ? { discount } : {}),
     ...(note ? { note } : {}),
+    // A-09: ca đang bán và giá khách đã thấy — để đơn lập offline đồng bộ lại đúng ca / đúng giá
+    shiftId: shift.id,
+    priceSnapshot: [...new Map(shown.map((l) => [l.product.id, { productId: l.product.id, unitPrice: priceOf(l.product) }])).values()].filter((x) => x.unitPrice > 0),
   });
 
   return (
@@ -167,7 +187,7 @@ function Sell({ shift }: { shift: any }) {
           {!count ? <EmptyState title="Giỏ hàng trống" hint="Chọn sản phẩm hoặc quét mã để thêm." /> : (
             <>
               <div>
-                {lines.map((l) => {
+                {shown.map((l) => {
                   const up = unitPrice(l.product, l.unit);
                   const opts = [l.product.baseUnit, ...(l.product.units ?? []).map((u) => u.unit).filter((u) => u !== l.product.baseUnit)];
                   return (
@@ -297,6 +317,8 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
   const [busy, setBusy] = useState(false);
   const [approval, setApproval] = useState<{ id: number; message: string } | null>(null);
   const [stockErr, setStockErr] = useState("");
+  const [needReason, setNeedReason] = useState(false); // A-29: người tự duyệt phải ghi lý do
+  const [overrideReason, setOverrideReason] = useState("");
   // Đợt 4: khuyến mãi tự động, voucher, đổi điểm — engine tính ở máy chủ (xem trước), đơn thật tính lại trong cùng giao dịch
   const [voucherIn, setVoucherIn] = useState("");
   const [voucher, setVoucher] = useState("");
@@ -344,14 +366,16 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
 
   const submit = async () => {
     setBusy(true); setStockErr(""); setPromoErr("");
-    const payload = { ...payloadBase(), ...(voucherApplied ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount })) };
+    const soldAt = new Date().toISOString(); // A-09: thời điểm bán gốc (dùng khi đơn phải xếp hàng offline)
+    const payload = { ...payloadBase(), ...(overrideReason.trim().length >= 3 ? { overrideReason: overrideReason.trim() } : {}), ...(voucherApplied ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount })) };
     try {
       const order = await post("/pos/orders", payload, { silent: true });
       toast("Thanh toán thành công", "ok");
       onDone(order, order.change ?? change);
     } catch (e) {
       if (e instanceof ApiError) {
-        if (e.code === "network") { await enqueue(payload); onQueued(); }
+        if (e.code === "network") { await enqueue({ ...payload, soldAt }); onQueued(); }
+        else if (e.code === "override_reason_required") { setNeedReason(true); toast("Cần nhập lý do trước khi tự duyệt đơn này", "error"); }
         else if (e.code === "approval_required") setApproval({ id: e.details?.approvalId, message: e.message });
         else if (e.code === "insufficient_stock") setStockErr(`${e.message}${e.details?.productName ? " — " + e.details.productName : ""}`);
         else if (e.code === "voucher_exhausted") { setPromoErr("Voucher đã hết lượt sử dụng — đã bỏ voucher khỏi đơn."); setVoucher(""); setVoucherIn(""); }
@@ -398,6 +422,12 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
           <div className="banner" role="alert">
             <b>Cần quản lý duyệt</b>
             <div className="small">{approval.message} Mã yêu cầu duyệt: <b>#{approval.id ?? "?"}</b>. Báo quản lý duyệt trong mục “Duyệt”, sau đó bấm <b>Thử lại</b>.</div>
+          </div>
+        )}
+        {needReason && (
+          <div className="banner" role="alert">
+            <div className="small"><b>Đơn bán dưới giá vốn hoặc giảm giá vượt ngưỡng.</b> Bạn có quyền tự duyệt nhưng phải ghi lý do (lưu vào nhật ký).</div>
+            <TextArea label="Lý do (bắt buộc)" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
           </div>
         )}
         {stockErr && <Banner tone="danger">{stockErr}. Hãy giảm số lượng hoặc bỏ mặt hàng.</Banner>}

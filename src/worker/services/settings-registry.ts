@@ -43,6 +43,8 @@ export const SETTING_DEFS: SettingDef[] = [
   // ===== Bán hàng & giá =====
   { key: "costing.method", group: "Bán hàng & giá", label: "Phương pháp tính giá vốn", help: "Theo lô nhập (lot) hoặc bình quân gia quyền (average).", type: "enum", options: o(["lot", "Theo lô nhập"], ["average", "Bình quân"]) },
   { key: "pos.allow_offline", group: "Bán hàng & giá", label: "Cho phép bán hàng khi mất mạng", help: "Bật: thu ngân vẫn lập đơn offline và đồng bộ lại sau.", type: "bool" },
+  { key: "pos.offline_max_age_hours", group: "Bán hàng & giá", label: "Đơn bán offline đồng bộ chậm tối đa", help: "Đơn lập khi mất mạng được ghi theo giờ bán gốc; đồng bộ chậm quá số giờ này thì bị từ chối để quản lý xử lý.", type: "int", unit: "giờ", min: 1, max: 720 },
+  { key: "pos.offline_price_tolerance_bp", group: "Bán hàng & giá", label: "Ngưỡng chấp nhận giá đã hiển thị khi offline", help: "Đơn offline giữ giá khách đã thấy nếu lệch bảng giá tại lúc bán không quá mức % này; vượt thì từ chối đồng bộ.", type: "bp", min: 0, max: 10000 },
   { key: "quote.valid_days", group: "Bán hàng & giá", label: "Hiệu lực báo giá sỉ", help: "Số ngày báo giá còn hiệu lực kể từ ngày lập.", type: "int", unit: "ngày", min: 1, max: 365 },
   { key: "invoice.vat_rate_bp", group: "Bán hàng & giá", label: "Thuế suất GTGT mặc định", help: "Hộ kinh doanh thường để 0%.", type: "bp", min: 0, max: 3000 },
   { key: "recurring.auto_generate", group: "Bán hàng & giá", label: "Tự sinh đơn sỉ lặp lại", help: "Bật: hệ thống tự tạo đơn sỉ định kỳ cho ngày mai lúc 08:00.", type: "bool" },
@@ -52,6 +54,8 @@ export const SETTING_DEFS: SettingDef[] = [
   // ===== Công nợ =====
   { key: "debt.aging_buckets", group: "Công nợ", label: "Mốc tuổi nợ", help: "Các mốc ngày, cách nhau dấu phẩy và tăng dần. Ví dụ 30,60,90.", type: "intlist", min: 1, max: 3650 },
   { key: "debt.allocation", group: "Công nợ", label: "Cách gạch nợ khi khách trả tiền", help: "Hiện hệ thống gạch hoá đơn cũ nhất trước.", type: "enum", options: o(["oldest_first", "Hoá đơn cũ nhất trước"]) },
+  { key: "b2b.new_credit_limit_max_vnd", group: "Công nợ", label: "Hạn mức nợ quản lý được tự đặt cho khách sỉ", help: "Quản lý đặt hạn mức cao hơn mức này (khi tạo khách hoặc nâng hạn mức) phải chờ chủ duyệt. Chủ không bị giới hạn.", type: "vnd", min: 0, max: 10_000_000_000 },
+  { key: "b2b.new_payment_terms_max_days", group: "Công nợ", label: "Hạn thanh toán quản lý được tự đặt cho khách sỉ", help: "Quản lý đặt hạn thanh toán dài hơn mức này phải chờ chủ duyệt.", type: "int", unit: "ngày", min: 0, max: 365 },
   { key: "remind.days_before_due", group: "Công nợ", label: "Nhắc nợ trước hạn", help: "Nhắc khách sỉ trước ngày đến hạn bao nhiêu ngày.", type: "int", unit: "ngày", min: 0, max: 60 },
   { key: "einvoice.provider", group: "Công nợ", label: "Nhà cung cấp hoá đơn điện tử", help: "fake = chạy thử; misa chỉ chọn được khi đã cấu hình kết nối MISA (secrets). Có thể đổi thêm ở màn Tích hợp.", type: "enum", options: o(["fake", "Chạy thử (fake)"], ["misa", "MISA"]) },
   { key: "einvoice.auto_issue_b2b", group: "Công nợ", label: "Tự phát hành hoá đơn điện tử khi xuất hoá đơn sỉ", help: "Bật: phát hành HĐĐT tự động cho hoá đơn B2B.", type: "bool" },

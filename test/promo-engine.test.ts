@@ -165,7 +165,7 @@ describe("engine khuyến mãi", () => {
   it("voucher: đơn dưới mức tối thiểu của KM bị từ chối kèm lý do", async () => {
     const id = await promo({ kind: "amount", amount: 20000, voucher: true, min: 500000 });
     await voucher(id, { code: "MINV" });
-    const r = await ev([tao(1)], { voucherCode: "MINV" });
+    const r = await ev([tao(1)], { voucherCode: "MINV", customerId: 1 });
     expect(r.total).toBe(0);
     expect(r.rejected).toEqual([{ code: "MINV", reason: "min_order" }]);
   });
@@ -188,7 +188,7 @@ describe("engine khuyến mãi", () => {
     await promo({ kind: "percent", bp: 2000 });
     const id = await promo({ kind: "amount", amount: 5000, voucher: true });
     await voucher(id, { code: "SMALL" });
-    const r = await ev([nho(1)], { voucherCode: "SMALL" });
+    const r = await ev([nho(1)], { voucherCode: "SMALL", customerId: 1 });
     expect(r.total).toBe(40000);
     expect(r.discounts.every((d) => d.voucherId == null)).toBe(true);
     expect(r.rejected).toEqual([{ code: "SMALL", reason: "not_best_promotion" }]);
