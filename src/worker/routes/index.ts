@@ -26,6 +26,7 @@ import { purchaseReturnRoutes } from "./purchase-returns";
 import { promotionRoutes } from "./promotions";
 import { financeExtraRoutes } from "./finance-extra";
 import { dashboardRoutes } from "./dashboard";
+import { sepayRoutes } from "./sepay";
 
 /**
  * Đăng ký route các module. Mỗi file export một Hono<AppBindings> mount tại gốc /api/v1
@@ -56,4 +57,5 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", promotionRoutes);
   v1.route("/", financeExtraRoutes);
   v1.route("/", dashboardRoutes);
+  v1.route("/", sepayRoutes);
 }

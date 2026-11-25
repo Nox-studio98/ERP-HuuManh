@@ -8,7 +8,7 @@ import { lineAmount, toMilli } from "../lib/money";
 import { vnDate } from "../lib/time";
 import { allocateFefo, allocationCost, availableQty, moveStatements, type LotAllocation } from "./stock";
 import { resolvePrice } from "./pricing";
-import { nextCode } from "../lib/codes";
+import { nextCode, nextOnlineCode } from "../lib/codes";
 import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveStmts } from "./reservations";
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
@@ -777,7 +777,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     if ((await slotUsed(db, b.slotDate, b.slotId)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   }
   const total = subtotal + shippingFee;
-  const code = await nextCode(db, "DH");
+  const code = await nextOnlineCode(db);
   const token = newTrackingToken();
   const status: OnlineStatus = b.paymentMethod === "transfer" ? "awaiting_payment" : "new";
   const address = [b.addressLine, b.ward, b.district, b.province].filter(Boolean).join(", ");
@@ -825,7 +825,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
         stmts.push(
           db
             .prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, expires_at) VALUES (?, 'vietqr', ?, ?, ?)`)
-            .bind(orderId, total, `HM ${code.replaceAll("-", "")}`, new Date(Date.now() + hold * 60_000).toISOString()),
+            .bind(orderId, total, code, new Date(Date.now() + hold * 60_000).toISOString()),
         );
       }
       stmts.push(

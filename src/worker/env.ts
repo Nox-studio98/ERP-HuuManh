@@ -13,6 +13,9 @@ export interface Env {
   MISA_PASSWORD?: string;
   MISA_BASE_URL?: string; // var: URL API MISA (theo tài liệu MISA cấp cho cửa hàng)
   FRESCO_WEBHOOK_SECRET?: string; // HMAC xác thực webhook sàn Fresco
+  // SePay (xác nhận chuyển khoản): secret đặt bằng `wrangler secret put`
+  SEPAY_WEBHOOK_SECRET?: string; // HMAC-SHA256 xác thực webhook SePay; rỗng = từ chối mọi request
+  SEPAY_API_KEY?: string; // API key SePay v2 (đối soát cron); rỗng = không đối soát
   // Đợt 3: thông báo cho khách / nhân viên
   EMAIL?: SendEmail; // binding send_email (Cloudflare Email Service) khi notify.email_provider = cloudflare
   VAPID_PUBLIC_KEY?: string; // var: khoá công khai P-256 dạng raw base64url (65 byte)

@@ -50,7 +50,7 @@ export function TransferPanel({ t, code }: { t: Transfer; code: string }) {
           <div><dt>Nội dung</dt><dd><strong className="mono" data-testid="tr-content">{t.content}</strong><CopyButton text={t.content} what="nội dung chuyển khoản" /></dd></div>
         </dl>
       </div>
-      <p className="hint">Vui lòng nhập đúng nội dung chuyển khoản để đơn được xác nhận nhanh nhất.</p>
+      <p className="hint">Giữ nguyên nội dung chuyển khoản <strong>{t.content}</strong> và chuyển <strong>đúng số tiền</strong>: đơn được xác nhận tự động trong vài giây. Chuyển sai số tiền thì cửa hàng phải xử lý thủ công.</p>
     </section>
   );
 }
@@ -169,6 +169,7 @@ export function OrderPanel({ o, token, phone4, onChange, placed, me: meMode, onC
       {!!o.returnedTotal && <Notice kind="ok">Cửa hàng đã ghi nhận trả hàng {money(o.returnedTotal)} cho đơn này.</Notice>}
 
       {showTransfer && <TransferPanel t={o.transfer!} code={o.code} />}
+      {!showTransfer && o.paymentMethod === "transfer" && o.paymentStatus === "paid" && o.status !== "cancelled" && <Notice kind="ok"><span data-testid="paid-notice">Cửa hàng đã nhận được tiền chuyển khoản của bạn. Cảm ơn bạn!</span></Notice>}
       {placed && <PushOptIn />}
 
       <div className="order-cols">
@@ -251,7 +252,8 @@ export function TrackPage({ token }: { token: string }) {
   // cập nhật định kỳ khi đơn còn đang xử lý
   useEffect(() => {
     if (!o || !phone4 || FINAL.includes(o.status)) return;
-    const t = setInterval(() => { if (!document.hidden) void load(phone4, true); }, 20000);
+    // đang chờ chuyển khoản: hỏi nhanh hơn (4 giây) để báo "đã nhận tiền" ngay khi SePay xác nhận
+    const t = setInterval(() => { if (!document.hidden) void load(phone4, true); }, o.status === "awaiting_payment" && o.transfer ? 4000 : 20000);
     return () => clearInterval(t);
   }, [o, phone4, load]);
 

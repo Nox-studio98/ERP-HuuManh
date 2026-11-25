@@ -7,6 +7,7 @@ import { toast } from "../components/toast";
 import { METHODS, fmtDate, fmtDateTime, fmtTime, money, qtyText, unitLabel, uuid, withShown } from "../format";
 import { enqueue, useQueue, syncQueue } from "../offline";
 import { navigate } from "../router";
+import { QrImage } from "../components/QrImage";
 import { useAuth, useCan } from "../store";
 import { reasonText } from "./d4/voucher-text";
 
@@ -266,7 +267,58 @@ function WeightSheet({ p, unit, onAdd, onClose }: { p: Product; unit: string; on
   );
 }
 
-type Pay = { method: string; amount: number };
+type QrState = { id: number; code: string; payload: string; amount: number; status: "pending" | "paid" | "expired" | "cancelled" | "used"; expiresAt: string };
+type Pay = { method: string; amount: number; qr?: QrState };
+
+/** QR tại quầy (SePay): tạo mã theo đơn, hỏi backend ~3 giây/lần (không gọi SePay), báo đã nhận tiền. */
+function QrLine({ amount, qr, onChange }: { amount: number; qr?: QrState; onChange: (q: QrState | undefined) => void }) {
+  const [busy, setBusy] = useState(false);
+  const stale = !!qr && qr.amount !== amount;
+  const cur = useRef(qr); cur.current = qr;
+  useEffect(() => {
+    if (!qr || qr.status !== "pending") return;
+    let live = true;
+    const tick = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await get(`/pos/qr-requests/${qr.id}`, undefined, { silent: true });
+        if (live && cur.current?.id === qr.id && r.status !== cur.current.status) { onChange({ ...cur.current, status: r.status }); if (r.status === "paid") toast(`Đã nhận ${money(r.amount)} qua QR`, "ok"); }
+      } catch { /* mất mạng: thử lại lần sau */ }
+    };
+    const t = setInterval(tick, 3000);
+    return () => { live = false; clearInterval(t); };
+  }, [qr?.id, qr?.status]); // eslint-disable-line
+  const create = async () => {
+    setBusy(true);
+    try {
+      const r = await post("/pos/qr-requests", { amount });
+      onChange({ id: r.id, code: r.code, payload: r.qrPayload, amount: r.amount, status: "pending", expiresAt: r.expiresAt });
+    } catch { /* api đã báo lỗi */ } finally { setBusy(false); }
+  };
+  if (!qr || stale || qr.status === "expired" || qr.status === "cancelled")
+    return (
+      <div className="stack" style={{ marginTop: 8 }} data-testid="pos-qr-start">
+        {stale && <div className="hint">Số tiền đã đổi — cần tạo lại mã QR.</div>}
+        {qr && !stale && <div className="hint err">Mã QR đã hết hạn.</div>}
+        <Button variant="soft" block loading={busy} disabled={amount <= 0} onClick={create}>{qr ? "Tạo mã QR mới" : "Hiện mã VietQR"}</Button>
+      </div>
+    );
+  if (qr.status === "paid" || qr.status === "used")
+    return (
+      <div className="qr-wait paid" role="status" data-testid="pos-qr-paid" style={{ marginTop: 8 }}>
+        <b>Đã nhận {money(qr.amount)}</b>
+        <span className="small muted">Mã {qr.code} · bấm “Hoàn tất” để lập đơn</span>
+      </div>
+    );
+  return (
+    <div className="qr-wait" style={{ marginTop: 8 }} data-testid="pos-qr-wait">
+      <QrImage value={qr.payload} size={200} label={`Mã VietQR ${money(qr.amount)}`} />
+      <b className="num" data-testid="pos-qr-code">{qr.code}</b>
+      <span className="small muted">Khách quét mã và giữ nguyên nội dung · đang chờ tiền về…</span>
+      <Button size="sm" variant="ghost" onClick={() => { void post(`/pos/qr-requests/${qr.id}/cancel`, {}, { silent: true }).catch(() => {}); onChange(undefined); }}>Huỷ mã</Button>
+    </div>
+  );
+}
 type Preview = { discounts: { promotionId: number; voucherId: number | null; amount: number; description: string }[]; discount: number; pointsRedeemed: number; pointsAmount: number; rejected: { code: string; reason: string }[] };
 
 function CustomerSheet({ onClose, onPick }: { onClose: () => void; onPick: (c: Cust) => void }) {
@@ -299,7 +351,7 @@ function QuickCustomer({ seed, onCreated }: { seed: string; onCreated: (c: Cust)
   const [busy, setBusy] = useState(false);
   if (!open) return <Button variant="ghost" onClick={() => { setOpen(true); if (isPhone) setPhone(seed.trim()); else setName(seed.trim()); }}>+ Khách mới</Button>;
   return (
-    <div className="stack" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+    <div className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
       <Input label="Tên khách" value={name} onChange={(e) => setName(e.target.value)} />
       <Input label="Số điện thoại" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
       <Button disabled={busy || !name.trim()} onClick={async () => {
@@ -351,6 +403,8 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
   const promoOnly = (prev?.discounts ?? []).filter((d) => d.voucherId == null);
   const total = serverTotal ?? Math.max(0, localTotal - (prev?.discount ?? 0));
 
+  const sepay = useAsync(() => get("/pos/sepay-config", undefined, { silent: true }).catch(() => null), []);
+  const sepayPos = !!(sepay.data?.enabled && sepay.data?.flow?.pos) && navigator.onLine;
   const [pays, setPays] = useState<Pay[]>([{ method: "cash", amount: total }]);
   const [active, setActive] = useState(0);
   useEffect(() => { setPays((ps) => (ps.length === 1 ? [{ ...ps[0], amount: total }] : ps)); }, [total]);
@@ -358,7 +412,8 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
   const cash = pays.filter((p) => p.method === "cash").reduce((s, p) => s + p.amount, 0);
   const over = paid - total, remaining = total - paid;
   const change = over > 0 ? over : 0;
-  const valid = paid >= total && (over === 0 || cash >= over) && pays.every((p) => p.amount > 0);
+  const qrPending = sepayPos && pays.some((p) => p.method === "qr" && !(p.qr && p.qr.status === "paid" && p.qr.amount === p.amount));
+  const valid = paid >= total && (over === 0 || cash >= over) && pays.every((p) => p.amount > 0) && !qrPending;
   const setAmt = (i: number, n: number) => setPays((ps) => ps.map((p, j) => (j === i ? { ...p, amount: n } : p)));
   const quick = Array.from(new Set([total, ...[50000, 100000, 200000, 500000].map((s) => Math.ceil(total / s) * s)])).filter((v) => v >= total).slice(0, 4);
   const pointVal = loy.data?.pointValueVnd ?? 0;
@@ -367,7 +422,7 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
   const submit = async () => {
     setBusy(true); setStockErr(""); setPromoErr("");
     const soldAt = new Date().toISOString(); // A-09: thời điểm bán gốc (dùng khi đơn phải xếp hàng offline)
-    const payload = { ...payloadBase(), ...(overrideReason.trim().length >= 3 ? { overrideReason: overrideReason.trim() } : {}), ...(voucherApplied ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount })) };
+    const payload = { ...payloadBase(), ...(overrideReason.trim().length >= 3 ? { overrideReason: overrideReason.trim() } : {}), ...(voucherApplied ? { voucherCode: voucher } : {}), ...(redeem > 0 ? { redeemPoints: redeem } : {}), ...(approval ? { approvalId: approval.id } : {}), ...(noteValue ? { note: noteValue } : {}), payments: pays.map((p) => ({ method: p.method, amount: p.amount, ...(sepayPos && p.method === "qr" && p.qr ? { qrRequestId: p.qr.id } : {}) })) };
     try {
       const order = await post("/pos/orders", payload, { silent: true });
       toast("Thanh toán thành công", "ok");
@@ -442,6 +497,7 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
               {pays.length > 1 && <Button size="sm" variant="ghost" aria-label="Bỏ dòng thanh toán" onClick={() => { setPays((ps) => ps.filter((_, j) => j !== i)); setActive(0); }}>✕</Button>}
             </div>
             <div style={{ marginTop: 8 }}><MoneyInput label={`Số tiền (${METHODS[p.method]})`} value={p.amount} onChange={(n) => setAmt(i, n)} /></div>
+            {p.method === "qr" && sepayPos && <QrLine amount={p.amount} qr={p.qr} onChange={(q) => setPays((ps) => ps.map((x, j) => (j === i ? { ...x, qr: q } : x)))} />}
             {active === i && p.method === "cash" && (
               <div className="stack" style={{ marginTop: 8 }}>
                 <div className="chips">{quick.map((v) => <button key={v} className="chip" onClick={() => setAmt(i, v)}>{money(v)}</button>)}</div>
@@ -456,6 +512,7 @@ function CheckoutSheet({ total: localTotal, payloadBase, customer, onClose, onDo
           {remaining > 0 && <div style={{ color: "var(--danger)" }}><span>Còn thiếu</span><span className="money">{money(remaining)}</span></div>}
           {over > 0 && <div style={{ color: valid ? "var(--accent)" : "var(--danger)", fontWeight: 700 }}><span>Tiền thừa trả khách</span><span className="money">{money(over)}</span></div>}
           {over > 0 && cash < over && <div className="err">Chỉ tiền mặt mới được thừa.</div>}
+          {qrPending && <div className="err" data-testid="pos-qr-needed">Chờ báo “Đã nhận tiền” của mã QR trước khi hoàn tất.</div>}
         </div>
         <TextArea label="Ghi chú đơn (không bắt buộc)" value={noteValue} onChange={(e) => onNote(e.target.value)} />
       </div>

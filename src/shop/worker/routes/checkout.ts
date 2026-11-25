@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { AppError, conflict } from "../../../worker/lib/errors";
-import { nextCode } from "../../../worker/lib/codes";
+import { nextCode, nextOnlineCode } from "../../../worker/lib/codes";
 import { newTrackingToken } from "../../../worker/services/online-orders";
 import { planReservations, type ReservationPlan } from "../../../worker/services/reservations";
 import { kickJobs } from "../../../worker/services/outbox";
@@ -157,7 +157,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const autoConfirm = (await setting(db, "online.auto_confirm", "0")) === "1";
   const storeId = await onlineStoreId(db);
 
-  const code = await nextCode(db, "DH");
+  const code = await nextOnlineCode(db);
   // A-24: khách vãng lai — dùng lại hồ sơ khách bán lẻ cùng SĐT (lịch sử/điểm không bị tách), chỉ tạo mới khi chưa có
   const phoneForms = [phone, "+84" + phone.slice(1), "84" + phone.slice(1)];
   const knownGuestId = account
@@ -257,7 +257,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
       stmts.push(
         db
           .prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, provider_ref, expires_at) VALUES (${ORD}, ?2, ?3, ?4, ?5, ?6)`)
-          .bind(code, b.paymentMethod === "transfer" ? "vietqr" : "fake_gateway", finalTotal, `HM ${code.replaceAll("-", "")}`, b.paymentMethod === "gateway" ? code : null, expires),
+          .bind(code, b.paymentMethod === "transfer" ? "vietqr" : "fake_gateway", finalTotal, code, b.paymentMethod === "gateway" ? code : null, expires),
       );
     }
     stmts.push(

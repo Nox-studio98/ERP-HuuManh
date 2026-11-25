@@ -52,7 +52,7 @@ async function mk(o: Mk) {
   }
   if (o.intent) {
     await d.prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, expires_at) VALUES (?, 'vietqr', ?, ?, ?)`)
-      .bind(oid, subtotal + shipping, `HM ${code.replaceAll("-", "")}`, future(0.01)).run();
+      .bind(oid, subtotal + shipping, code, future(0.01)).run();
   }
   return { id: oid, code, lineIds: ids, total: subtotal + shipping };
 }
@@ -341,8 +341,8 @@ describe("khớp sao kê tự động", () => {
     const wrong = await mk({ status: "awaiting_payment", method: "transfer", lines: [{ pid: 618, qty: 1 }], intent: true });
     const csv = [
       "date,amount,description,ref",
-      `2026-11-23,${o.total},CK HM ${o.code.replaceAll("-", "")} thanh toan,BANK-ORD-1`,
-      `2026-11-23,${wrong.total - 1000},HM ${wrong.code.replaceAll("-", "")},BANK-ORD-2`,
+      `2026-11-23,${o.total},CK ${o.code} thanh toan,BANK-ORD-1`,
+      `2026-11-23,${wrong.total - 1000},${wrong.code},BANK-ORD-2`,
     ].join("\n");
     const r = await api("owner", "POST", "/api/v1/bank-transactions/import", { fundId: 2, csv });
     expect(r.status).toBe(201);
@@ -367,7 +367,7 @@ describe("đơn mạng xã hội + đặt trước", () => {
     const r = await api("online_staff", "POST", "/api/v1/online-orders", { ...base, clientUuid: uuid, items: [{ productId: 619, unit: "kg", qty: 2 }], paymentMethod: "transfer", slotDate: vnDate(), slotId: 2 });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ channel: "social", status: "awaiting_payment", paymentMethod: "transfer", subtotal: 200000, shippingFee: 15000, total: 215000, zone: { id: 1 } });
-    expect(r.body.code).toMatch(/^DH-/);
+    expect(r.body.code).toMatch(/^DH\d{12}$/);
     expect(r.body.paymentIntents[0]).toMatchObject({ provider: "vietqr", amount: 215000, status: "pending" });
     expect(r.body.lines[0]).toMatchObject({ unitPrice: 100000, orderedQtyMilli: 2000 });
     expect(await lot(619)).toEqual({ h: 10000, r: 2000 });

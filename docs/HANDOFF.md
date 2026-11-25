@@ -89,7 +89,7 @@ Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạ
 |---|---|
 | MISA meInvoice | Đã có adapter nhưng **endpoint và tên trường là giả định**, mới test bằng mock. Cần tài liệu API MISA cấp cho cửa hàng. Đang dùng provider `fake` (số `TEST-…`). |
 | Fresco | Định dạng webhook/CSV là giả định (`src/worker/services/fresco.ts`), mặc định tắt. |
-| Cổng thanh toán online | Mới có khung + cổng giả để test; chờ chọn cổng. |
+| Thanh toán chuyển khoản (SePay) | **Đã tích hợp SePay Webhooks** (không làm cổng thẻ): đơn website, thu nợ sỉ, QR POS; danh sách chưa khớp / chờ hoàn; đối soát cron. Mới thử bằng test + mock, **chưa chạy với SePay thật**: cần chủ cửa hàng tạo cấu trúc mã, webhook, secret và chuyển thử (xem `docs/SEPAY.md`). Cổng giả `fake_gateway` vẫn còn cho dev/demo. Cổng thẻ/NAPAS: chưa làm. |
 | Email thật | Cần bật Cloudflare Email Service + binding `EMAIL`; hiện ghi log (`fake`). |
 | Duyệt báo giá giảm sâu | Luồng có nhưng hiện không ai phải qua (quản lý có sẵn quyền duyệt); cần vai trò "nhân viên kinh doanh" nếu cửa hàng muốn. |
 | Push / email / đặt sỉ trên web | Có code + unit test, **chưa E2E** (thiếu khoá VAPID, tài khoản sỉ đã duyệt). |

@@ -274,7 +274,7 @@ try {
   await page.waitForURL(/\/track\/[^?]+\?placed=1/);
   const token1 = page.url().match(/\/track\/([^?]+)/)[1];
   const code1 = (await page.locator("[data-testid=order-code]").textContent()).trim();
-  assert(/^DH-/.test(code1), `đặt hàng thành công, mã ${code1}`);
+  assert(/^DH\d{12}$/.test(code1), `đặt hàng thành công, mã ${code1}`);
   assert(/Chờ|mới|Đã nhận|Đặt hàng/i.test(await page.locator("[data-testid=order-status]").textContent()), "trạng thái đơn hiển thị");
   const cartAfter = await page.evaluate(() => localStorage.getItem("hm_shop_cart_v1"));
   assert(cartAfter === "[]", "giỏ hàng được xoá sau khi đặt");
@@ -332,7 +332,7 @@ try {
   const token2 = page.url().match(/\/track\/([^?]+)/)[1];
   await page.locator("[data-testid=qr]").waitFor();
   const content = (await page.locator("[data-testid=tr-content]").textContent()).trim();
-  assert(/^HM DH/.test(content), `nội dung chuyển khoản “${content}”`);
+  assert(/^DH\d{12}$/.test(content), `nội dung chuyển khoản “${content}”`);
   const vb = (await page.locator("[data-testid=qr]").getAttribute("viewBox")).split(" ").map(Number)[2];
   const view2 = (await shopApi(`/orders/track/${token2}?phone4=${phone2.slice(-4)}`)).body;
   const q = qrcode(0, "M"); q.addData(view2.transfer.qrPayload); q.make();
