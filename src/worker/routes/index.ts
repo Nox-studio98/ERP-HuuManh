@@ -22,6 +22,7 @@ import { hrRoutes } from "./hr";
 import { payrollRoutes } from "./payroll";
 import { competitorRoutes } from "./competitors";
 import { purchasingRoutes } from "./purchasing";
+import { purchaseReturnRoutes } from "./purchase-returns";
 import { promotionRoutes } from "./promotions";
 import { financeExtraRoutes } from "./finance-extra";
 import { dashboardRoutes } from "./dashboard";
@@ -51,6 +52,7 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", exportRoutes);
   v1.route("/", competitorRoutes);
   v1.route("/", purchasingRoutes);
+  v1.route("/", purchaseReturnRoutes);
   v1.route("/", promotionRoutes);
   v1.route("/", financeExtraRoutes);
   v1.route("/", dashboardRoutes);

@@ -452,7 +452,8 @@ competitorRoutes.post("/product-matches", write, async (c) => {
 // ================================================================= So sánh giá (M7-05)
 const FRESH_DAYS = 7;
 
-async function comparison(db: D1Database, opts: { groupId?: number; productId?: number } = {}) {
+async function comparison(db: D1Database, opts: { groupId?: number; productId?: number; includeOutOfStock?: boolean } = {}) {
+  const includeOutOfStock = opts.includeOutOfStock ?? false;
   const since = new Date(Date.now() - FRESH_DAYS * 86400_000).toISOString();
   const where = ["m.status = 'approved'", "p.active = 1", "co.active = 1"];
   const binds: unknown[] = [since];
@@ -484,12 +485,15 @@ async function comparison(db: D1Database, opts: { groupId?: number; productId?: 
   const items: any[] = [];
   for (const it of byProduct.values()) {
     const ours = await resolvePrice(db, it.productId, { channel: "pos" }).then((r) => r.unitPrice, () => null);
-    const prices: number[] = it.rows.map((r: any) => r.unit_price);
-    const min = Math.min(...prices);
-    const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
-    const diff = (x: number) => (ours == null ? null : Math.round(((ours - x) * 10000) / x)); // dương = ta đắt hơn thị trường
+    // B-15 / EC-36: quan sát "hết hàng" (in_stock = 0) vẫn hiện trong danh sách nhưng KHÔNG tính vào min/avg thị trường và gợi ý giá (giá cũ không còn mua được)
+    const prices: number[] = it.rows.filter((r: any) => r.in_stock !== 0).map((r: any) => r.unit_price);
+    if (!prices.length && !includeOutOfStock) continue;
+    const min = prices.length ? Math.min(...prices) : null;
+    const avg = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : null;
+    const diff = (x: number | null) => (ours == null || x == null ? null : Math.round(((ours - x) * 10000) / x)); // dương = ta đắt hơn thị trường
     items.push({
       productId: it.productId, name: it.name, baseUnit: it.baseUnit, ourPrice: ours, marketMin: min, marketAvg: avg,
+      inStockCount: prices.length, outOfStockCount: it.rows.length - prices.length,
       diffMinBp: diff(min), diffAvgBp: diff(avg),
       latestObservedAt: it.rows.reduce((a: string, r: any) => (r.observed_at > a ? r.observed_at : a), ""),
       competitors: it.rows.map((r: any) => ({
@@ -503,8 +507,9 @@ async function comparison(db: D1Database, opts: { groupId?: number; productId?: 
 
 competitorRoutes.get("/price-comparison", view, async (c) => {
   const groupId = Number(c.req.query("groupId")) || undefined;
-  let items = await comparison(c.env.DB, { groupId });
-  if (c.req.query("onlyCheaper") === "1") items = items.filter((i) => i.ourPrice != null && i.marketMin < i.ourPrice);
+  // Bảng so sánh vẫn hiện mặt hàng mà mọi đối thủ đều hết hàng (marketMin = null) để người xem biết; gợi ý giá thì bỏ qua
+  let items = await comparison(c.env.DB, { groupId, includeOutOfStock: true });
+  if (c.req.query("onlyCheaper") === "1") items = items.filter((i) => i.ourPrice != null && i.marketMin != null && i.marketMin < i.ourPrice);
   return c.json({ items, nextCursor: null });
 });
 

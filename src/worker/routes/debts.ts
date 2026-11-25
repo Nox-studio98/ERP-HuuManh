@@ -571,7 +571,7 @@ debtRoutes.post("/debts/opening-balances", requirePerm("debt.write"), async (c) 
       if (!cu) { errors.push({ row: i + 1, message: `Không tìm thấy khách ${r.partnerCode}` }); continue; }
       stmts.push(
         db
-          .prepare(`INSERT INTO invoices(code, kind, customer_id, issue_date, due_date, subtotal, total, einvoice_status, note, buyer_name, created_by) VALUES (?, 'sale', ?, ?, ?, ?, ?, 'not_required', 'Số dư đầu kỳ', ?, ?)`)
+          .prepare(`INSERT INTO invoices(code, kind, customer_id, issue_date, due_date, subtotal, total, einvoice_status, note, buyer_name, created_by, is_opening) VALUES (?, 'sale', ?, ?, ?, ?, ?, 'not_required', 'Số dư đầu kỳ', ?, ?, 1)`)
           .bind(await nextCode(db, "HDB"), cu.id, issue, r.dueDate, r.amount, r.amount, cu.name, user.id),
       );
     } else {
@@ -579,7 +579,7 @@ debtRoutes.post("/debts/opening-balances", requirePerm("debt.write"), async (c) 
       if (!su) { errors.push({ row: i + 1, message: `Không tìm thấy NCC ${r.partnerCode}` }); continue; }
       stmts.push(
         db
-          .prepare(`INSERT INTO supplier_bills(code, supplier_id, issue_date, due_date, total, note, created_by) VALUES (?,?,?,?,?, 'Số dư đầu kỳ', ?)`)
+          .prepare(`INSERT INTO supplier_bills(code, supplier_id, issue_date, due_date, total, note, created_by, is_opening) VALUES (?,?,?,?,?, 'Số dư đầu kỳ', ?, 1)`)
           .bind(await nextCode(db, "CNP"), su.id, issue, r.dueDate, r.amount, user.id),
       );
     }

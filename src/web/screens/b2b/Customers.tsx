@@ -102,6 +102,8 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
   const [contacts, setContacts] = useState<ContactF[]>([{ name: "", phone: "", role: "", isReceiver: true }]);
   const [addrs, setAddrs] = useState<AddrF[]>([{ label: "Cửa hàng", address: "", receiver: 0, isDefault: true }]);
   const [busy, setBusy] = useState(false), [err, setErr] = useState("");
+  const [creditReason, setCreditReason] = useState(""); // A-10: lý do đổi hạn mức / hạn thanh toán (bắt buộc khi đổi hoặc vượt ngưỡng)
+  const creditChanged = edit && (f.creditLimit !== customer.creditLimit || f.terms !== customer.paymentTermsDays);
   const gid = Number(f.groupId || groups[0]?.id);
   const sensitiveLocked = edit && !can("b2b.approve");
   const validNew = contacts.length >= 1 && contacts.every((c) => c.name.trim()) && contacts.some((c) => c.isReceiver) && addrs.length >= 1 && addrs.every((a) => a.label.trim() && a.address.trim().length >= 3);
@@ -113,15 +115,18 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
         const r = await put(`/customers/${customer.id}`, {
           version: customer.version, name: f.name.trim(), taxCode: f.taxCode || null, phone: f.phone || null, email: f.email || null, billingAddress: f.billingAddress || null,
           ...(sensitiveLocked ? {} : { customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms }), ownerUserId: f.ownerId ? Number(f.ownerId) : null,
+          ...(creditReason.trim() ? { creditReason: creditReason.trim() } : {}),
         });
-        toast("Đã lưu khách hàng", "ok"); onSaved(r);
+        toast(r?.creditApprovalPending ? "Đã lưu; hạn mức / hạn thanh toán vượt ngưỡng đang chờ chủ duyệt" : "Đã lưu khách hàng", r?.creditApprovalPending ? "info" : "ok"); onSaved(r);
       } else {
         const r = await post("/customers", {
           name: f.name.trim(), type: "b2b", taxCode: f.taxCode || undefined, phone: f.phone || undefined, email: f.email || undefined, billingAddress: f.billingAddress || undefined,
           customerGroupId: gid, creditLimit: f.creditLimit, paymentTermsDays: f.terms, ownerUserId: f.ownerId ? Number(f.ownerId) : undefined,
           contacts: contacts.map((c) => ({ name: c.name.trim(), phone: c.phone || undefined, role: c.role || undefined, isReceiver: c.isReceiver })),
           addresses: addrs.map((a) => ({ label: a.label.trim(), address: a.address.trim(), receiverContactIndex: a.receiver, isDefault: a.isDefault })),
+          ...(creditReason.trim() ? { creditReason: creditReason.trim() } : {}),
         });
+        if (r?.creditApprovalPending) toast("Hạn mức / hạn thanh toán vượt ngưỡng đang chờ chủ duyệt, tạm đặt ở mức tối đa được phép", "info");
         onSaved(r);
       }
     } catch { /* toast đã hiện */ } finally { setBusy(false); }
@@ -129,7 +134,7 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
   const setC = (i: number, p: Partial<ContactF>) => setContacts(contacts.map((c, j) => (j === i ? { ...c, ...p } : c)));
   const setA = (i: number, p: Partial<AddrF>) => setAddrs(addrs.map((a, j) => (j === i ? { ...a, ...p } : a)));
   return (
-    <Sheet open wide onClose={onClose} title={edit ? `Sửa ${customer.name}` : "Thêm khách sỉ"} footer={<Button block size="lg" loading={busy} disabled={!ok} onClick={submit}>Lưu khách hàng</Button>}>
+    <Sheet open wide onClose={onClose} title={edit ? `Sửa ${customer.name}` : "Thêm khách sỉ"} footer={<Button block size="lg" loading={busy} disabled={!ok || (creditChanged && creditReason.trim().length < 3)} onClick={submit}>Lưu khách hàng</Button>}>
       <div className="stack">
         {err && <Banner tone="danger">{err}</Banner>}
         <Input label="Tên khách / công ty" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
@@ -147,6 +152,7 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: any; onClose:
               <MoneyInput label="Hạn mức công nợ (₫)" value={f.creditLimit} onChange={(n) => !sensitiveLocked && setF({ ...f, creditLimit: n })} />
               <Input label="Hạn thanh toán (ngày)" inputMode="numeric" disabled={sensitiveLocked} value={String(f.terms)} onChange={(e) => setF({ ...f, terms: Math.max(0, Math.min(365, Math.floor(parseDec(e.target.value)))) })} />
             </div>
+            {(!edit || creditChanged) && !sensitiveLocked && <Input label={creditChanged ? "Lý do đổi hạn mức / hạn thanh toán (bắt buộc)" : "Lý do đặt hạn mức (bắt buộc nếu vượt ngưỡng)"} value={creditReason} onChange={(e) => setCreditReason(e.target.value)} />}
             <Select label="Nhân viên phụ trách" value={f.ownerId} onChange={(e) => setF({ ...f, ownerId: e.target.value })}>
               <option value="">— Chưa phân công —</option>
               {(owners.data ?? []).map((u) => <option key={u.id} value={u.id}>{u.fullName}{u.id === user?.id ? " (tôi)" : ""}</option>)}

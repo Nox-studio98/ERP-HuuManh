@@ -182,6 +182,7 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [receiving, setReceiving] = useState(false);
+  const [returning, setReturning] = useState(false);
   const can = useCan();
   const d = doc.data && pmap ? withShown(doc.data, pmap) : doc.data;
   const editable = !d || d.status === "draft";
@@ -205,6 +206,8 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
         <div className="stack">
           <div className="row wrap"><Badge tone={docTone(d.status)}>{DOC_STATUS[d.status] ?? d.status}</Badge>{d.supplierRef && <span className="muted small">Số CT NCC: {d.supplierRef}</span>}{d.reason && <span className="muted small">{d.reason}</span>}</div>
           {d.status === "pending_approval" && <Banner>Phiếu đang chờ quản lý duyệt.</Banner>}
+          {type === "receipt" && d.status === "posted" && d.supplierId && can("inventory.write") && <Button variant="soft" onClick={() => setReturning(true)}>Trả hàng NCC</Button>}
+          {returning && d && <PurchaseReturnSheet doc={d} onClose={() => setReturning(false)} onDone={() => { setReturning(false); doc.reload(); }} />}
           {type === "count" && d.lockLots && d.status !== "posted" && d.status !== "cancelled" && <Banner>Đang khoá lô tại vị trí này: không bán / xuất hao hụt cho tới khi ghi sổ hoặc huỷ phiếu kiểm kê.</Banner>}
           {type === "transfer" && d.transferStatus === "in_transit" && (
             <Banner>Hàng đang đi đường — chưa bán được ở nguồn lẫn đích. {can("inventory.write") && <Button size="sm" onClick={() => setReceiving(true)}>Nhận hàng</Button>}</Banner>
@@ -296,6 +299,34 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
         {!picked && <Button variant="ghost" onClick={onCancel}>Đóng</Button>}
       </div>
     </Card>
+  );
+}
+
+/** B-12: trả hàng NCC cho phiếu nhập đã ghi sổ — chọn lô + số lượng trả; hệ thống xuất kho và giảm công nợ phải trả (có thể chờ duyệt). */
+function PurchaseReturnSheet({ doc, onClose, onDone }: { doc: any; onClose: () => void; onDone: () => void }) {
+  const lots: any[] = (doc.lines ?? []).filter((l: any) => l.lotId);
+  const [qty, setQty] = useState<Record<number, number | "">>({});
+  const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const picked = lots.filter((l) => Number(qty[l.lotId] ?? 0) > 0);
+  return (
+    <Sheet open onClose={onClose} title={`Trả hàng NCC · ${doc.code}`} footer={<Button block loading={busy} disabled={!picked.length || reason.trim().length < 3} onClick={async () => {
+      setBusy(true);
+      try {
+        const r = await post("/purchase-returns", { receiptDocId: doc.id, reason: reason.trim(), lines: picked.map((l) => ({ lotId: l.lotId, qty: Number(qty[l.lotId]), unit: l.unit })) });
+        toast(r?.status === "pending_approval" ? "Đã gửi duyệt phiếu trả hàng" : r?.billCancelled ? "Đã trả hàng và huỷ hoá đơn mua" : "Đã trả hàng, công nợ phải trả đã giảm", "ok"); onDone();
+      } catch {} finally { setBusy(false); }
+    }}>Trả hàng cho NCC</Button>}>
+      <div className="stack">
+        <Banner>Xuất kho theo lô của phiếu nhập này và giảm công nợ phải trả. Hàng đã bán không trả được; hoá đơn đã thanh toán thì NCC phải hoàn tiền (lập phiếu thu thủ công).</Banner>
+        {lots.map((l: any) => (
+          <div key={l.id} className="card flat" style={{ padding: 12 }}>
+            <div className="small muted">{pname(l)} · {l.lotCode} · nhập {qtyText(l.qtyShown ?? l.qtyMilli, l.unit)}</div>
+            <DecInput label={`Số lượng trả (${unitLabel(l.unit)})`} value={qty[l.lotId] ?? ""} onChange={(n) => setQty({ ...qty, [l.lotId]: n })} />
+          </div>
+        ))}
+        <Input label="Lý do trả hàng" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="vd: hàng dập, sai quy cách" />
+      </div>
+    </Sheet>
   );
 }
 

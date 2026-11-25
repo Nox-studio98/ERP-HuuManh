@@ -27,6 +27,8 @@ export interface EngineInput {
   subtotal: number;
   voucherCode?: string | null;
   at?: string;
+  /** A-19: tính lại cho đơn ĐÃ dùng voucher (sau cân/đóng gói) — không xét lại lượt dùng/giới hạn khách (lượt đã tính cho chính đơn này). */
+  reprice?: boolean;
 }
 
 export interface AppliedDiscount {
@@ -235,11 +237,13 @@ export async function evaluatePromotions(db: D1Database, input: EngineInput): Pr
     const fail = (reason: string) => void rejected.push({ code, reason });
     if (!v) fail("voucher_not_found");
     else if (!v.active) fail("voucher_inactive");
-    else if (v.max_uses != null && v.used_count >= v.max_uses) fail("voucher_exhausted");
+    else if (!input.reprice && v.max_uses != null && v.used_count >= v.max_uses) fail("voucher_exhausted");
     else if (v.customer_id != null && v.customer_id !== (input.customerId ?? null)) fail("voucher_wrong_customer");
+    // A-21: tại quầy, voucher không giới hạn tổng lượt chỉ bị chặn bằng "lượt/khách" → bắt buộc gắn khách, nếu không dùng vô hạn được
+    else if (input.channel === "pos" && !input.customerId && v.max_uses == null) fail("voucher_customer_required");
     else {
       let limited = false;
-      if (input.customerId) {
+      if (input.customerId && !input.reprice) {
         const used = await db
           .prepare(`SELECT COUNT(*) AS n FROM voucher_redemptions WHERE voucher_id = ? AND customer_id = ? AND status = 'used'`)
           .bind(v.id, input.customerId)
@@ -247,7 +251,7 @@ export async function evaluatePromotions(db: D1Database, input: EngineInput): Pr
         limited = (used?.n ?? 0) >= v.per_customer_limit;
       }
       // Khách vãng lai (không có customerId, mỗi đơn tạo hồ sơ khách mới): tính theo SĐT người nhận của các đơn đã dùng voucher
-      if (!limited && input.receiverPhone) {
+      if (!limited && input.receiverPhone && !input.reprice) {
         const used = await db
           .prepare(`SELECT COUNT(*) AS n FROM voucher_redemptions r JOIN orders o ON o.id = r.order_id WHERE r.voucher_id = ? AND r.status = 'used' AND o.receiver_phone = ?`)
           .bind(v.id, input.receiverPhone)

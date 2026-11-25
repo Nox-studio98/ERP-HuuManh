@@ -24,7 +24,7 @@ async function mkProduct(id: number, qtyMilli: number, cost: number, price: numb
 }
 
 async function newCustomer(name: string, creditLimit = 100_000_000) {
-  const r = await api("manager", "POST", `${V}/customers`, {
+  const r = await api("owner", "POST", `${V}/customers`, {
     name, type: "b2b", customerGroupId: 1, creditLimit, paymentTermsDays: 15,
     contacts: [{ name: "Người nhận", phone: "0900000001", isReceiver: true }],
     addresses: [{ label: "Kho", address: "1 Lê Lợi", isDefault: true }],

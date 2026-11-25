@@ -47,24 +47,39 @@ function Lists({ canWrite }: { canWrite: boolean }) {
 }
 
 function ListForm({ pl, groups, onClose, onSaved }: { pl: any | null; groups: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ name: pl?.name ?? "", channel: pl?.channel ?? "pos", kind: pl?.kind ?? "promo", priority: pl?.priority ?? 10, customerGroupId: pl?.customerGroupId ? String(pl.customerGroupId) : "", active: pl?.active ?? true });
+  const [f, setF] = useState({ name: pl?.name ?? "", channel: pl?.channel ?? "pos", kind: pl?.kind ?? "promo", priority: pl?.priority ?? 10, customerGroupId: pl?.customerGroupId ? String(pl.customerGroupId) : "", customerId: pl?.customerId ? String(pl.customerId) : "", active: pl?.active ?? true });
   const [busy, setBusy] = useState(false);
+  // A-22: bảng giá riêng theo khách (dùng được ở quầy / mọi kênh) — chọn khách
+  const [cq, setCq] = useState("");
+  const dcq = useDebounced(cq);
+  const custs = useAsync(() => (f.kind === "customer" ? get("/customers", { q: dcq.trim(), limit: 20 }, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]) : Promise.resolve([] as any[])), [f.kind, dcq]);
   const save = async () => {
     setBusy(true);
     try {
-      const body: any = { name: f.name.trim(), channel: f.channel, kind: f.kind, priority: f.priority, customerGroupId: f.customerGroupId ? Number(f.customerGroupId) : null };
-      if (pl) await put(`/price-lists/${pl.id}`, { ...body, active: f.active }); else await post("/price-lists", body);
+      const body: any = { name: f.name.trim(), channel: f.channel, kind: f.kind, priority: f.priority, customerGroupId: f.customerGroupId ? Number(f.customerGroupId) : null, customerId: f.kind === "customer" && f.customerId ? Number(f.customerId) : null };
+      if (pl) await put(`/price-lists/${pl.id}`, { ...body, active: f.active, version: pl.version }); else await post("/price-lists", body);
       toast(pl ? "Đã lưu bảng giá" : "Đã tạo bảng giá", "ok"); onSaved();
     } catch {} finally { setBusy(false); }
   };
   return (
-    <Sheet open onClose={onClose} title={pl ? "Sửa bảng giá" : "Bảng giá mới"} footer={<Button block loading={busy} disabled={!f.name.trim()} onClick={save}>{pl ? "Lưu" : "Tạo"}</Button>}>
+    <Sheet open onClose={onClose} title={pl ? "Sửa bảng giá" : "Bảng giá mới"} footer={<Button block loading={busy} disabled={!f.name.trim() || (f.kind === "customer" && !f.customerId)} onClick={save}>{pl ? "Lưu" : "Tạo"}</Button>}>
       <div className="stack">
         <Input label="Tên bảng giá" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <Select label="Kênh" value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value })}>{[["pos", "Tại quầy"], ["online", "Online"], ["b2b", "Sỉ"], ["all", "Tất cả kênh"]].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
         <Select label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
         {(f.kind === "group" || f.customerGroupId) && (
           <Select label="Nhóm khách hàng" value={f.customerGroupId} onChange={(e) => setF({ ...f, customerGroupId: e.target.value })}><option value="">— Không —</option>{groups.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
+        )}
+        {f.kind === "customer" && (
+          <div className="stack">
+            <Input label="Tìm khách hàng (tên / SĐT / mã)" type="search" value={cq} onChange={(e) => setCq(e.target.value)} />
+            <Select label="Khách hàng áp dụng" value={f.customerId} onChange={(e) => setF({ ...f, customerId: e.target.value })}>
+              <option value="">— Chọn khách —</option>
+              {f.customerId && !(custs.data ?? []).some((x: any) => String(x.id) === f.customerId) && <option value={f.customerId}>Khách #{f.customerId}</option>}
+              {(custs.data ?? []).map((x: any) => <option key={x.id} value={x.id}>{x.name}{x.code ? ` (${x.code})` : ""}</option>)}
+            </Select>
+            <div className="hint">Giá riêng theo khách có hiệu lực khi chọn đúng khách ở quầy bán hàng (kênh “Tại quầy” hoặc “Tất cả kênh”).</div>
+          </div>
         )}
         <Input label="Ưu tiên (số lớn thắng)" type="number" min={0} max={1000} value={f.priority} onChange={(e) => setF({ ...f, priority: Number(e.target.value) })} />
         {pl && <label className="row" style={{ gap: 8 }}><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Đang dùng</label>}

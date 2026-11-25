@@ -5,7 +5,7 @@ import { nextCode } from "../../../worker/lib/codes";
 import { newTrackingToken } from "../../../worker/services/online-orders";
 import { planReservations, type ReservationPlan } from "../../../worker/services/reservations";
 import { kickJobs } from "../../../worker/services/outbox";
-import { applyStock, computeTotals, priceCart, promoForCart, publicRemaining, redeemCustomerId } from "../lib/cart";
+import { applyStock, computeTotals, priceCart, priceCtxOf, promoForCart, publicRemaining, redeemCustomerId } from "../lib/cart";
 import { promoStatements } from "../../../worker/services/promo-checkout";
 import { isPointsInsufficient, isVoucherExhausted } from "../../../worker/services/loyalty-points";
 import { DATE_RE, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
@@ -14,6 +14,7 @@ import { optionalAuth } from "../lib/session";
 import { verifyTurnstile } from "../lib/turnstile";
 import { mailAllowed } from "../lib/mailguard";
 import { assertStmt } from "../../../worker/services/guard";
+import { slotCapacityGuard } from "../../../worker/services/slots";
 import { baseUrl, enqueueByRef, last4, normalizePhone, httpError, onlineStoreId, parseBody, setting, settingNum } from "../lib/util";
 import { vnDate } from "../../../worker/lib/time";
 import type { ShopBindings } from "../env";
@@ -132,7 +133,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   if (why === "closed") throw new AppError(422, "slot_closed", "Khung giờ không giao vào ngày này");
 
   // --- giá + EC-11 ---
-  const { lines, issues } = await priceCart(db, b.items);
+  const { lines, issues } = await priceCart(db, b.items, priceCtxOf(account));
   if (issues.length) throw new AppError(422, "product_unavailable", "Có sản phẩm không còn bán online", { issues });
   const changed = lines.filter((l) => l.expectedUnitPrice !== l.unitPrice);
   if (changed.length)
@@ -157,7 +158,17 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const storeId = await onlineStoreId(db);
 
   const code = await nextCode(db, "DH");
-  const guestCustomerCode = account ? null : await nextCode(db, "KL");
+  // A-24: khách vãng lai — dùng lại hồ sơ khách bán lẻ cùng SĐT (lịch sử/điểm không bị tách), chỉ tạo mới khi chưa có
+  const phoneForms = [phone, "+84" + phone.slice(1), "84" + phone.slice(1)];
+  const knownGuestId = account
+    ? null
+    : (
+        await db
+          .prepare(`SELECT id FROM customers WHERE type = 'retail' AND active = 1 AND phone IN (?, ?, ?) ORDER BY id LIMIT 1`)
+          .bind(...phoneForms)
+          .first<{ id: number }>()
+      )?.id ?? null;
+  const guestCustomerCode = account || knownGuestId ? null : await nextCode(db, "KL");
   const token = newTrackingToken();
   const groupId = (await db.prepare(`SELECT id FROM customer_groups WHERE code = 'le'`).first<{ id: number }>())?.id ?? null;
   const shipAddress = [addr.addressLine, addr.ward, addr.district, addr.province].filter(Boolean).join(", ");
@@ -190,7 +201,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     const stmts: D1PreparedStatement[] = [];
     // Chốt chặn đồng thời (trong batch): khung giờ còn chỗ và SĐT chưa vượt trần đơn mở — đặt ĐẦU batch
     stmts.push(
-      assertStmt(db, "checkout.slot_capacity", `SELECT (SELECT COUNT(*) FROM orders WHERE slot_date = ? AND slot_id = ? AND status <> 'cancelled') < ?`, [b.slotDate, b.slotId, slot.capacity]),
+      slotCapacityGuard(db, "checkout.slot_capacity", b.slotDate, b.slotId, slot.capacity),
     );
     if (!account)
       stmts.push(
@@ -211,20 +222,21 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
            VALUES (?,?,'online','sale',?, COALESCE(?, (SELECT id FROM customers WHERE code = ?)), ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,'none')`,
         )
         .bind(
-          code, b.clientUuid, storeId, account?.customerId ?? null, guestCustomerCode, status, isPreorder ? 1 : 0,
+          code, b.clientUuid, storeId, account?.customerId ?? knownGuestId, guestCustomerCode, status, isPreorder ? 1 : 0,
           totals.subtotal, promo.promoTotal + promo.pointsAmount, totals.shippingFee, finalTotal, b.note ?? null,
           account?.id ?? null, token, addr.receiverName, phone, shipAddress, zone.id, b.slotDate, b.slotId,
           b.paymentMethod, payStatus, finalTotal,
         ),
     );
-    for (const l of lines)
+    for (const [li, l] of lines.entries())
       stmts.push(
         db
           .prepare(
-            `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, line_total, ordered_qty_milli, preorder_milli)
-             VALUES (${ORD}, ?2, ?3, ?4, ?5, ?6, ?4, ?7)`,
+            `INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, discount, line_total, ordered_qty_milli, preorder_milli)
+             VALUES (${ORD}, ?2, ?3, ?4, ?5, ?8, ?6, ?4, ?7)`,
           )
-          .bind(code, l.productId, l.unit, l.qtyMilli, l.unitPrice, l.lineTotal, l.preorderMilli),
+          // A-08: giảm giá/voucher/điểm đã phân bổ theo dòng → báo cáo theo dòng khớp doanh thu (phí giao báo riêng ở orders.shipping_fee)
+          .bind(code, l.productId, l.unit, l.qtyMilli, l.unitPrice, l.lineTotal - (promo.lineDiscounts[li] ?? 0), l.preorderMilli, promo.lineDiscounts[li] ?? 0),
       );
     stmts.push(...reserveByPosition(db, code, plans));
     stmts.push(

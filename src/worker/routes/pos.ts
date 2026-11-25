@@ -14,6 +14,7 @@ import { getSettingInt } from "../services/settings";
 import { salesSummary } from "../services/salesreport";
 import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-checkout";
 import { assertStmt } from "../services/guard";
+import { assertPeriodOpen } from "../services/period";
 import { retireStaleDraft } from "../services/online-ops";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 
@@ -214,6 +215,12 @@ const checkoutSchema = z.object({
   approvalId: z.number().int().positive().optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
   redeemPoints: z.number().int().positive().max(1_000_000_000).optional(), // Đợt 4: đổi điểm tích luỹ
+  // A-09: đơn lập offline gửi kèm thời điểm bán gốc, ca và giá đã hiển thị cho khách
+  soldAt: z.string().datetime({ offset: true }).optional(),
+  shiftId: z.number().int().positive().optional(),
+  priceSnapshot: z.array(z.object({ productId: z.number().int().positive(), unitPrice: z.number().int().min(0).max(MAX_VND) })).max(200).optional(), // VND / đơn vị chính
+  // A-29: người tự duyệt (quản lý/chủ) bán dưới vốn hoặc giảm sâu phải ghi lý do
+  overrideReason: z.string().trim().min(3).max(300).optional(),
 });
 
 async function getOrderFull(c: Ctx, orderId: number) {
@@ -285,6 +292,20 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   if (!shift) throw conflict("no_open_shift", "Chưa mở ca bán hàng");
   const storeId = shift.store_id as number;
 
+  // A-09: đơn offline — dùng thời điểm bán gốc (trong giới hạn), kiểm kỳ khoá sổ; ca gốc đã chốt thì ghi vào ca đang mở và lưu vết
+  let soldAt: string | null = null;
+  if (body.soldAt) {
+    const t = Date.parse(body.soldAt);
+    const nowMs = Date.now();
+    const maxHours = await getSettingInt(db, "pos.offline_max_age_hours", 48);
+    if (t < nowMs - maxHours * 3600_000) throw new AppError(422, "offline_too_old", `Đơn bán offline quá ${maxHours} giờ, không đồng bộ tự động được — báo quản lý xử lý`, { soldAt: body.soldAt, maxHours });
+    soldAt = new Date(Math.min(t, nowMs)).toISOString(); // không ghi giờ bán ở tương lai
+    if (vnDate(new Date(soldAt)) !== vnDate()) await assertPeriodOpen(db, soldAt, "đơn bán offline");
+  }
+  const priceSnap = soldAt ? new Map((body.priceSnapshot ?? []).map((x) => [x.productId, x.unitPrice])) : new Map<number, number>();
+  const tolBp = soldAt ? await getSettingInt(db, "pos.offline_price_tolerance_bp", 1000) : 0;
+  const snapUsed: number[] = [];
+
   // khách hàng → nhóm giá
   let customer: { id: number; customer_group_id: number | null } | null = null;
   if (body.customerId) {
@@ -301,13 +322,24 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const { factor } = await unitFactor(db, l.productId, l.unit);
     const qtyMilli = Math.round(l.qty * factor);
     if (qtyMilli <= 0) throw new AppError(422, "invalid_qty", "Số lượng không hợp lệ");
-    const resolved = await resolvePrice(db, l.productId, { channel: "pos", customerGroupId: customer?.customer_group_id });
-    const unitPrice = l.unitPriceOverride ?? resolved.unitPrice;
+    // A-22: truyền customerId để áp bảng giá riêng của khách; A-09: giá tại thời điểm bán gốc
+    const resolved = await resolvePrice(db, l.productId, { channel: "pos", customerGroupId: customer?.customer_group_id, customerId: customer?.id, at: soldAt ?? undefined });
+    let unitPrice = l.unitPriceOverride ?? resolved.unitPrice;
+    let listUnit = resolved.unitPrice;
+    const snap = priceSnap.get(l.productId);
+    if (snap != null && l.unitPriceOverride == null && snap !== resolved.unitPrice) {
+      // A-09: khách đã trả theo giá hiển thị lúc offline; chấp nhận nếu lệch bảng giá lúc bán trong ngưỡng
+      if (Math.abs(snap - resolved.unitPrice) * 10000 > resolved.unitPrice * tolBp)
+        throw conflict("offline_price_changed", "Giá đã hiển thị khi offline lệch bảng giá quá ngưỡng cho phép — báo quản lý xử lý", { productId: l.productId, snapshot: snap, current: resolved.unitPrice });
+      unitPrice = snap;
+      listUnit = snap;
+      snapUsed.push(l.productId);
+    }
     const gross = lineAmount(unitPrice, qtyMilli);
     const lineDiscount = Math.min(l.discount ?? 0, gross);
     items.push({
-      productId: l.productId, unit: l.unit, qtyMilli, unitPrice, listPrice: resolved.unitPrice, priceListId: resolved.priceListId,
-      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(resolved.unitPrice, qtyMilli), promoDiscount: 0,
+      productId: l.productId, unit: l.unit, qtyMilli, unitPrice, listPrice: listUnit, priceListId: resolved.priceListId,
+      gross, lineDiscount, discount: lineDiscount, lineTotal: gross - lineDiscount, listGross: lineAmount(listUnit, qtyMilli), promoDiscount: 0,
     });
   }
   const baseSum = items.reduce((s, i) => s + i.gross - i.lineDiscount, 0);
@@ -329,6 +361,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     subtotal: items.reduce((s, i) => s + i.lineTotal, 0),
     voucherCode: body.voucherCode,
     redeemPoints: body.redeemPoints,
+    at: soldAt ?? undefined,
     strict: true,
   });
   items.forEach((it, i) => {
@@ -360,6 +393,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   // Bước B: phân bổ FEFO + kiểm tra duyệt (có thể chạy lại 1 lần khi tồn đổi — EC-02)
   const discountBp = await getSettingInt(db, "approval.discount_pct_bp", 1000);
   let approvalUsed: number | null = null;
+  let overrideReasons: string[] = [];
   const plan = async () => {
     const byProduct = new Map<number, number[]>();
     items.forEach((it, i) => byProduct.set(it.productId, [...(byProduct.get(it.productId) ?? []), i]));
@@ -377,8 +411,13 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     if (listSum > 0 && (discValue * 10000) / listSum > discountBp) reasons.push("discount");
     if (items.some((it, i) => it.lineTotal + it.promoDiscount < costs[i])) reasons.push("below_cost");
     approvalUsed = null;
+    overrideReasons = [];
     if (reasons.length && !can(user.role, "approvals.decide")) {
       approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue }, await cartHash(body));
+    } else if (reasons.length) {
+      // A-29: người có quyền tự duyệt không cần phiếu, nhưng phải ghi lý do (audit)
+      if (!body.overrideReason) throw new AppError(422, "override_reason_required", "Bán dưới giá vốn hoặc giảm giá vượt ngưỡng cần nhập lý do", { reasons });
+      overrideReasons = reasons;
     }
     return { lineAllocs, productAllocs, costs, belowCost: reasons.includes("below_cost") };
   };
@@ -441,18 +480,21 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     stmts.push(
       db
         .prepare(
-          `UPDATE orders SET status='completed', subtotal=?, discount=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          `UPDATE orders SET status='completed', subtotal=?, discount=?, total=?, cost_total=?, paid_total=?, completed_at=COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             WHERE id=? AND status='draft'`,
         )
-        .bind(subtotal, totalDiscount, total, costTotal, total, orderId),
+        .bind(subtotal, totalDiscount, total, costTotal, total, soldAt, orderId),
     );
     if (approvalUsed) stmts.push(db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=?`).bind(String(orderId), approvalUsed));
+    if (overrideReasons.length)
+      stmts.push(auditStmt(c, { action: "order.self_approve", entity: "order", entityId: orderId, after: { reasons: overrideReasons, total }, reason: body.overrideReason }));
     stmts.push(
       auditStmt(c, {
         action: "order.checkout",
         entity: "order",
         entityId: orderId,
-        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed, voucher: promoPlan.voucher?.code ?? null, pointsRedeemed: promoPlan.points },
+        after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed, voucher: promoPlan.voucher?.code ?? null, pointsRedeemed: promoPlan.points,
+          ...(soldAt ? { offline: { soldAt, requestedShiftId: body.shiftId ?? null, shiftId: shift.id, snapshotProducts: snapUsed } } : {}) },
       }),
     );
     await db.batch(stmts);

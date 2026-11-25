@@ -44,7 +44,11 @@ export const MAX_LINES = 50;
 const MAX_LINE_MILLI = 1_000_000;
 
 /** Định giá server-side. Mặt hàng chưa công bố / chưa có giá online → issue 'unpublished' và bị loại khỏi dòng. */
-export async function priceCart(db: D1Database, items: CartItemIn[]) {
+/** A-15: ngữ cảnh giá của khách đăng nhập (nhóm khách + bảng giá riêng) — cùng cách POS / đơn MXH. Khách vãng lai: giá chung. */
+export const priceCtxOf = (a: { customerId: number; customerGroupId: number | null } | null | undefined) =>
+  a ? { groupId: a.customerGroupId, customerId: a.customerId } : undefined;
+
+export async function priceCart(db: D1Database, items: CartItemIn[], ctx?: { groupId: number | null; customerId: number | null }) {
   if (items.length === 0) throw new AppError(422, "empty_cart", "Giỏ hàng trống");
   if (items.length > MAX_LINES) throw new AppError(422, "too_many_lines", `Tối đa ${MAX_LINES} mặt hàng`);
   const issues: CartIssue[] = [];
@@ -60,7 +64,7 @@ export async function priceCart(db: D1Database, items: CartItemIn[]) {
     let price: number | null = null;
     if (p?.published_online && p.slug) {
       try {
-        price = (await resolvePrice(db, p.id, { channel: "online" })).unitPrice;
+        price = (await resolvePrice(db, p.id, { channel: "online", customerGroupId: ctx?.groupId ?? null, customerId: ctx?.customerId ?? null })).unitPrice;
       } catch (e) {
         if (!(e instanceof AppError && e.code === "no_price")) throw e;
       }

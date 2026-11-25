@@ -1,3 +1,4 @@
+import { valueSql } from "../lib/sqlmoney";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppBindings } from "../env";
@@ -67,7 +68,7 @@ async function pnl(c: Ctx) {
   ).results;
   const waste = await db
     .prepare(
-      `SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`,
+      `SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`,
     )
     .bind(...p)
     .first<{ v: number }>();
@@ -102,7 +103,7 @@ async function pnl(c: Ctx) {
       : groupBy === "group" ? `COALESCE(pg.name,'Khác')`
       : null;
     if (!keyExpr) throw new AppError(422, "validation_error", "groupBy phải là day, channel hoặc group");
-    breakdown = (
+    const rows = (
       await db
         .prepare(
           `SELECT ${keyExpr} AS key,
@@ -114,7 +115,22 @@ async function pnl(c: Ctx) {
         )
         .bind(...p)
         .all<{ key: string; revenue: number; cogs: number }>()
-    ).results.map((r) => ({ ...r, grossProfit: r.revenue - r.cogs }));
+    ).results.map((r) => ({ ...r, shipping: 0 }));
+    // A-08: dòng đơn online mang giảm giá đã phân bổ; phí giao hàng (doanh thu cấp đơn) báo riêng để tổng breakdown = doanh thu tổng
+    const SHIP = `CASE WHEN o.kind='sale' THEN o.shipping_fee WHEN o.channel IN ('online','social') THEN o.total - o.subtotal ELSE 0 END`;
+    if (groupBy === "group") {
+      const sh = (await db.prepare(`SELECT COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
+      if (sh) rows.push({ key: "Phí giao hàng", revenue: sh, cogs: 0, shipping: sh });
+    } else {
+      const ship = (await db.prepare(`SELECT ${keyExpr} AS key, COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W} GROUP BY key`).bind(...p).all<{ key: string; s: number }>()).results;
+      for (const x of ship) {
+        const r = rows.find((y) => y.key === x.key);
+        if (!r || !x.s) continue;
+        r.shipping = x.s;
+        r.revenue += x.s;
+      }
+    }
+    breakdown = rows.map((r) => ({ ...r, grossProfit: r.revenue - r.cogs }));
   }
   return {
     from, to,
@@ -153,8 +169,8 @@ async function inventoryReport(c: Ctx) {
          -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt + Lắp ráp + Điều chỉnh = Tồn cuối
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
-         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli * m.unit_cost / 1000 END),0) AS wasteValue,
-         COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS stockValue
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -${valueSql('m.qty_delta_milli','m.unit_cost')} END),0) AS wasteValue,
+         COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS stockValue
          FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
         WHERE p.merged_into IS NULL
         GROUP BY p.id ORDER BY p.name`,

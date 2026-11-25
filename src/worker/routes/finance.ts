@@ -8,8 +8,9 @@ import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDayRangeUtc, vnPeriod, parseDayRange } from "../lib/time";
 import { getSettingInt } from "../services/settings";
-import { approveVoucher } from "../services/vouchers";
+import { approveVoucher, cancelPendingVoucher } from "../services/vouchers";
 import { assertStmt } from "../services/guard";
+import { FUND_ORDER_OK } from "../services/fund-sql";
 
 export const financeRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -23,7 +24,7 @@ financeRoutes.get("/funds", requirePerm("finance.view"), async (c) => {
     .prepare(
       `SELECT f.id, f.store_id, f.code, f.name, f.type, f.active,
               COALESCE((SELECT SUM(p.amount) FROM payments p JOIN orders o ON o.id = p.order_id
-                         WHERE p.fund_id = f.id AND p.status='confirmed' AND o.status='completed'),0) AS payments_total,
+                         WHERE p.fund_id = f.id AND p.status='confirmed' AND ${FUND_ORDER_OK}),0) AS payments_total,
               COALESCE((SELECT SUM(CASE WHEN v.direction='in' THEN v.amount ELSE -v.amount END) FROM cash_vouchers v
                          WHERE v.fund_id = f.id AND v.status='posted'),0) AS vouchers_net
          FROM funds f ORDER BY f.id`,
@@ -141,6 +142,25 @@ financeRoutes.post("/vouchers", requirePerm("finance.write"), async (c) => {
 financeRoutes.post("/vouchers/:id/approve", requirePerm("finance.approve"), async (c) => {
   const v = await approveVoucher(c, Number(c.req.param("id")));
   return c.json(v);
+});
+
+const rejectBody = z.object({ reason: z.string().trim().min(3).max(300) });
+
+// B-22: từ chối phiếu chi chờ duyệt (người có quyền duyệt) — dùng được cả khi kỳ của phiếu đã khoá sổ
+financeRoutes.post("/vouchers/:id/reject", requirePerm("finance.approve"), async (c) => {
+  const body = await parseBody(c, rejectBody);
+  return c.json(await cancelPendingVoucher(c, Number(c.req.param("id")), body.reason, "voucher.reject"));
+});
+
+// B-22: người lập tự huỷ phiếu chi chờ duyệt của mình (người có quyền duyệt huỷ được phiếu bất kỳ)
+financeRoutes.post("/vouchers/:id/cancel", requirePerm("finance.write"), async (c) => {
+  const body = await parseBody(c, rejectBody);
+  const id = Number(c.req.param("id"));
+  const u = c.get("user");
+  const v = await c.env.DB.prepare(`SELECT created_by FROM cash_vouchers WHERE id = ?`).bind(id).first<{ created_by: number }>();
+  if (!v) throw notFound("voucher_not_found", "Không tìm thấy phiếu");
+  if (v.created_by !== u.id && !can(u.role, "finance.approve")) throw new AppError(403, "forbidden", "Chỉ người lập phiếu hoặc người có quyền duyệt mới huỷ được");
+  return c.json(await cancelPendingVoucher(c, id, body.reason, "voucher.cancel"));
 });
 
 financeRoutes.post("/vouchers/:id/reverse", requirePerm("finance.write"), async (c) => {

@@ -104,7 +104,8 @@ export async function orderView(db: D1Database, o: any) {
       orderedQty: (l.ordered_qty_milli ?? l.qty_milli) / l.factor,
       qty: l.qty_milli / l.factor,
       unitPrice: l.unit_price,
-      lineTotal: l.line_total,
+      lineTotal: l.line_total + (l.discount ?? 0), // tiền hàng trước giảm (khớp 'Tạm tính' của đơn); phần giảm phân bổ ở lineDiscount (A-08)
+      lineDiscount: l.discount ?? 0,
       preorderMilli: l.preorder_milli ?? 0,
     })),
     events: events.results.map((e) => ({ at: e.at, status: e.status, statusLabel: label(e.status), note: e.note })),

@@ -32,7 +32,7 @@ export interface PromoPlan {
   pointsBalance?: number;
 }
 
-const FATAL_VOUCHER = new Set(["voucher_not_found", "voucher_inactive", "voucher_exhausted", "voucher_wrong_customer", "voucher_customer_limit", "promotion_inactive", "channel_not_allowed", "min_order", "not_applicable", "combo_incomplete", "no_discount"]);
+const FATAL_VOUCHER = new Set(["voucher_not_found", "voucher_inactive", "voucher_exhausted", "voucher_wrong_customer", "voucher_customer_required", "voucher_customer_limit", "promotion_inactive", "channel_not_allowed", "min_order", "not_applicable", "combo_incomplete", "no_discount"]);
 
 export async function planPromotions(
   db: D1Database,

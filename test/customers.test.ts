@@ -72,7 +72,7 @@ describe("customers", () => {
 
   it("updates with optimistic locking and audits credit limit changes", async () => {
     const c = (await api("manager", "POST", "/api/v1/customers", customerBody({ name: "Khách sửa" }))).body;
-    const ok = await api("manager", "PUT", `/api/v1/customers/${c.id}`, { version: c.version, creditLimit: 20_000_000 });
+    const ok = await api("manager", "PUT", `/api/v1/customers/${c.id}`, { version: c.version, creditLimit: 20_000_000, creditReason: "Khách tăng đơn đều" });
     expect(ok.status).toBe(200);
     expect(ok.body.creditLimit).toBe(20_000_000);
     expect(ok.body.version).toBe(c.version + 1);

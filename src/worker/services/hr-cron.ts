@@ -42,7 +42,9 @@ async function pushToSchedulers(env: Env, alerts: Alert[]) {
  *  - late_no_checkin: quá 15' sau giờ vào ca mà chưa chấm vào (trừ NV đang nghỉ phép đã duyệt);
  *  - open_in_2300: từ 23:00 VN còn 'vào' chưa 'ra' (trừ ca qua đêm chưa kết thúc);
  *  - multi_device: một NV chấm bằng ≥ 2 thiết bị trong ngày;
- *  - far_punch: punch cách cửa hàng > 3× bán kính cho phép (offline/chờ duyệt).
+ *  - far_punch: punch cách cửa hàng > 3× bán kính cho phép (offline/chờ duyệt);
+ *  - offline_unverified: chấm offline chưa xác thực được nơi chấm (C-20), đang chờ duyệt.
+ * Danh sách + đánh dấu đã xem: GET /attendance/alerts, POST /attendance/alerts/:id/ack (C-11).
  */
 export async function hrAttendanceAlerts(env: Env, now = new Date()): Promise<void> {
   const db = env.DB;
@@ -111,6 +113,18 @@ export async function hrAttendanceAlerts(env: Env, now = new Date()): Promise<vo
     .all<{ id: number; employee_id: number; distance_m: number; geofence_m: number; full_name: string }>();
   for (const r of far) {
     await add({ kind: "far_punch", entity: "attendance_punch", entityId: String(r.id), message: `${r.full_name} chấm công cách cửa hàng ${r.distance_m} m`, data: { employeeId: r.employee_id, distanceM: r.distance_m } });
+  }
+
+  // 5) chấm offline chưa xác thực được nơi chấm (C-20): không kèm GPS/QR, sai số lớn hoặc ngoài vùng — đang chờ quản lý duyệt
+  const { results: offl } = await db
+    .prepare(
+      `SELECT p.id, p.employee_id, p.note, e.full_name FROM attendance_punches p JOIN employees e ON e.id = p.employee_id
+        WHERE p.method = 'offline' AND p.status = 'pending' AND p.note LIKE 'Chấm offline chưa xác thực%' AND p.server_at >= ?`,
+    )
+    .bind(since)
+    .all<{ id: number; employee_id: number; note: string; full_name: string }>();
+  for (const r of offl) {
+    await add({ kind: "offline_unverified", entity: "attendance_punch", entityId: String(r.id), message: `${r.full_name}: ${r.note}`, data: { employeeId: r.employee_id } });
   }
 
   await pushToSchedulers(env, fresh);
