@@ -2,7 +2,7 @@ import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "r
 import { useAuth, loadMe, logout, useCan } from "./store";
 import { navigate, onLink, usePath, useSearch } from "./router";
 import { Toaster } from "./components/toast";
-import { Badge, Button, Sheet, Spinner } from "./components/ui";
+import { Badge, Button, EmptyState, Sheet, Spinner } from "./components/ui";
 import { useQueue, syncQueue } from "./offline";
 import { get } from "./api";
 import { ROLES } from "./format";
@@ -109,6 +109,18 @@ const lsJson = <T,>(k: string, d: T): T => { try { return JSON.parse(lsGet(k) ??
 const CHEV = "M6 9l6 6 6-6";
 const STAR = "M12 3l2.8 5.8 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.3l1.1-6.2L3 9.7l6.2-.9z";
 
+/** Gõ thẳng URL không có quyền (hoặc không tồn tại): quyền đã tải xong nên báo rõ thay vì quay mãi. */
+function NoAccess({ path }: { path: string }) {
+  const known = NAV.some((n) => path === n.path || path.startsWith(n.path + "/"));
+  return (
+    <EmptyState
+      title={known ? "Bạn không có quyền xem trang này" : "Không tìm thấy trang này"}
+      hint={known ? "Liên hệ chủ cửa hàng nếu bạn cần truy cập." : undefined}
+      action={<Button onClick={() => navigate("/", true)}>Về trang chính</Button>}
+    />
+  );
+}
+
 function Shell() {
   const { user } = useAuth();
   const can = useCan();
@@ -197,7 +209,7 @@ function Shell() {
         </div>
       </header>
       <main className="main" id="main">
-        <Suspense fallback={<Spinner />}>{cur ? <Fragment key={cur.path + search}>{cur.el}</Fragment> : nav.length ? <Spinner /> : <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div>}</Suspense>
+        <Suspense fallback={<Spinner />}>{cur ? <Fragment key={cur.path + search}>{cur.el}</Fragment> : !nav.length ? <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div> : path === "/" || path === "" ? <Spinner /> : <NoAccess path={path} />}</Suspense>
       </main>
       <nav className="tabbar" aria-label="Điều hướng nhanh">
         {mobileMain.map(link)}

@@ -122,3 +122,19 @@ Secrets thêm cho shop: `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRI
 | T27 | Gợi ý giá tự động làm đổi giá ngoài ý muốn | M7 chỉ gợi ý; chấp nhận gợi ý đi qua đúng luồng M3 (`applyBulkPrices`: lịch sử + duyệt), có sàn giá vốn + biên mục tiêu. |
 
 Secret thêm: `ATTENDANCE_QR_SECRET` (ERP).
+
+
+## 11. Chính sách lưu giữ dữ liệu (C-29, đợt 6b)
+
+Mọi mốc là tham số ở màn Cài đặt (nhóm Hệ thống); giá trị mặc định do chủ chọn, còn nhãn **[Cần xác nhận]**. Cron hằng ngày 00:00 giờ VN chạy `services/retention.ts` (mỗi bước độc lập, idempotent), ghi audit tổng hợp số bản ghi đã xử lý.
+
+| Dữ liệu | Mốc mặc định | Cách xử lý | Audit |
+|---|---|---|---|
+| Toạ độ GPS chấm công (`lat`, `lng`, `accuracy_m`) | 12 tháng (`retention.gps_months`, tối thiểu 6) | Đặt NULL; giữ giờ, loại, trạng thái, `distance_m` | `retention.gps_scrub` |
+| Hồ sơ nhân viên nghỉ việc | 24 tháng (`retention.employee_pii_months`, tối thiểu 12) | Che CCCD, ngân hàng, số TK, địa chỉ, SĐT, email, ngày sinh; giữ họ tên, mã NV, dữ liệu lương/kế toán; đánh dấu `pii_purged_at` | `retention.employee_pii_purge` |
+| Bản sao lưu R2 | 90 ngày (`backup.retention_days`) | `pruneBackups` xoá thư mục ngày cũ | `retention.backup_prune` |
+| `audit_log` | 10 năm (`retention.audit_years`) | Chưa xoá gì; chỉ ghi chính sách | – |
+
+**Vì sao thiết kế GPS như vậy.** `attendance_punches` bất biến bằng trigger. Thay vì tách bảng hay gỡ trigger, migration 0026 chỉ chừa một ngoại lệ hẹp: trigger `punches_geo_scrub_only` cho phép UPDATE cột toạ độ khi và chỉ khi cả ba cột `lat`, `lng`, `accuracy_m` được đặt NULL cùng lúc và bản ghi cũ hơn 6 tháng (sàn cứng trong trigger, tham số không hạ thấp được). Mọi cột khác (giờ, loại, thiết bị, phương thức) vẫn bị khoá, vẫn không xoá được dòng, và không thể đổi toạ độ sang giá trị khác. Không mất dữ liệu chứng từ chấm công, chỉ mất vị trí.
+
+Ghi chú: bản sao lưu R2 có thể còn toạ độ/CCCD cũ trong tối đa 90 ngày sau khi bị xoá ở DB; đó là lý do giữ 90 ngày. Quyền kế toán (C-21): xem hồ sơ + làm lương, không tạo/sửa hồ sơ.

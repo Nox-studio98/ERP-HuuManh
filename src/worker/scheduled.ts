@@ -6,6 +6,7 @@ import { swapBadReservationsAllStores } from "./services/reservations";
 import { hrAttendanceAlerts } from "./services/hr-cron";
 import { runDueCompetitorCrawls } from "./services/competitor-cron";
 import { generateRecurringOrders } from "./services/recurring-cron";
+import { runRetention } from "./services/retention";
 import { cleanupGuardsStmt } from "./services/guard";
 import { sweepStaleDrafts } from "./services/online-ops";
 import { cancelStaleCodOrders } from "../shop/worker/lib/cod-expiry";
@@ -59,6 +60,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
     .run();
   // A-17: lô vừa hết hạn đang giữ cho đơn → đổi sang lô tốt NGAY (không đợi 08:00 — giao buổi sáng sớm không xuất lô quá hạn)
   await step("swap_expired_reservations", () => swapBadReservationsAllStores(env.DB));
+  await step("retention", () => runRetention(env)); // C-29: GPS > 12 tháng, PII nhân viên nghỉ > 24 tháng
   await step("backup", () => backupToR2(env)); // C-06: lỗi sao lưu được ghi log, không chặn bước khác
 }
 

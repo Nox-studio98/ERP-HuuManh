@@ -17,14 +17,14 @@ beforeAll(async () => {
 });
 
 describe("HR: phân quyền vai trò khi tạo/khoá tài khoản", () => {
-  it("kế toán không tạo được tài khoản owner/manager qua POST /employees; chỉ staff", async () => {
+  it("C-21: kế toán không tạo được hồ sơ/tài khoản nào qua POST /employees; chủ tạo staff được", async () => {
     for (const role of ["owner", "manager", "accountant"]) {
       const r = await call("accountant", "POST", "/api/v1/employees", { ...EMP, createUser: { username: `x_${role}`, role } });
       expect(r.status).toBe(403);
     }
     expect(await db().prepare(`SELECT id FROM users WHERE username LIKE 'x\\_%' ESCAPE '\\'`).first()).toBeNull();
-    const ok = await call("accountant", "POST", "/api/v1/employees", { ...EMP, createUser: { username: "new_staff1" } });
-    expect(ok.status).toBe(201);
+    expect((await call("accountant", "POST", "/api/v1/employees", { ...EMP, createUser: { username: "new_staff1" } })).status).toBe(403);
+    expect((await call("owner", "POST", "/api/v1/employees", { ...EMP, createUser: { username: "new_staff1" } })).status).toBe(201);
   });
 
   it("chủ tạo được manager nhưng không tạo thêm owner", async () => {
@@ -32,23 +32,25 @@ describe("HR: phân quyền vai trò khi tạo/khoá tài khoản", () => {
     expect((await call("owner", "POST", "/api/v1/employees", { ...EMP, createUser: { username: "new_own1", role: "owner" } })).status).toBe(403);
   });
 
-  it("kế toán không cho nghỉ việc/khoá được chủ, chính mình; chủ thì được với NV thường", async () => {
+  it("C-21: kế toán không cho nghỉ việc/khoá ai; chủ không tự khoá mình, cho nghỉ NV thường được", async () => {
     const t = { terminationDate: "2026-11-01", reason: "test" };
     expect((await call("accountant", "POST", "/api/v1/employees/720/terminate", t)).status).toBe(403);
     expect((await call("accountant", "POST", "/api/v1/employees/721/terminate", t)).status).toBe(403);
     expect((await db().prepare(`SELECT active FROM users WHERE id=1`).first<{ active: number }>())!.active).toBe(1);
-    expect((await call("accountant", "POST", "/api/v1/employees/711/terminate", t)).status).toBe(200);
+    expect((await call("accountant", "POST", "/api/v1/employees/711/terminate", t)).status).toBe(403);
+    expect((await call("owner", "POST", "/api/v1/employees/720/terminate", t)).status).toBe(403); // chủ không tự khoá chính mình
+    expect((await call("owner", "POST", "/api/v1/employees/711/terminate", t)).status).toBe(200);
   });
 });
 
 describe("Audit: không lộ dữ liệu nhạy cảm", () => {
   it("nhật ký cập nhật hồ sơ/hợp đồng/phụ cấp không chứa giá trị lương; GET /audit che với người không có hr.sensitive", async () => {
-    const e = await call("accountant", "POST", "/api/v1/employees", { ...EMP, baseSalary: 7_654_321, idNumber: "079999888777", bankAccount: "9988776655" });
+    const e = await call("owner", "POST", "/api/v1/employees", { ...EMP, baseSalary: 7_654_321, idNumber: "079999888777", bankAccount: "9988776655" });
     expect(e.status).toBe(201);
     const id = e.body.id;
-    expect((await call("accountant", "PUT", `/api/v1/employees/${id}`, { baseSalary: 8_765_432, bankAccount: "1122334455", version: e.body.version })).status).toBe(200);
-    expect((await call("accountant", "POST", `/api/v1/employees/${id}/contracts`, { type: "hd", startDate: "2026-03-01", salary: 6_543_219 })).status).toBe(201);
-    expect((await call("accountant", "POST", `/api/v1/employees/${id}/allowances`, { name: "xăng", amount: 432_109 })).status).toBe(201);
+    expect((await call("owner", "PUT", `/api/v1/employees/${id}`, { baseSalary: 8_765_432, bankAccount: "1122334455", version: e.body.version })).status).toBe(200);
+    expect((await call("owner", "POST", `/api/v1/employees/${id}/contracts`, { type: "hd", startDate: "2026-03-01", salary: 6_543_219 })).status).toBe(201);
+    expect((await call("owner", "POST", `/api/v1/employees/${id}/allowances`, { name: "xăng", amount: 432_109 })).status).toBe(201);
     const raw = (await db().prepare(`SELECT group_concat(COALESCE(before_json,'') || COALESCE(after_json,''), ' ') s FROM audit_log WHERE entity='employee' AND entity_id=?`).bind(String(id)).first<{ s: string }>())!.s;
     for (const v of ["8765432", "7654321", "1122334455", "6543219", "432109", "079999888777"]) expect(raw).not.toContain(v);
     expect(raw).toContain("baseSalary"); // vẫn biết trường nào đổi

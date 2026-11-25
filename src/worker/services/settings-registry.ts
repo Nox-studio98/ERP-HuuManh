@@ -123,7 +123,10 @@ export const SETTING_DEFS: SettingDef[] = [
   // ===== Hệ thống =====
   { key: "session.ttl_hours", group: "Hệ thống", label: "Thời hạn phiên đăng nhập", help: "Hết số giờ này phải đăng nhập lại.", type: "int", unit: "giờ", min: 1, max: 720 },
   { key: "timezone", group: "Hệ thống", label: "Múi giờ", help: "Cố định theo giờ Việt Nam.", type: "enum", options: o(["Asia/Ho_Chi_Minh", "Giờ Việt Nam (UTC+7)"]) },
-  { key: "backup.retention_days", group: "Hệ thống", label: "Số ngày giữ bản sao lưu", help: "Bản sao lưu R2 cũ hơn số ngày này sẽ bị xoá.", type: "int", unit: "ngày", min: 1, max: 3650 },
+  { key: "backup.retention_days", group: "Hệ thống", label: "Số ngày giữ bản sao lưu", help: "Bản sao lưu R2 cũ hơn số ngày này sẽ bị xoá (mặc định 90 ngày).", type: "int", unit: "ngày", min: 1, max: 3650 },
+  { key: "retention.gps_months", group: "Hệ thống", label: "Xoá toạ độ GPS chấm công sau", help: "Sau số tháng này, toạ độ GPS của lượt chấm công bị xoá (vẫn giữ giờ, loại, trạng thái). Tối thiểu 6 tháng.", type: "int", unit: "tháng", min: 6, max: 120 },
+  { key: "retention.employee_pii_months", group: "Hệ thống", label: "Che dữ liệu cá nhân nhân viên nghỉ việc sau", help: "Nhân viên nghỉ việc quá số tháng này: che CCCD, ngân hàng, địa chỉ, SĐT, email, ngày sinh. Họ tên, mã và dữ liệu lương/kế toán được giữ.", type: "int", unit: "tháng", min: 12, max: 240 },
+  { key: "retention.audit_years", group: "Hệ thống", label: "Giữ nhật ký thay đổi (audit) tối thiểu", help: "Chính sách ghi nhận: hiện hệ thống không tự xoá nhật ký audit.", type: "int", unit: "năm", min: 5, max: 50 },
   { key: "notify.email_provider", group: "Hệ thống", label: "Nhà cung cấp email thông báo", help: "fake = chỉ ghi nhật ký; cloudflare = gửi thật.", type: "enum", options: o(["fake", "Chạy thử (fake)"], ["cloudflare", "Cloudflare Email"]) },
 ];
 
