@@ -12,8 +12,8 @@ const titles = async (role: string) => (await bell(role)).items.map((n) => n.tit
 
 beforeAll(async () => {
   await seedBase();
-  await seedStaff({ userId: 900, username: "n6_nv", employeeId: 900 });
-  await seedStaff({ userId: 901, username: "n6_nv2", employeeId: 901 });
+  await seedStaff({ userId: 960, username: "n6_nv", employeeId: 960 });
+  await seedStaff({ userId: 961, username: "n6_nv2", employeeId: 961 });
   await flush();
 });
 
@@ -121,8 +121,8 @@ describe("C-27 nhân sự", () => {
   it("đổi ca: người nhận ca được hỏi trước, quản lý nhận sau khi đồng ý, kết quả báo cả hai", async () => {
     const tpl = await db().prepare(`INSERT INTO shift_templates(code, name, start_time, end_time) VALUES ('S6C','Sáng6c','07:00','12:00')`).run();
     const day = "2099-05-05";
-    const a = await db().prepare(`INSERT INTO shift_assignments(employee_id, work_date, shift_template_id, start_at, end_at) VALUES (900, ?, ?, '2099-05-05T00:00:00.000Z', '2099-05-05T05:00:00.000Z')`).bind(day, tpl.meta.last_row_id).run();
-    const sw = await call("n6_nv", "POST", `${V}/schedule/swaps`, { fromAssignmentId: a.meta.last_row_id, toEmployeeId: 901, reason: "Bận việc nhà" });
+    const a = await db().prepare(`INSERT INTO shift_assignments(employee_id, work_date, shift_template_id, start_at, end_at) VALUES (960, ?, ?, '2099-05-05T00:00:00.000Z', '2099-05-05T05:00:00.000Z')`).bind(day, tpl.meta.last_row_id).run();
+    const sw = await call("n6_nv", "POST", `${V}/schedule/swaps`, { fromAssignmentId: a.meta.last_row_id, toEmployeeId: 961, reason: "Bận việc nhà" });
     expect(sw.status).toBe(201);
     await flush();
     expect(await titles("n6_nv2")).toContain("Có người nhờ bạn đổi ca");
