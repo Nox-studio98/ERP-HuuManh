@@ -4,7 +4,7 @@ Trạng thái: **bản thiết kế chờ duyệt** (25/11/2026). Chưa có code
 
 ## 1. Bối cảnh và mục tiêu
 
-Cửa hàng nhập đơn mới (SO) từ **22:00 đến 00:00** mỗi ngày, sau đó liên hệ nhà cung cấp (NCC) để đặt hàng. Hiện tại:
+Cửa hàng nhập đơn mới (SO) vào **buổi tối**, thường **22:00–00:00**, có hôm muộn hơn; sau đó liên hệ nhà cung cấp (NCC) để đặt hàng. Hiện tại:
 
 - Đơn sỉ thiếu hàng bị từ chối khi xác nhận (`409 insufficient_stock`) và nằm ở trạng thái `new`; không ai biết thiếu bao nhiêu.
 - "Gợi ý đặt hàng" (M2-11) chỉ tạo **phiếu nhập kho nháp** theo tốc độ bán; không có chứng từ đặt hàng, NCC không xác nhận, không theo dõi giao thiếu/trễ.
@@ -21,7 +21,7 @@ Quyết định đã chốt với chủ dự án:
 
 | Câu hỏi | Chốt |
 |---|---|
-| Khi nào tạo PO | Chốt đêm (mặc định 00:00, chỉnh được), tạo **PO nháp**, quản lý duyệt rồi mới gửi |
+| Khi nào tạo PO | Chốt đêm **03:00** (chỉnh được; có nút "Chốt ngay" khi nhập xong sớm), tạo **PO nháp**, quản lý duyệt rồi mới gửi |
 | SO nào tính vào phần thiếu | Đơn sỉ (B2B) và đơn online/website |
 | NCC làm gì trên cổng | Xem và xác nhận PO (đề xuất sửa số lượng/giá/ngày giao); xem công nợ, sao kê, thanh toán |
 | Cổng đặt ở đâu | Worker website, trang `/ncc`, tài khoản NCC tách hẳn tài khoản khách |
@@ -31,9 +31,9 @@ Ngoài phạm vi đợt này: NCC khai phiếu giao trước, NCC gửi hoá đ�
 ## 2. Luồng tổng thể
 
 ```
-22:00–00:00  Nhập SO (sỉ + online)
+Tối (22:00–00:00, có khi muộn hơn)  Nhập SO (sỉ + online)
              └─ Xác nhận SO: giữ FEFO phần có tồn; phần thiếu → so_shortages (open)
-00:xx        Job chốt sổ (cron)
+03:00        Job chốt sổ (cron) — hoặc quản lý bấm "Chốt ngay"
              ├─ Gom thiếu theo sản phẩm (mọi SO còn thiếu, ngày giao ≤ chân trời đặt hàng)
              ├─ Trừ hàng sắp về: PO đã gửi/đã xác nhận còn chưa nhận
              ├─ Chọn NCC: NCC ưu tiên trong product_suppliers (rồi lead time ngắn nhất)
@@ -152,7 +152,9 @@ CREATE TABLE supplier_sessions ( ... );      -- như shop_sessions, cookie riên
 
 ### 4.2 Job chốt đêm
 
-- Chạy theo cron sau giờ chốt `po.cutoff_time` (mặc định `00:00` giờ VN; cron hiện có chạy mỗi 5 phút, job tự kiểm đã chạy cho ngày chốt chưa bằng `onceStmt`).
+- Chạy theo cron sau giờ chốt `po.cutoff_time` (mặc định `03:00` giờ VN; cron hiện có chạy mỗi 5 phút, job tự kiểm đã chạy cho ngày chốt chưa bằng `onceStmt`).
+- **Ngày chốt** là ngày làm việc của buổi tối nhập đơn: chốt lúc 03:00 ngày 26 thuộc ngày chốt 25 (các đơn nhập tối 25 đến trước 03:00 sáng 26).
+- **"Chốt ngay"** (quyền `purchasing.write`): chạy job cho ngày chốt hiện tại ngay lập tức; job 03:00 sau đó chỉ cập nhật PO nháp với đơn nhập thêm, không tạo trùng.
 - Nhu cầu mỗi sản phẩm = Σ `so_shortages.qty_milli` (status `open`, `need_by` ≤ hôm nay + `po.horizon_days`, mặc định 2) − hàng sắp về (PO `sent/confirmed/supplier_proposed/partially_received`: SL chốt hoặc SL đặt − đã nhận) − phần đã nằm trong PO nháp khác.
 - Chọn NCC: `product_suppliers.preferred = 1`, rồi lead time ngắn nhất. Sản phẩm **không có NCC** → ghi vào danh sách "Thiếu chưa có NCC" trên màn PO (không tự tạo).
 - Làm tròn lên theo `order_unit` và `min_order_milli` (dùng lại logic M2-11).
@@ -216,7 +218,7 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 | Khoá | Mặc định | Ý nghĩa |
 |---|---|---|
 | `po.allow_short_confirm` | 1 | Cho xác nhận SO thiếu hàng (ghi phần thiếu) |
-| `po.cutoff_time` | `00:00` | Giờ chốt đêm (giờ VN) |
+| `po.cutoff_time` | `03:00` | Giờ chốt đêm (giờ VN); đơn nhập trước giờ này thuộc ngày chốt hôm trước |
 | `po.horizon_days` | 2 | Gom thiếu của SO giao trong N ngày tới |
 | `po.auto_send` | 0 | (Để sau) tự gửi PO nhỏ không cần duyệt |
 | `approval.po_vnd` | 20.000.000 | PO vượt ngưỡng cần chủ duyệt |
@@ -247,7 +249,7 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 
 ## 10. Câu hỏi còn mở (có mặc định, chủ dự án xác nhận khi duyệt)
 
-1. Giờ chốt 00:00 và gom thiếu cho SO giao trong 2 ngày tới — đúng với nhịp nhập hàng chưa?
+1. ~~Giờ chốt~~ — đã chốt 03:00 (26/11/2026). Gom thiếu cho SO giao trong 2 ngày tới — đúng với nhịp nhập hàng chưa?
 2. Ngưỡng PO cần chủ duyệt: 20 triệu?
 3. Đơn online giao trong ngày vẫn chặn thiếu hàng (chỉ đơn đặt trước mới chờ hàng) — đồng ý?
 4. NCC có cần nhận email/Zalo khi có PO mới không, hay chỉ xem trên cổng?
