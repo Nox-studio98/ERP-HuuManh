@@ -6,12 +6,6 @@ import { Link, useQuery, usePageMeta } from "../lib/router";
 import { announce, ss, useAuth } from "../lib/store";
 import { CopyButton, ErrorBox, Field, Icon, Img, Loading, Modal, Notice } from "../ui";
 
-const BANKS: Record<string, string> = {
-  "970436": "Vietcombank", "970415": "VietinBank", "970418": "BIDV", "970405": "Agribank", "970422": "MB Bank", "970407": "Techcombank",
-  "970432": "VPBank", "970423": "TPBank", "970416": "ACB", "970403": "Sacombank", "970441": "VIB", "970448": "OCB", "970426": "MSB",
-  "970443": "SHB", "970437": "HDBank", "970454": "Viet Capital Bank", "970431": "Eximbank", "970429": "SCB", "970414": "Oceanbank",
-};
-
 const STATUS_TONE: Record<string, string> = { completed: "ok", cancelled: "bad", returned: "bad", delivery_failed: "bad", awaiting_payment: "warn", shipping: "info" };
 const FINAL = ["completed", "cancelled", "returned"];
 
@@ -30,7 +24,7 @@ export function TransferPanel({ t, code }: { t: Transfer; code: string }) {
   const left = useCountdown(t.expiresAt);
   const expired = left != null && left <= 0;
   const mm = left != null && left > 0 ? `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, "0")}` : null;
-  const bank = BANKS[t.bankBin] ?? `Ngân hàng (mã ${t.bankBin})`;
+  const bank = t.bankName ?? `Ngân hàng (mã ${t.bankBin})`;
   return (
     <section className="card-box transfer" aria-labelledby="h-tr" data-testid="transfer">
       <h2 id="h-tr">Chuyển khoản để hoàn tất đơn</h2>

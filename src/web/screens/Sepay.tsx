@@ -51,6 +51,17 @@ export default function Sepay() {
         ]} />} />
       {cfg.data && !cfg.data.enabled && <Banner>SePay đang <b>tắt</b>: giao dịch gửi tới (nếu có) đều được ghi là chưa khớp. Bật ở Cài đặt → Thanh toán SePay sau khi đã tạo webhook (xem docs/SEPAY.md).</Banner>}
       {cfg.data?.enabled && !cfg.data.webhookSecretSet && <Banner tone="danger">Chưa đặt secret SEPAY_WEBHOOK_SECRET: mọi webhook SePay đều bị từ chối.</Banner>}
+      {cfg.data?.bankCheck?.mismatch && (
+        <Banner tone="danger">
+          Ngân hàng nhận tiền trong Cài đặt là <b>{cfg.data.bankCheck.selected?.shortName ?? `mã ${cfg.data.bank?.bin}`}</b>, nhưng giao dịch SePay gần nhất đến từ <b>{cfg.data.bankCheck.lastGateway}</b>.
+          Mã QR khách quét đang trỏ sai ngân hàng: sửa ở Cài đặt → Online/website → Ngân hàng nhận tiền.
+        </Banner>
+      )}
+      {cfg.data?.bankCheck?.selected?.vaOnly && (
+        <Banner>
+          <b>{cfg.data.bankCheck.selected.shortName}</b>: {cfg.data.bankCheck.selected.note} Nếu tài khoản liên kết SePay bằng <b>kết nối API không có SMS</b> và thuộc loại này, ô Số tài khoản nhận tiền phải là <b>số VA</b>. Tài khoản có kết nối SMS nhận cả số tài khoản chính.
+        </Banner>
+      )}
       <KpiRow cols={2} items={[
         { label: "Chưa khớp", value: sum?.unmatched?.count ?? "—", sub: sum ? money(sum.unmatched.amount) : undefined, tone: sum?.unmatched?.count ? "warn" : undefined, onClick: () => setSt("unmatched") },
         { label: "Chờ hoàn tiền", value: sum?.refundPending?.count ?? "—", sub: sum ? money(sum.refundPending.amount) : undefined, tone: sum?.refundPending?.count ? "danger" : undefined, onClick: () => setSt("refund_pending") },

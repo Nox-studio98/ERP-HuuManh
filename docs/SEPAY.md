@@ -40,6 +40,14 @@ Danh sách chưa khớp / chờ hoàn / đã khớp / đã hoàn / bỏ qua / "Q
 ### Đối soát (an toàn khi lỡ webhook)
 Cron mỗi 30 phút gọi `GET {sepay.api_base}/transactions?since_id=<con trỏ>&transaction_date_sort=asc&transfer_type=in&per_page=100` với `SEPAY_API_KEY`; con trỏ lưu `sepay_state.api_cursor`. Chỉ chạy khi có secret và `sepay.enabled = 1`. Cùng logic khớp với webhook; giao dịch webhook đã xử lý được nhận ra (cùng tài khoản + số tiền + thời điểm + mã [+ mã tham chiếu]) và **không xử lý lại**. Cũng xử lý lại các sự kiện kẹt ở "đang xử lý". Có thể bấm tay: `POST /api/v1/sepay/reconcile` (cần `finance.write`).
 
+## 1b. Ngân hàng nhận tiền (Cài đặt → Online/website)
+
+Chọn ở ô **Ngân hàng nhận tiền**: danh sách chỉ gồm 12 ngân hàng SePay hỗ trợ webhook (nguồn và ngày lấy ghi trong `src/worker/lib/vn-banks.ts`). Mã BIN dùng tạo VietQR lấy tự động, không gõ tay.
+
+- Phải **trùng ngân hàng của tài khoản đã liên kết trên SePay**. Nếu lệch, QR khách quét chuyển sang ngân hàng khác; màn **Giao dịch SePay** báo đỏ khi giao dịch SePay gần nhất đến từ ngân hàng khác ngân hàng đã chọn.
+- Ngân hàng **chỉ nhận qua VA khi kết nối API không có SMS** (Vietcombank, MSB, OCB, KienlongBank; BIDV cá nhân/hộ kinh doanh; VietinBank doanh nghiệp dùng MAP — riêng MAP thì kể cả có SMS; VPBank NEO tuỳ cách liên kết): ô **Số tài khoản nhận tiền** phải là **số VA**, nếu không SePay sẽ không báo về giao dịch. Tài khoản **có kết nối SMS** (chỉ SMS hoặc API + SMS) ở các ngân hàng này nhận cả giao dịch vào số tài khoản chính (tài liệu SePay: `sepay-webhooks/tai-khoan-ngan-hang`). Trong ô chọn, các ngân hàng này ghi "API: chỉ qua VA".
+- VietinBank cá nhân / hộ kinh doanh: nội dung chuyển khoản phải có `SEVQR` (QR hiện chưa tự thêm `SEVQR` — xem bước 1 của phần go-live bên dưới).
+
 ## 2. Cấu trúc mã thanh toán cần tạo trên my.sepay.vn
 **Công ty → Cấu hình chung → Cấu trúc mã thanh toán**, bật "Nhận diện mã thanh toán", tạo **3 mẫu** (mẫu đầu tiên là mặc định, không xoá được):
 
