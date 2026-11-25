@@ -80,7 +80,7 @@ export function NumberPad({ value, onChange }: { value: number; onChange: (n: nu
   );
 }
 
-export function Sheet({ open, onClose, title, children, footer, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Sheet({ open, onClose, title, children, footer, wide, portal }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; wide?: boolean; /** render ra document.body (dùng khi mở từ trong khung chi tiết sticky) */ portal?: boolean }) {
   const id = useId();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -93,7 +93,6 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
     return () => { document.removeEventListener("keydown", k); document.body.style.overflow = o; prev?.focus?.(); };
   }, [open]); // eslint-disable-line
   if (!open) return null;
-  // Render ra document.body: Sheet mở từ trong khung chi tiết (sticky) không bị tiêu đề bảng / thanh trên che
   const node = (
     <div className="sheet-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={"sheet" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1} ref={ref}>
@@ -103,7 +102,7 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
       </div>
     </div>
   );
-  return typeof document === "undefined" ? node : createPortal(node, document.body);
+  return portal && typeof document !== "undefined" ? createPortal(node, document.body) : node;
 }
 
 export const Card = ({ title, children, className = "", actions }: { title?: string; children: ReactNode; className?: string; actions?: ReactNode }) => (

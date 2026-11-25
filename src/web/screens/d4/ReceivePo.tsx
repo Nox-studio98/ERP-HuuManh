@@ -11,7 +11,7 @@ import { ymd } from "../b2b/kit";
 export default function ReceivePoSheet({ poId, onClose, onDone }: { poId?: number; onClose: () => void; onDone?: () => void }) {
   const [pick, setPick] = useState<number | null>(poId ?? null);
   return (
-    <Sheet open wide onClose={onClose} title={pick ? "Nhận hàng theo PO" : "Chọn PO cần nhận hàng"}>
+    <Sheet portal open wide onClose={onClose} title={pick ? "Nhận hàng theo PO" : "Chọn PO cần nhận hàng"}>
       {pick == null ? <PickPo onPick={setPick} /> : <ReceiveForm id={pick} onBack={poId ? undefined : () => setPick(null)} onClose={onClose} onDone={onDone} />}
     </Sheet>
   );

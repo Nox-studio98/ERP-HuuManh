@@ -276,5 +276,6 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 | 11 | Chỉ nhận hàng theo PO mới tự giữ hàng cho SO chờ (phiếu nhập thường chưa tự giữ) | Phạm vi bước 3; phiếu nhập thường vẫn được tính vào tồn, phần thiếu quay lại nhu cầu ở lần chốt sau |
 | 12 | Dòng thiếu của PO chưa có giá (sản phẩm chưa từng nhập) để `unit_cost = NULL`; người lập điền giá ở PO nháp hoặc khi nhận | Giá gợi ý lấy từ lô nhập gần nhất của NCC |
 | 13 | Thông báo "SO đã đủ hàng" chỉ gửi khi đơn không còn dòng thiếu nào | Tránh thông báo lặp theo từng dòng |
+| 14 | `Sheet` (`components/ui.tsx`) thêm prop tuỳ chọn `portal` (render ra `document.body`); chỉ các sheet của màn Đơn đặt NCC và Nhận hàng theo PO bật | Sheet mở từ trong khung chi tiết bị tiêu đề bảng sticky che; dùng prop tuỳ chọn để không đổi hành vi các màn khác |
 
 Việc còn lại cho đợt cổng NCC (bước 4–5): `supplier_accounts`/`supplier_sessions`, mời NCC từ màn Nhà cung cấp, `/api/ncc/*` (xem PO, xác nhận/đề xuất/từ chối qua `applySupplierResponse`, công nợ, sao kê, thanh toán), thông báo NCC, màn hình `/ncc`, test IDOR/CSRF/rate limit, `e2e/ncc.mjs`.

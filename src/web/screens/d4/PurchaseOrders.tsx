@@ -209,7 +209,7 @@ function PoDetail({ id, onClose, onChanged }: { id: number; onClose: () => void;
 function ReasonSheet({ title, confirm, danger, onClose, onSubmit, children }: { title: string; confirm: string; danger?: boolean; onClose: () => void; onSubmit: (reason: string) => Promise<void>; children?: React.ReactNode }) {
   const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   return (
-    <Sheet open onClose={onClose} title={title} footer={<Button block variant={danger ? "danger" : "primary"} loading={busy} disabled={reason.trim().length < 3} onClick={async () => { setBusy(true); try { await onSubmit(reason.trim()); } catch { /* toast */ } finally { setBusy(false); } }}>{confirm}</Button>}>
+    <Sheet portal open onClose={onClose} title={title} footer={<Button block variant={danger ? "danger" : "primary"} loading={busy} disabled={reason.trim().length < 3} onClick={async () => { setBusy(true); try { await onSubmit(reason.trim()); } catch { /* toast */ } finally { setBusy(false); } }}>{confirm}</Button>}>
       <div className="stack">{children}<TextArea label="Lý do" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
     </Sheet>
   );
@@ -236,7 +236,7 @@ function RespondSheet({ po, onClose, onDone }: { po: any; onClose: () => void; o
   };
   const valid = action === "reject" ? note.trim().length >= 3 : action === "propose" ? (date !== (po.expectedDate ?? "") || po.lines.some((l: any) => Math.round((qty[l.id] ?? 0) * 1000) !== l.qtyMilli || (costVisible && (cost[l.id] ?? 0) !== (l.unitCost ?? 0)))) : true;
   return (
-    <Sheet open wide onClose={onClose} title={`NCC phản hồi ${po.code}`} footer={<Button block loading={busy} disabled={!valid} onClick={submit}>Ghi nhận</Button>}>
+    <Sheet portal open wide onClose={onClose} title={`NCC phản hồi ${po.code}`} footer={<Button block loading={busy} disabled={!valid} onClick={submit}>Ghi nhận</Button>}>
       <div className="stack">
         <Banner tone="info">Dùng khi NCC trả lời qua điện thoại / Zalo. Khi có cổng NCC, phản hồi sẽ tự vào đây.</Banner>
         <Segmented value={action} onChange={setAction} options={[{ v: "confirm", label: "Xác nhận đủ" }, { v: "propose", label: "Đề xuất sửa" }, { v: "reject", label: "Từ chối" }]} />
@@ -283,7 +283,7 @@ function PoForm({ po, preset, onClose, onSaved }: { po?: any; preset?: { supplie
     } catch { /* toast */ } finally { setBusy(false); }
   };
   return (
-    <Sheet open wide onClose={onClose} title={po ? `Sửa ${po.code}` : "Tạo đơn đặt NCC"} footer={<Button block size="lg" loading={busy} disabled={!supplier || !lines.length || lines.some((l) => !(l.qty > 0))} onClick={save}>{po ? "Lưu" : "Tạo PO nháp"}</Button>}>
+    <Sheet portal open wide onClose={onClose} title={po ? `Sửa ${po.code}` : "Tạo đơn đặt NCC"} footer={<Button block size="lg" loading={busy} disabled={!supplier || !lines.length || lines.some((l) => !(l.qty > 0))} onClick={save}>{po ? "Lưu" : "Tạo PO nháp"}</Button>}>
       <div className="stack">
         {po ? <div><b>{po.supplierName}</b></div> : <SupplierSelect value={supplier} onChange={setSupplier} />}
         <Input label="Ngày giao dự kiến" type="date" min={todayVN()} value={date} onChange={(e) => setDate(e.target.value)} />
