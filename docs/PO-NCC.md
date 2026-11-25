@@ -247,9 +247,12 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 
 Ước lượng: 2 đợt agent (bước 1–3 phía ERP; bước 4–5 cổng NCC), mỗi đợt một PR.
 
-## 10. Câu hỏi còn mở (có mặc định, chủ dự án xác nhận khi duyệt)
+## 10. Câu hỏi còn mở
 
-1. ~~Giờ chốt~~ — đã chốt 03:00 (25/11/2026). Gom thiếu cho SO giao trong 2 ngày tới — đúng với nhịp nhập hàng chưa?
-2. Ngưỡng PO cần chủ duyệt: 20 triệu?
-3. Đơn online giao trong ngày vẫn chặn thiếu hàng (chỉ đơn đặt trước mới chờ hàng) — đồng ý?
-4. NCC có cần nhận email/Zalo khi có PO mới không, hay chỉ xem trên cổng?
+| # | Câu hỏi | Trạng thái |
+|---|---|---|
+| 1 | Giờ chốt | ✅ Chốt 03:00, có nút "Chốt ngay" (25/11/2026) |
+| 2 | Gom thiếu cho SO giao trong bao nhiêu ngày tới (`po.horizon_days`) | ⏳ Chờ khách trả lời. Triển khai với mặc định **2 ngày**, nhãn "Cần xác nhận" trong Cài đặt |
+| 3 | Ngưỡng PO cần chủ duyệt (`approval.po_vnd`) | ⏳ Chờ khách trả lời. Triển khai với mặc định **20.000.000 đ**, nhãn "Cần xác nhận" |
+| 4 | Đơn online giao trong ngày vẫn chặn thiếu hàng; chỉ đơn đặt trước mới chờ hàng | ✅ Đồng ý (25/11/2026) |
+| 5 | NCC nhận email/Zalo khi có PO mới | ⏳ Chưa chốt. Mặc định: chỉ thông báo trên cổng; email bật được sau khi có dịch vụ email thật |
