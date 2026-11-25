@@ -9,6 +9,7 @@ import { parseBody, pageParams, likeOf } from "../services/http";
 import { assignEvent, ensurePayCode, invoiceState, resolveEvent, sepayConfig } from "../services/sepay";
 import { reconcileSepay } from "../services/sepay-reconcile";
 import { buildVietQr } from "../../shop/worker/lib/vietqr";
+import { bankByBin, bankByGateway } from "../lib/vn-banks";
 
 /** SePay: danh sách giao dịch chưa khớp / chờ hoàn, gán tay, đánh dấu đã hoàn / bỏ qua; mã thanh toán nợ sỉ; QR POS. Webhook công khai nằm ở routes/webhooks.ts. */
 export const sepayRoutes = new Hono<AppBindings>();
@@ -65,7 +66,7 @@ sepayRoutes.post("/sepay/events/:id/resolve", requirePerm("finance.write"), asyn
 /** Cấu hình hiển thị cho giao diện (không lộ gì ngoài STK cửa hàng đã công khai trên website). */
 sepayRoutes.get("/sepay/config", requirePerm("finance.view"), async (c) => {
   const cfg = await sepayConfig(c.env.DB);
-  return c.json({ enabled: cfg.enabled, flow: cfg.flow, prefixB2b: cfg.prefixB2b, prefixPos: cfg.prefixPos, bank: cfg.bank, apiKeySet: !!c.env.SEPAY_API_KEY, webhookSecretSet: !!c.env.SEPAY_WEBHOOK_SECRET });
+  return c.json({ enabled: cfg.enabled, flow: cfg.flow, prefixB2b: cfg.prefixB2b, prefixPos: cfg.prefixPos, bank: cfg.bank, apiKeySet: !!c.env.SEPAY_API_KEY, webhookSecretSet: !!c.env.SEPAY_WEBHOOK_SECRET, bankCheck: await bankCheck(c.env.DB, cfg.bank.bin) });
 });
 
 /** Mã thanh toán + VietQR cho một hoá đơn sỉ còn nợ (nhân viên đọc cho khách hoặc gửi khách). */
@@ -131,3 +132,20 @@ sepayRoutes.post("/pos/qr-requests/:id/cancel", requirePerm("pos.sell"), async (
   const r = await c.env.DB.prepare(`UPDATE pos_qr_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending'`).bind(id, c.get("user").id).run();
   return c.json({ ok: true, cancelled: r.meta.changes > 0 });
 });
+
+/**
+ * Kiểm tra cấu hình ngân hàng nhận tiền: ngân hàng đã chọn có trong danh sách SePay hỗ trợ không, có "chỉ nhận qua VA" không,
+ * và có trùng ngân hàng của giao dịch tiền vào SePay gửi gần nhất không (trường `gateway`). Chỉ đọc, không lộ dữ liệu khách.
+ */
+async function bankCheck(db: D1Database, bin: string) {
+  const sel = bankByBin(bin);
+  const last = await db.prepare(`SELECT gateway FROM sepay_events WHERE transfer_type = 'in' AND COALESCE(gateway, '') <> '' ORDER BY id DESC LIMIT 1`).first<{ gateway: string }>();
+  const seen = last ? bankByGateway(last.gateway) : undefined;
+  const mismatch = !!last && (!seen || seen.bin !== bin);
+  return {
+    selected: sel ? { bin: sel.bin, shortName: sel.shortName, vaOnly: sel.vaOnly ?? null, note: sel.note ?? null } : null,
+    supported: !!sel,
+    lastGateway: last?.gateway ?? null,
+    mismatch,
+  };
+}

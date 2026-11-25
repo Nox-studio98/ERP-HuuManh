@@ -1,4 +1,5 @@
 import { CUSTOMER_LABEL, type OnlineStatus } from "../../../worker/services/online-orders";
+import { bankByBin } from "../../../worker/lib/vn-banks";
 import { earnFor } from "../../../worker/services/loyalty-points";
 import { buildVietQr } from "./vietqr";
 import { imageUrl, last4, maskPhone, parseImages, setting } from "./util";
@@ -14,6 +15,8 @@ export interface TransferInfo {
   amount: number;
   content: string;
   qrPayload: string;
+  /** Tên ngắn ngân hàng theo danh sách dùng chung (null nếu BIN lạ). */
+  bankName: string | null;
   expiresAt: string | null;
 }
 
@@ -29,7 +32,7 @@ export async function transferInfoFor(db: D1Database, order: { id: number; statu
   const accountNo = await setting(db, "payment.bank_account", "");
   const accountName = await setting(db, "payment.bank_account_name", "");
   return {
-    bankBin, accountNo, accountName, amount: it.amount, content: it.transfer_content,
+    bankBin, bankName: bankByBin(bankBin)?.shortName ?? null, accountNo, accountName, amount: it.amount, content: it.transfer_content,
     qrPayload: buildVietQr({ bankBin, accountNo, amount: it.amount, content: it.transfer_content }),
     expiresAt: it.expires_at,
   };

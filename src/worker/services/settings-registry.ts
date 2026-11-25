@@ -4,6 +4,8 @@
  * Khoá lạ (không có ở đây) chỉ hiển thị thô, chỉ đọc. Secret thật (API key, token) nằm ở env/secrets Worker, KHÔNG nằm trong bảng settings;
  * `sensitive: true` / mẫu tên bí mật → giá trị luôn bị che, không bao giờ trả ra API hay ghi vào nhật ký.
  */
+import { VN_BANKS, bankOptionLabel } from "../lib/vn-banks";
+
 export type SettingType = "vnd" | "bp" | "int" | "bool" | "enum" | "multi" | "intlist" | "text" | "pit";
 
 export const GROUPS = [
@@ -78,7 +80,7 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "online.pack_recalc_shipping", group: "Online/website", label: "Xét lại ngưỡng miễn phí giao sau khi cân hàng", help: "Bật: tiền hàng thực tế dưới ngưỡng miễn phí giao của khu vực thì thu phí giao hàng (và ngược lại).", type: "bool" },
   { key: "b2b.backorder_on_short", group: "Bán hàng & giá", label: "Giao thiếu đơn sỉ: tự tạo đơn bổ sung", help: "Bật: phần đặt nhưng chưa giao (không phải hàng bị từ chối) được tạo thành đơn bổ sung chờ xác nhận. Có thể chọn lại ở từng lần xác nhận giao.", type: "bool" },
   { key: "payment.methods", group: "Online/website", label: "Phương thức thanh toán đơn online", help: "COD, chuyển khoản, cổng thanh toán.", type: "multi", options: o(["cod", "COD"], ["transfer", "Chuyển khoản"], ["gateway", "Cổng thanh toán"]) },
-  { key: "payment.bank_bin", group: "Online/website", label: "Mã BIN ngân hàng nhận tiền", help: "Mã 6 chữ số dùng tạo VietQR (970436 = Vietcombank).", type: "text", maxLen: 6 },
+  { key: "payment.bank_bin", group: "Online/website", label: "Ngân hàng nhận tiền", help: "Ngân hàng của tài khoản nhận tiền, dùng tạo mã VietQR. Phải trùng ngân hàng đã liên kết trên SePay. Ngân hàng \"chỉ nhận qua VA\" cần nhập số VA vào ô Số tài khoản (xem docs/SEPAY.md).", type: "enum", options: VN_BANKS.map((b) => ({ value: b.bin, label: bankOptionLabel(b) })) },
   { key: "payment.bank_account", group: "Online/website", label: "Số tài khoản nhận tiền", help: "Hiển thị cho khách khi chuyển khoản.", type: "text", maxLen: 30 },
   { key: "payment.bank_account_name", group: "Online/website", label: "Tên chủ tài khoản", help: "Viết hoa không dấu, đúng như ngân hàng.", type: "text", maxLen: 100 },
   { key: "shop.name", group: "Online/website", label: "Tên cửa hàng trên website", help: "Hiển thị trên website bán hàng và email.", type: "text", maxLen: 100 },
@@ -198,7 +200,6 @@ export function validateSetting(def: SettingDef, raw: unknown): { value: string 
     }
     case "text": {
       if (s.length > (def.maxLen ?? 200)) return { error: `Tối đa ${def.maxLen ?? 200} ký tự` };
-      if (def.key === "payment.bank_bin" && s && !/^\d{6}$/.test(s)) return { error: "Mã BIN gồm đúng 6 chữ số" };
       if (def.key === "payment.bank_account" && s && !/^[0-9A-Za-z]{4,30}$/.test(s)) return { error: "Số tài khoản chỉ gồm chữ số/chữ cái (4–30 ký tự)" };
       if (def.key === "shop.name" && !s) return { error: "Không được để trống" };
       if (def.key === "po.cutoff_time" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return { error: "Giờ chốt dạng HH:MM, ví dụ 03:00" };
