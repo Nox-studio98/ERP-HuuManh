@@ -122,3 +122,6 @@ Secrets thêm cho shop: `TURNSTILE_SECRET`, `PAYMENT_WEBHOOK_SECRET`, `VAPID_PRI
 | T27 | Gợi ý giá tự động làm đổi giá ngoài ý muốn | M7 chỉ gợi ý; chấp nhận gợi ý đi qua đúng luồng M3 (`applyBulkPrices`: lịch sử + duyệt), có sàn giá vốn + biên mục tiêu. |
 
 Secret thêm: `ATTENDANCE_QR_SECRET` (ERP).
+
+## 11. Bổ sung — SePay (xác nhận chuyển khoản)
+Secret thêm (ERP, `wrangler secret put`): `SEPAY_WEBHOOK_SECRET` (khoá HMAC-SHA256 của webhook; **rỗng = từ chối mọi request**) và `SEPAY_API_KEY` (API key v2 để đối soát; thiếu thì không đối soát). Không đưa vào code/commit/log; nghi lộ → tạo lại ở my.sepay.vn rồi `wrangler secret put` khoá mới. Bề mặt công khai mới: `POST /api/integrations/sepay/webhook` (chữ ký HMAC trên bytes gốc + timestamp ±5 phút, so sánh thời gian hằng, body ≤ 64 KB). Giao dịch lưu ở `sepay_events` (có nội dung chuyển khoản = dữ liệu cá nhân, chỉ người có quyền tài chính xem; log chỉ có id/mã/số tiền/4 số cuối tài khoản). Tiền chỉ ghi nhận khi đúng mã, đúng tài khoản, đúng số tiền; còn lại vào danh sách chưa khớp / chờ hoàn để người xử lý (có audit). Chi tiết: `docs/SEPAY.md`.

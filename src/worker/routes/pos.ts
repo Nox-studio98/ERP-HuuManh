@@ -16,6 +16,7 @@ import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-c
 import { assertStmt } from "../services/guard";
 import { assertPeriodOpen } from "../services/period";
 import { retireStaleDraft } from "../services/online-ops";
+import { sepayConfig } from "../services/sepay";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 
 export const posRoutes = new Hono<AppBindings>();
@@ -210,7 +211,7 @@ const checkoutSchema = z.object({
     .min(1)
     .max(200),
   discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm cả đơn
-  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().max(100).optional() })).max(10),
+  payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().max(100).optional(), qrRequestId: z.number().int().positive().optional() })).max(10),
   note: z.string().max(500).optional(),
   approvalId: z.number().int().positive().optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
@@ -390,6 +391,25 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const payFunds = new Map<string, number>();
   for (const p of recorded) if (!payFunds.has(p.method)) payFunds.set(p.method, await fundFor(db, storeId, p.method, shift));
 
+  // SePay: khi bật xác nhận QR tự động, thanh toán "QR" phải gắn với mã QR đã nhận đủ tiền (webhook), mỗi mã chỉ dùng một lần
+  const qrUsed: { id: number; code: string }[] = [];
+  const sepayCfg = await sepayConfig(db);
+  if (sepayCfg.enabled && sepayCfg.flow.pos) {
+    for (const p of recorded) {
+      if (p.method !== "qr") continue;
+      const q = p.qrRequestId
+        ? await db
+            .prepare(`SELECT r.id, r.amount, r.status, r.user_id, r.order_id, pc.code FROM pos_qr_requests r JOIN pay_codes pc ON pc.kind = 'pos' AND pc.ref_id = r.id WHERE r.id = ?`)
+            .bind(p.qrRequestId)
+            .first<any>()
+        : null;
+      if (!q || q.status !== "paid" || q.user_id !== user.id || q.order_id || q.amount !== p.amount || qrUsed.some((x) => x.id === q.id))
+        throw new AppError(422, "qr_not_confirmed", "Mã QR chưa nhận được tiền (hoặc đã dùng / sai số tiền). Hiện mã QR và chờ báo đã nhận tiền.", { qrRequestId: p.qrRequestId ?? null });
+      qrUsed.push({ id: q.id, code: q.code });
+      p.ref = q.code;
+    }
+  }
+
   // Bước B: phân bổ FEFO + kiểm tra duyệt (có thể chạy lại 1 lần khi tồn đổi — EC-02)
   const discountBp = await getSettingInt(db, "approval.discount_pct_bp", 1000);
   let approvalUsed: number | null = null;
@@ -469,6 +489,11 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     });
     for (const [pid, alloc] of p.productAllocs) stmts.push(...moveStatements(db, pid, alloc, -1, "sale", "order", orderId, user.id));
     stmts.push(...promoStmts);
+    for (const u of qrUsed)
+      stmts.push(
+        assertStmt(db, "pos.qr_use", `SELECT status = 'paid' AND order_id IS NULL FROM pos_qr_requests WHERE id = ?`, [u.id]),
+        db.prepare(`UPDATE pos_qr_requests SET status = 'used', order_id = ? WHERE id = ? AND status = 'paid'`).bind(orderId, u.id),
+      );
     for (const pay of recorded) {
       if (pay.amount <= 0) continue;
       stmts.push(

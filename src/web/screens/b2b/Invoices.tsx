@@ -5,6 +5,7 @@ import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, Kp
 import { toast } from "../../components/toast";
 import { downloadHref, money, qtyText } from "../../format";
 import { useCan } from "../../store";
+import { QrImage } from "../../components/QrImage";
 import { EINVOICE, INVOICE_KIND, Lnk, einvTone, qparam, ymd } from "./kit";
 
 export default function Invoices() {
@@ -57,6 +58,27 @@ export default function Invoices() {
   );
 }
 
+/** Mã thanh toán SePay + VietQR của hoá đơn còn nợ: khách chuyển khoản kèm mã này thì tự thu nợ và gạch đúng hoá đơn. */
+function SepayPayCard({ id, outstanding }: { id: number; outstanding: number }) {
+  const info = useAsync(() => get(`/sepay/invoices/${id}/pay-info`).catch(() => ({ available: false })), [id, outstanding]);
+  const p = info.data;
+  if (!p?.available) return null;
+  return (
+    <Card title="Thu nợ bằng chuyển khoản (tự động)" className="flat">
+      <div className="pay-card" data-testid="sepay-pay-card">
+        <QrImage value={p.qrPayload} size={168} label={`VietQR thu nợ hoá đơn ${p.invoiceCode}`} />
+        <dl className="pay-info">
+          <div><dt>Số tài khoản</dt><dd className="num">{p.bank.account}</dd></div>
+          <div><dt>Chủ tài khoản</dt><dd>{p.bank.name}</dd></div>
+          <div><dt>Số tiền</dt><dd className="money">{money(p.amount)}</dd></div>
+          <div><dt>Nội dung</dt><dd><b className="num" data-testid="sepay-code">{p.code}</b></dd></div>
+        </dl>
+      </div>
+      <p className="hint">Khách phải chuyển <b>đúng số tiền còn nợ</b> và giữ nguyên nội dung. Tiền về, hệ thống tự lập phiếu thu và gạch nợ đúng hoá đơn này; sai số tiền thì giao dịch nằm ở mục “Giao dịch SePay”.</p>
+    </Card>
+  );
+}
+
 function InvoiceDetail({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
   const can = useCan();
   const d = useAsync(() => get(`/invoices/${id}`), [id]);
@@ -81,6 +103,7 @@ function InvoiceDetail({ id, onClose, onChanged }: { id: number; onClose: () => 
               {can("invoices.issue") && i.einvoiceStatus !== "issued" && i.einvoiceStatus !== "not_required" && i.status === "open" && <div><Button loading={busy} variant={i.einvoiceStatus === "failed" ? "primary" : "soft"} onClick={retry}>{i.einvoiceStatus === "failed" ? "Thử phát hành lại" : "Phát hành HĐĐT"}</Button></div>}
             </div>
           </Card>
+          {i.kind !== "adjustment" && i.status === "open" && i.outstanding > 0 && can("debt.view") && <SepayPayCard id={i.id} outstanding={i.outstanding} />}
           <DataTable rows={i.lines} rowKey={(l: any) => l.id} emptyState={<div className="hint">Hoá đơn chưa có dòng hàng.</div>} cols={[
             { key: "n", label: "Nội dung", title: true, render: (l: any) => l.description },
             { key: "q", label: "SL", right: true, render: (l: any) => qtyText(l.qtyMilli, l.unit) },

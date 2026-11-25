@@ -8,6 +8,7 @@ import { runDueCompetitorCrawls } from "./services/competitor-cron";
 import { generateRecurringOrders } from "./services/recurring-cron";
 import { cleanupGuardsStmt } from "./services/guard";
 import { sweepStaleDrafts } from "./services/online-ops";
+import { reconcileSepay } from "./services/sepay-reconcile";
 import { cancelStaleCodOrders } from "../shop/worker/lib/cod-expiry";
 
 /** Chạy một bước cron độc lập: lỗi một bước không chặn bước khác. */
@@ -35,6 +36,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
     await step("stale_drafts", () => sweepStaleDrafts(env.DB)); // audit #16: đơn nháp mồ côi chặn đồng bộ offline
     await step("stale_cod", () => cancelStaleCodOrders(env)); // audit: đơn COD khách vãng lai chưa xác nhận quá hạn → nhả tồn
     await step("hr_alerts", () => hrAttendanceAlerts(env)); // Đợt 4 — M9-23
+    await step("sepay_reconcile", () => reconcileSepay(env)); // chỉ chạy khi có SEPAY_API_KEY
     await step("competitor_crawl", () => runDueCompetitorCrawls(env)); // Đợt 4 — M7
     return;
   }

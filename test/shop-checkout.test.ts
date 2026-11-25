@@ -16,7 +16,7 @@ describe("checkout COD", () => {
     const r = await call("POST", "/api/checkout", checkoutBody());
     expect(r.status).toBe(201);
     const v = r.body;
-    expect(v.code).toMatch(/^DH-\d{8}-\d{4}$/);
+    expect(v.code).toMatch(/^DH\d{12}$/);
     expect(v).toMatchObject({
       status: "new", statusLabel: "Chờ xác nhận", slotDate: tomorrow(), slotLabel: "8:00–10:00", receiverName: ADDR.receiverName,
       receiverPhoneMasked: "******4567", paymentMethod: "cod", paymentStatus: "unpaid", subtotal: 150000, shippingFee: 20000, discount: 0, total: 170000,
@@ -149,7 +149,7 @@ describe("transfer payment", () => {
     expect(r.body).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending", paymentMethod: "transfer" });
     const t = r.body.transfer;
     expect(t).toMatchObject({ bankBin: "970436", accountNo: "0123456789", accountName: "HUU MANH", amount: 170000 });
-    expect(t.content).toBe(`HM ${r.body.code.replaceAll("-", "")}`);
+    expect(t.content).toBe(r.body.code);
     expect(t.qrPayload.slice(-8, -4)).toBe("6304");
     expect(t.qrPayload.slice(-4)).toBe(crc16ccitt(t.qrPayload.slice(0, -4)));
     expect(t.qrPayload).toContain("5406170000");

@@ -618,3 +618,14 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .dt-table td:last-child .btn.sm { white-space: nowrap; }
 /* Ô nhập lý do trong banner (POS tự duyệt): cách đoạn giải thích một khoảng */
 .banner .field { margin-top: var(--s-2); }
+
+/* ===== SePay: thẻ mã thanh toán + QR POS ===== */
+.pay-card { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
+.pay-card .qr { border: 1px solid var(--line); border-radius: var(--r-2, 8px); flex: none; }
+.pay-info { margin: 0; display: grid; gap: 6px; flex: 1 1 200px; min-width: 0; }
+.pay-info > div { display: flex; justify-content: space-between; gap: var(--s-2); }
+.pay-info dt { color: var(--muted); }
+.pay-info dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.qr-wait { display: flex; flex-direction: column; align-items: center; gap: var(--s-2); text-align: center; }
+.qr-wait.paid { color: var(--accent); }
+.clip { display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }

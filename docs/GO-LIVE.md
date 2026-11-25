@@ -15,7 +15,7 @@ Ký hiệu: 👤 = chủ cửa hàng / người phụ trách dự án làm · �
 | 0.3 | Kế toán đối chiếu biểu thuế TNCN 2026 (5 bậc, giảm trừ 15,5/6,2 tr) | 👤 | Sửa được trên màn Cài đặt nếu khác |
 | 0.4 | Tên miền cho ERP và website (vd `erp.<tenmien>`, `<tenmien>`) | 👤 | Bản demo dùng `*.workers.dev` |
 | 0.5 | Tài khoản ngân hàng nhận tiền thật (VietQR), sao kê định dạng để đối soát | 👤 | Demo đang là `0000000000` giả |
-| 0.6 | Quyết định tích hợp: MISA meInvoice (cần tài liệu API MISA cấp), cổng thanh toán, Fresco, email | 👤 | Có thể go-live trước với HĐĐT `fake` + chuyển khoản VietQR, bật tích hợp sau |
+| 0.6 | Quyết định tích hợp: MISA meInvoice (cần tài liệu API MISA cấp), Fresco, email. **SePay** (xác nhận chuyển khoản tự động): đã chốt dùng SePay Webhooks, làm theo `docs/SEPAY.md` §7 (tạo cấu trúc mã thanh toán, webhook HMAC, secret `SEPAY_WEBHOOK_SECRET` + `SEPAY_API_KEY`, chuyển thử một khoản nhỏ thật) | 👤 | Có thể go-live trước với HĐĐT `fake` + chuyển khoản VietQR (nhân viên xác nhận tay), bật SePay sau |
 
 ✅ Có token hợp lệ + tham số đã chốt.
 
