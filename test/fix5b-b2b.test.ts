@@ -20,7 +20,7 @@ beforeAll(async () => {
 
 async function deliverShort(opts: { backorder?: boolean; setting?: string }) {
   if (opts.setting) await db().prepare(`UPDATE settings SET value=? WHERE key='b2b.backorder_on_short'`).bind(opts.setting).run();
-  const c = await api("manager", "POST", "/api/v1/customers", {
+  const c = await api("owner", "POST", "/api/v1/customers", {
     name: `KH bổ sung ${++seq}`, type: "b2b", customerGroupId: 1, creditLimit: 100_000_000, paymentTermsDays: 15,
     contacts: [{ name: "N", phone: "0900000001", isReceiver: true }], addresses: [{ label: "Kho", address: "1 Lê Lợi", isDefault: true }],
   });
