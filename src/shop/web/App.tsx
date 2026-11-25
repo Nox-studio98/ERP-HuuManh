@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, type Me } from "./lib/api";
 import { LogoMark } from "./lib/art";
 import { Link, match, navigate, useLocation, useQuery, usePageMeta } from "./lib/router";
 import { AuthContext, LOGGED_FLAG, ls, useAuth, useCart, useLive } from "./lib/store";
-import { Icon } from "./ui";
+import { Icon, Loading } from "./ui";
 import { Home } from "./pages/Home";
 import { Catalog } from "./pages/Catalog";
 import { ProductPage } from "./pages/Product";
@@ -14,6 +14,9 @@ import { AccountPage } from "./pages/Account";
 import { ForgotPage, LoginPage, RegisterPage, ResetPage, VerifyEmailPage } from "./pages/Auth";
 import { B2bPage } from "./pages/B2b";
 import { PostPage } from "./pages/Post";
+
+// Cổng nhà cung cấp (/ncc): bundle riêng, giao diện/phiên tách hẳn website bán hàng
+const NccApp = lazy(() => import("./pages/ncc/NccShell"));
 
 function Header() {
   const cart = useCart();
@@ -123,7 +126,7 @@ function Routes(): ReactNode {
   return <NotFound />;
 }
 
-export function App() {
+function ShopApp() {
   const [me, setMeState] = useState<Me | null>(null);
   const [ready, setReady] = useState(!ls.get(LOGGED_FLAG));
   const setMe = useCallback((m: Me | null) => { setMeState(m); if (m) ls.set(LOGGED_FLAG, "1"); else ls.del(LOGGED_FLAG); setReady(true); }, []);
@@ -142,4 +145,10 @@ export function App() {
       <LiveRegion />
     </AuthContext.Provider>
   );
+}
+
+export function App() {
+  const path = useLocation().split("?")[0];
+  if (path === "/ncc" || path.startsWith("/ncc/")) return <Suspense fallback={<Loading />}><NccApp /></Suspense>;
+  return <ShopApp />;
 }

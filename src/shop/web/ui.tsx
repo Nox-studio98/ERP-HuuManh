@@ -30,6 +30,9 @@ const P: Record<string, ReactNode> = {
   box: <path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5zM3.5 7.5 12 12l8.5-4.5M12 12v9" />,
   logout: <path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9" />,
   filter: <path d="M4 6h16M7 12h10M10 18h4" />,
+  receipt: <path d="M6 3.5h12v17l-2.2-1.5-2.1 1.5-1.7-1.5-1.7 1.5-2.1-1.5L6 20.5zM9 8.5h6M9 12h6" />,
+  card: <><rect x="3" y="5.5" width="18" height="13" rx="2.5" /><path d="M3 10h18M7 15h3" /></>,
+  download: <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" />,
 };
 export function Icon({ n, size = 22, className }: { n: keyof typeof P | string; size?: number; className?: string }) {
   return (
