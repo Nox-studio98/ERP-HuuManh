@@ -7,11 +7,11 @@ import { auditStmt } from "../lib/audit";
 import { assertStmt } from "../services/guard";
 import { hashPassword, randomToken } from "../lib/crypto";
 import { can, requirePerm } from "../lib/rbac";
-import { vnDate, vnDayRangeUtc } from "../lib/time";
+import { vnDate, vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { pageParams, parseBody } from "../services/http";
 import { getSettingInt } from "../services/settings";
 import {
-  addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, leaveBalance, leaveCountableDates, weekStart, minutesBetween, shiftWindow,
+  addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, isPeriodClosed, leaveBalance, leaveCountableDates, offboardingBlockers, periodOf, prevPeriod, weekStart, minutesBetween, shiftWindow,
 } from "../services/hr-common";
 import { haversineM } from "../services/hr-geo";
 import { makeQrCode, qrWindowExpiresAt, qrWindowOf, verifyQrCode } from "../services/hr-qr";
@@ -222,7 +222,7 @@ hrRoutes.post("/employees", requirePerm("hr.manage"), async (c) => {
 
 hrRoutes.put("/employees/:id", requirePerm("hr.manage"), async (c) => {
   const id = idOf(c);
-  const body = await parseBody(c, z.object({ ...Object.fromEntries(Object.entries(empFields).map(([k, v]) => [k, (v as z.ZodTypeAny).optional()])), version: z.number().int().positive() }) as z.ZodType<Record<string, any>>);
+  const body = await parseBody(c, z.object({ ...Object.fromEntries(Object.entries(empFields).map(([k, v]) => [k, (v as z.ZodTypeAny).optional()])), version: z.number().int().positive(), salaryEffectiveDate: dateS.optional(), salaryReason: z.string().trim().max(300).optional() }) as z.ZodType<Record<string, any>>);
   const db = c.env.DB;
   const sens = sensOf(c);
   const before = await db.prepare(`SELECT * FROM employees WHERE id = ?`).bind(id).first<any>();
@@ -243,17 +243,40 @@ hrRoutes.put("/employees/:id", requirePerm("hr.manage"), async (c) => {
   }
   if (body.storeId !== undefined && !(await db.prepare(`SELECT id FROM stores WHERE id=?`).bind(body.storeId).first())) throw new AppError(422, "invalid_store", "Cửa hàng không tồn tại");
   if (!sets.length) throw new AppError(422, "validation_error", "Không có thay đổi nào");
+  // C-18: lịch sử lương theo ngày hiệu lực (giá trị chỉ lưu ở bảng riêng, audit_log vẫn chỉ ghi tên trường)
+  const SALARY_COLS: [string, string][] = [["baseSalary", "base_salary"], ["hourlyRate", "hourly_rate"], ["shiftRate", "shift_rate"], ["insuranceSalary", "insurance_salary"]];
+  const me = c.get("user");
+  const salaryChanges = SALARY_COLS.filter(([k, col]) => body[k] !== undefined && body[k] !== before[col]);
+  if (salaryChanges.length && me.role !== "owner" && before.user_id != null && before.user_id === me.id)
+    throw forbidden("self_salary_edit", "Không được tự sửa lương của chính mình — chỉ chủ cửa hàng được sửa");
+  const effDate = body.salaryEffectiveDate ?? vnDate();
+  const histStmts = salaryChanges.map(([k, col]) =>
+    db.prepare(`INSERT INTO employee_salary_history(employee_id, field, old_value, new_value, effective_date, reason, changed_by) VALUES (?,?,?,?,?,?,?)`)
+      .bind(id, k, before[col], body[k], effDate, body.salaryReason ?? null, me.id),
+  );
   const res = await db.batch([
     db.prepare(`UPDATE employees SET ${sets.join(", ")}, version = version + 1 WHERE id = ? AND version = ?`).bind(...params, id, body.version),
+    ...histStmts,
     auditStmt(c, { action: "hr.employee.update", entity: "employee", entityId: id, before: redactSens(b), after: redactSens(a) }),
   ]);
   if (res[0].meta.changes === 0) throw conflict("version_conflict", "Hồ sơ vừa được người khác sửa, hãy tải lại");
   return c.json(await employeeDetail(c, id));
 });
 
+/** C-18: lịch sử lương theo ngày hiệu lực — chỉ người có hr.sensitive. */
+hrRoutes.get("/employees/:id/salary-history", requirePerm("hr.view", "hr.sensitive"), async (c) => {
+  const id = idOf(c);
+  await requireEmployee(c, id);
+  const { results } = await c.env.DB.prepare(
+    `SELECT h.*, u.full_name AS by_name FROM employee_salary_history h LEFT JOIN users u ON u.id = h.changed_by WHERE h.employee_id = ? ORDER BY h.effective_date DESC, h.id DESC LIMIT 500`,
+  ).bind(id).all<any>();
+  await auditStmt(c, { action: "hr.view_sensitive", entity: "employee", entityId: id, after: { salaryHistory: true } }).run();
+  return c.json({ items: results.map((h) => ({ id: h.id, field: h.field, refId: h.ref_id, oldValue: h.old_value, newValue: h.new_value, effectiveDate: h.effective_date, reason: h.reason, changedBy: h.by_name, changedAt: h.changed_at })) });
+});
+
 hrRoutes.post("/employees/:id/terminate", requirePerm("hr.manage"), async (c) => {
   const id = idOf(c);
-  const body = await parseBody(c, z.object({ terminationDate: dateS, reason: z.string().trim().min(1).max(300) }));
+  const body = await parseBody(c, z.object({ terminationDate: dateS, reason: z.string().trim().min(1).max(300), force: z.boolean().optional() }));
   const db = c.env.DB;
   const e = await db.prepare(`SELECT id, user_id, status, hire_date FROM employees WHERE id = ?`).bind(id).first<any>();
   if (!e) throw notFound("employee_not_found", "Không tìm thấy nhân viên");
@@ -266,6 +289,10 @@ hrRoutes.post("/employees/:id/terminate", requirePerm("hr.manage"), async (c) =>
     }
   }
   if (body.terminationDate < e.hire_date) throw new AppError(422, "validation_error", "Ngày nghỉ việc trước ngày vào làm");
+  // C-26: ca POS đang mở → chặn hẳn (tiền mặt chưa đối soát); yêu cầu đang chờ → cảnh báo, chỉ đi tiếp khi force + lý do
+  const bl = await offboardingBlockers(db, e.user_id ?? null, id);
+  if (bl.openShifts > 0) throw conflict("open_shift", "Tài khoản này còn ca bán hàng đang mở — hãy chốt ca (quản lý đóng thay) trước khi cho nghỉ việc", { openShifts: bl.openShifts });
+  if (bl.pendingTotal > 0 && !body.force) throw conflict("pending_requests", `Nhân viên còn ${bl.pendingTotal} yêu cầu/đơn đang chờ xử lý. Xử lý trước, hoặc gửi force=true kèm lý do để vẫn cho nghỉ`, bl.pending);
   const at = nowIso();
   const stmts = [
     db.prepare(`UPDATE employees SET status='terminated', termination_date=?, note = COALESCE(note || char(10), '') || ?, version = version + 1 WHERE id=?`).bind(body.terminationDate, `Nghỉ việc ${body.terminationDate}: ${body.reason}`, id),
@@ -275,7 +302,7 @@ hrRoutes.post("/employees/:id/terminate", requirePerm("hr.manage"), async (c) =>
     stmts.push(db.prepare(`UPDATE users SET active=0 WHERE id=?`).bind(e.user_id));
     stmts.push(db.prepare(`UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL`).bind(at, e.user_id));
   }
-  stmts.push(auditStmt(c, { action: "hr.employee.terminate", entity: "employee", entityId: id, before: { status: "active" }, after: { status: "terminated", terminationDate: body.terminationDate }, reason: body.reason }));
+  stmts.push(auditStmt(c, { action: "hr.employee.terminate", entity: "employee", entityId: id, before: { status: "active" }, after: { status: "terminated", terminationDate: body.terminationDate, pendingAtTermination: bl.pendingTotal > 0 ? bl.pending : undefined }, reason: body.reason }));
   await db.batch(stmts);
   return c.json(await employeeDetail(c, id));
 });
@@ -321,24 +348,34 @@ hrRoutes.put("/employees/:id/contracts/:cid", requirePerm("hr.manage"), async (c
 
 hrRoutes.post("/employees/:id/allowances", requirePerm("hr.manage", "hr.sensitive"), async (c) => {
   const id = idOf(c);
-  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), amount: money, taxable: z.boolean().optional() }));
+  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), amount: money, taxable: z.boolean().optional(), effectiveDate: dateS.optional() }));
   await requireEmployee(c, id);
   const r = await c.env.DB.prepare(`INSERT INTO employee_allowances(employee_id, name, amount, taxable) VALUES (?,?,?,?)`).bind(id, b.name, b.amount, b.taxable === false ? 0 : 1).run();
+  // C-18: phụ cấp mới có hiệu lực từ effectiveDate (mặc định hôm nay); trước đó = 0
+  if (b.amount > 0)
+    await c.env.DB.prepare(`INSERT INTO employee_salary_history(employee_id, field, ref_id, old_value, new_value, effective_date, changed_by) VALUES (?,?,?,?,?,?,?)`)
+      .bind(id, "allowance", r.meta.last_row_id, 0, b.amount, b.effectiveDate ?? vnDate(), c.get("user").id).run();
   await auditStmt(c, { action: "hr.allowance.create", entity: "employee", entityId: id, after: { ...redactSens(b), allowanceId: r.meta.last_row_id } }).run();
   return c.json({ id: r.meta.last_row_id }, 201);
 });
 
 hrRoutes.put("/employees/:id/allowances/:aid", requirePerm("hr.manage"), async (c) => {
   const id = idOf(c), aid = idOf(c, "aid");
-  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), amount: money, taxable: z.boolean(), active: z.boolean() }).partial());
+  const b = await parseBody(c, z.object({ name: z.string().trim().min(1).max(100), amount: money, taxable: z.boolean(), active: z.boolean(), effectiveDate: dateS }).partial());
   const before = await c.env.DB.prepare(`SELECT * FROM employee_allowances WHERE id=? AND employee_id=?`).bind(aid, id).first<any>();
   if (!before) throw notFound("allowance_not_found", "Không tìm thấy phụ cấp");
   if (b.amount !== undefined && !sensOf(c)) throw SENS_ERR();
-  const keys = Object.keys(b).filter((k) => (b as any)[k] !== undefined);
+  const keys = Object.keys(b).filter((k) => (b as any)[k] !== undefined && k !== "effectiveDate");
   if (!keys.length) throw new AppError(422, "validation_error", "Không có thay đổi nào");
   const v = (k: string) => { const x = (b as any)[k]; return typeof x === "boolean" ? (x ? 1 : 0) : x; };
+  const effOld = before.active ? before.amount : 0;
+  const effNew = (b.active ?? !!before.active) ? (b.amount ?? before.amount) : 0;
+  const hist = effOld !== effNew
+    ? [c.env.DB.prepare(`INSERT INTO employee_salary_history(employee_id, field, ref_id, old_value, new_value, effective_date, changed_by) VALUES (?,?,?,?,?,?,?)`).bind(id, "allowance", aid, effOld, effNew, b.effectiveDate ?? vnDate(), c.get("user").id)]
+    : [];
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE employee_allowances SET ${keys.map((k) => `${k}=?`).join(", ")} WHERE id=?`).bind(...keys.map(v), aid),
+    ...hist,
     auditStmt(c, { action: "hr.allowance.update", entity: "employee", entityId: id, before: redactSens(Object.fromEntries(keys.map((k) => [k, before[k]]))), after: redactSens(b) }),
   ]);
   return c.json({ id: aid });
@@ -545,6 +582,19 @@ hrRoutes.get("/me/attendance/corrections", requirePerm("hr.self"), async (c) => 
   return c.json({ items: results.map((r) => ({ id: r.id, workDate: r.work_date, type: r.type, kind: r.kind, requestedAt: r.requested_at, reason: r.reason, status: r.status, decisionNote: r.decision_note, createdAt: r.created_at })) });
 });
 
+/** C-31: người nhận ca phải đang làm việc, không nghỉ phép đã duyệt vào ngày đó, và không có ca khác trùng giờ. */
+async function assertSwapReceiver(db: D1Database, empId: number, a: { work_date: string; start_at: string; end_at: string }, ignoreAssignmentId?: number) {
+  const emp = await db.prepare(`SELECT full_name, status FROM employees WHERE id = ?`).bind(empId).first<{ full_name: string; status: string }>();
+  if (!emp || emp.status !== "active") throw new AppError(422, "invalid_employee", "Nhân viên nhận ca đã nghỉ việc hoặc không tồn tại");
+  const leave = await db.prepare(`SELECT id FROM leave_requests WHERE employee_id = ? AND status = 'approved' AND from_date <= ? AND to_date >= ? LIMIT 1`).bind(empId, a.work_date, a.work_date).first();
+  if (leave) throw conflict("leave_conflict", `${emp.full_name} đang nghỉ phép đã duyệt ngày ${a.work_date}, không thể nhận ca`);
+  const overlap = await db
+    .prepare(`SELECT id FROM shift_assignments WHERE employee_id = ? AND status = 'scheduled' AND id != ? AND start_at < ? AND end_at > ? LIMIT 1`)
+    .bind(empId, ignoreAssignmentId ?? -1, a.end_at, a.start_at)
+    .first();
+  if (overlap) throw conflict("shift_overlap", `${emp.full_name} đã có ca khác trùng giờ với ca này`);
+}
+
 hrRoutes.post("/schedule/swaps/:id/decide", requirePerm("hr.schedule"), async (c) => {
   const id = idOf(c);
   const b = await parseBody(c, z.object({ decision: z.enum(["approved", "rejected"]), note: z.string().max(300).optional() }));
@@ -562,6 +612,11 @@ hrRoutes.post("/schedule/swaps/:id/decide", requirePerm("hr.schedule"), async (c
     const to = s.to_assignment_id ? await db.prepare(`SELECT * FROM shift_assignments WHERE id=?`).bind(s.to_assignment_id).first<any>() : null;
     if (!from || from.status !== "scheduled" || (s.to_assignment_id && (!to || to.status !== "scheduled"))) throw conflict("assignment_changed", "Ca đã thay đổi hoặc bị huỷ");
     await assertPeriodsOpen(db, [from.work_date, ...(to ? [to.work_date] : [])]);
+    // C-31: ca đã bắt đầu thì không đổi nữa; người nhận ca không được đang nghỉ phép đã duyệt hoặc trùng giờ với ca khác
+    const nowAt = nowIso();
+    if (from.start_at <= nowAt || (to && to.start_at <= nowAt)) throw new AppError(422, "shift_started", "Ca đã bắt đầu, không thể duyệt đổi ca");
+    await assertSwapReceiver(db, s.to_employee_id, from, to?.id);
+    if (to) await assertSwapReceiver(db, from.employee_id, to, from.id);
     const clash = async (empId: number, a: any) => db.prepare(`SELECT id FROM shift_assignments WHERE employee_id=? AND work_date=? AND shift_template_id=? AND id != ?`).bind(empId, a.work_date, a.shift_template_id, a.id).first();
     if (await clash(s.to_employee_id, from)) throw conflict("assignment_clash", "Nhân viên nhận ca đã có ca này");
     stmts.push(db.prepare(`UPDATE shift_assignments SET employee_id=? WHERE id=?`).bind(s.to_employee_id, from.id));
@@ -684,6 +739,8 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
       offlineTrusted = true;
     }
   }
+  // C-10: không nhận chấm công vào kỳ đã chốt (trước đây nhận rồi bỏ qua âm thầm) — báo rõ để dùng điều chỉnh công kỳ sau
+  await assertPeriodsOpen(db, [vnDate(new Date(effectiveAt))]);
   const lastIn = !!last && last.kind === "in" && minutesBetween(last.eff_at, effectiveAt) <= MAX_SHIFT_MINUTES;
   if (b.kind === "in" && lastIn) throw conflict("already_in", "Bạn đã chấm vào, hãy chấm ra trước");
   if (b.kind === "out" && !lastIn) throw conflict("not_in", "Chưa có lần chấm vào — gửi yêu cầu bổ sung công nếu quên chấm");
@@ -698,12 +755,30 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
   const hasPos = b.lat !== undefined && b.lng !== undefined;
   const dist = () => (hasPos && store?.lat != null && store?.lng != null ? haversineM(b.lat!, b.lng!, store.lat, store.lng) : null);
 
+  let note: string | null = null;
   if (b.offline) {
     method = "offline";
-    // giờ hợp lý → tính công ngay nhưng gắn cờ cho quản lý xem lại (có thể từ chối); không hợp lý → chờ duyệt, dùng giờ máy chủ
-    status = offlineTrusted ? "accepted" : "pending";
     clientAt = new Date(b.offline.clientAt).toISOString();
     distance = dist();
+    // C-20: không tin lời khai "offline" — vẫn kiểm nơi chấm bằng dữ liệu gửi kèm (GPS hoặc mã QR còn hạn tại giờ máy NV).
+    // Có dữ liệu xác thực + giờ hợp lý → tính công ngay, gắn cờ cho quản lý xem lại; thiếu/sai → luôn chờ duyệt kèm ghi chú cảnh báo.
+    let why: string | null = null;
+    if (me.location_exempt) {
+      // nhân viên không ràng buộc vị trí (giao hàng): không cần dữ liệu nơi chấm
+    } else if (hasPos) {
+      const fence = store?.geofence_m ?? 100;
+      if (b.accuracyM === undefined || b.accuracyM > settings.gpsMaxAccuracyM) why = `sai số GPS ${b.accuracyM === undefined ? "không rõ" : Math.round(b.accuracyM) + " m"} (tối đa ${settings.gpsMaxAccuracyM} m)`;
+      else if (store?.lat == null || store?.lng == null) why = "cửa hàng chưa cấu hình toạ độ để đối chiếu";
+      else if (distance! > fence) why = `cách cửa hàng ${distance} m (cho phép ${fence} m)`;
+    } else if (b.qrCode && c.env.ATTENDANCE_QR_SECRET && offlineTrusted && settings.methods.includes("qr")) {
+      const v = await verifyQrCode(c.env.ATTENDANCE_QR_SECRET, b.qrCode, me.store_id, Date.parse(b.offline.clientAt), settings.qrWindowSeconds);
+      if (v.ok) qrWindow = v.window;
+      else why = "mã QR không hợp lệ hoặc đã hết hạn tại giờ máy nhân viên";
+    } else {
+      why = "không kèm vị trí GPS hoặc mã QR";
+    }
+    if (why) note = `Chấm offline chưa xác thực nơi chấm: ${why}`;
+    status = offlineTrusted && !why ? "accepted" : "pending";
   } else if (me.location_exempt) {
     method = "exempt";
   } else if (b.method === "gps") {
@@ -731,17 +806,17 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
   try {
     const r = await db
       .prepare(
-        `INSERT INTO attendance_punches(employee_id, kind, server_at, client_at, device_id, method, lat, lng, accuracy_m, distance_m, qr_window, status, assignment_id, created_by, effective_at, review_flag)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO attendance_punches(employee_id, kind, server_at, client_at, device_id, method, lat, lng, accuracy_m, distance_m, qr_window, status, assignment_id, created_by, effective_at, review_flag, note)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
-      .bind(me.id, b.kind, serverAt, clientAt, deviceId, method, keepPos ? (b.lat ?? null) : null, keepPos ? (b.lng ?? null) : null, keepPos ? (b.accuracyM ?? null) : null, distance, qrWindow, status, assignmentId, user.id, effectiveAt, offlineTrusted ? 1 : 0)
+      .bind(me.id, b.kind, serverAt, clientAt, deviceId, method, keepPos ? (b.lat ?? null) : null, keepPos ? (b.lng ?? null) : null, keepPos ? (b.accuracyM ?? null) : null, distance, qrWindow, status, assignmentId, user.id, effectiveAt, status === "accepted" && offlineTrusted ? 1 : 0, note)
       .run();
     id = r.meta.last_row_id as number;
   } catch (e) {
     if (String((e as Error).message).includes("UNIQUE") && qrWindow !== null) throw conflict("qr_already_used", "Mã QR này đã được dùng, hãy đợi mã mới");
     throw e;
   }
-  return c.json({ punch: { id, kind: b.kind, serverAt, effectiveAt, method, status, reviewFlag: offlineTrusted, distanceM: distance } }, 201);
+  return c.json({ punch: { id, kind: b.kind, serverAt, effectiveAt, method, status, reviewFlag: status === "accepted" && offlineTrusted, distanceM: distance, warning: note } }, 201);
 });
 
 hrRoutes.get("/attendance/qr", requirePerm("hr.schedule"), async (c) => {
@@ -858,9 +933,14 @@ hrRoutes.post("/attendance/punches/:id/decide", requirePerm("hr.schedule"), asyn
   // C-01: chấm offline đã tính ngay (accepted + review_flag) vẫn xem lại được: xác nhận (bỏ cờ) hoặc từ chối
   const flagged = p.status === "accepted" && !!p.review_flag;
   if (p.status !== "pending" && !flagged) throw conflict("already_decided", "Lần chấm công không ở trạng thái chờ duyệt");
-  await assertPeriodsOpen(db, [vnDate(new Date(p.effective_at ?? p.server_at))]);
-  await assertNotSelf(c, { requestedBy: p.created_by, employeeIds: [p.employee_id] });
+  const effDate = vnDate(new Date(p.effective_at ?? p.server_at));
   const status = b.decision === "rejected" ? "rejected" : "accepted";
+  if (await isPeriodClosed(db, periodOf(effDate))) {
+    // C-25: kỳ đã chốt → chỉ ĐÓNG mục chờ bằng từ chối kèm lý do (không đổi công đã chốt); muốn tính công thì dùng điều chỉnh kỳ sau
+    if (status !== "rejected" || p.status !== "pending") throw conflict("timesheet_closed", `Kỳ công ${periodOf(effDate)} đã chốt: chỉ có thể từ chối mục chờ duyệt (kèm lý do). Muốn tính công, dùng điều chỉnh công ở kỳ sau.`);
+    if (!b.note) throw new AppError(422, "reason_required", "Từ chối chấm công của kỳ đã chốt cần nhập lý do");
+  }
+  await assertNotSelf(c, { requestedBy: p.created_by, employeeIds: [p.employee_id] });
   const fromStatus = p.status;
   await db.batch([
     assertStmt(db, "punch.decide", `SELECT status = ? AND review_flag = ? FROM attendance_punches WHERE id = ?`, [fromStatus, flagged ? 1 : 0, id]),
@@ -868,6 +948,72 @@ hrRoutes.post("/attendance/punches/:id/decide", requirePerm("hr.schedule"), asyn
     auditStmt(c, { action: `hr.punch.${status}`, entity: "attendance_punch", entityId: id, before: { status: fromStatus, reviewFlag: flagged }, after: { status }, reason: b.note }),
   ]);
   return c.json({ id, status });
+});
+
+// ----- Cảnh báo chấm công (M9-23, C-11) -----
+// Cron ghi audit_log action='hr.alert' (bất biến); "đã xem" lưu riêng ở hr_alert_acks.
+export const ALERT_KINDS = ["late_no_checkin", "open_in_2300", "multi_device", "far_punch", "offline_unverified"] as const;
+const mapAlert = (r: any) => {
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(r.after_json ?? "{}"); } catch { /* bỏ qua */ }
+  const { kind, ...rest } = data as { kind?: string };
+  return {
+    id: r.id, kind: kind ?? null, message: r.reason, at: r.at, entity: r.entity, entityId: r.entity_id, data: rest,
+    employeeId: r.emp_id ?? null, employeeName: r.emp_name ?? null,
+    acked: r.acked_at != null, ackedAt: r.acked_at ?? null, ackedByName: r.acked_name ?? null, ackNote: r.ack_note ?? null,
+  };
+};
+
+hrRoutes.get("/attendance/alerts", requirePerm("hr.schedule"), async (c) => {
+  const q = c.req.query();
+  const conds = [`a.action = 'hr.alert'`];
+  const params: unknown[] = [];
+  if (q.kind) {
+    if (!(ALERT_KINDS as readonly string[]).includes(q.kind)) throw new AppError(422, "validation_error", "Loại cảnh báo không hợp lệ");
+    conds.push(`json_extract(a.after_json,'$.kind') = ?`);
+    params.push(q.kind);
+  }
+  if (q.from) { if (!isDate(q.from)) throw new AppError(422, "validation_error", "from không hợp lệ"); conds.push(`a.at >= ?`); params.push(vnDayRangeUtc(q.from).from); }
+  if (q.to) { if (!isDate(q.to)) throw new AppError(422, "validation_error", "to không hợp lệ"); conds.push(`a.at < ?`); params.push(vnDayRangeUtc(q.to).to); }
+  const st = q.status ?? "all";
+  if (!["all", "open", "acked"].includes(st)) throw new AppError(422, "validation_error", "status chỉ nhận all | open | acked");
+  if (st === "open") conds.push(`k.alert_id IS NULL`);
+  if (st === "acked") conds.push(`k.alert_id IS NOT NULL`);
+  const { limit, cursor } = pageParams(c);
+  if (cursor) { conds.push(`a.id < ?`); params.push(cursor); }
+  const db = c.env.DB;
+  const { results } = await db
+    .prepare(
+      `SELECT a.id, a.at, a.entity, a.entity_id, a.after_json, a.reason, e.id AS emp_id, e.full_name AS emp_name, k.acked_at, k.note AS ack_note, u.full_name AS acked_name
+         FROM audit_log a LEFT JOIN hr_alert_acks k ON k.alert_id = a.id LEFT JOIN users u ON u.id = k.acked_by
+         LEFT JOIN employees e ON e.id = json_extract(a.after_json,'$.employeeId')
+        WHERE ${conds.join(" AND ")} ORDER BY a.id DESC LIMIT ?`,
+    )
+    .bind(...params, limit + 1)
+    .all<any>();
+  const rows = results.slice(0, limit);
+  const open = await db.prepare(`SELECT COUNT(*) n FROM audit_log a LEFT JOIN hr_alert_acks k ON k.alert_id = a.id WHERE a.action = 'hr.alert' AND k.alert_id IS NULL`).first<{ n: number }>();
+  return c.json({ items: rows.map(mapAlert), nextCursor: results.length > limit ? String(rows[rows.length - 1].id) : null, openCount: open?.n ?? 0 });
+});
+
+hrRoutes.post("/attendance/alerts/:id/ack", requirePerm("hr.schedule"), async (c) => {
+  const id = idOf(c);
+  const b = await parseBody(c, z.object({ note: z.string().trim().max(300).optional() }).default({}));
+  const db = c.env.DB;
+  const a = await db.prepare(`SELECT id FROM audit_log WHERE id = ? AND action = 'hr.alert'`).bind(id).first();
+  if (!a) throw notFound("alert_not_found", "Không tìm thấy cảnh báo");
+  const done = await db.prepare(`SELECT 1 x FROM hr_alert_acks WHERE alert_id = ?`).bind(id).first();
+  if (done) throw conflict("already_acked", "Cảnh báo đã được đánh dấu đã xem");
+  try {
+    await db.batch([
+      db.prepare(`INSERT INTO hr_alert_acks(alert_id, acked_by, note) VALUES (?,?,?)`).bind(id, c.get("user").id, b.note ?? null),
+      auditStmt(c, { action: "hr.alert.ack", entity: "hr_alert", entityId: id, reason: b.note }),
+    ]);
+  } catch (e) {
+    if (String((e as Error).message).includes("UNIQUE") || String((e as Error).message).includes("PRIMARY")) throw conflict("already_acked", "Cảnh báo đã được đánh dấu đã xem");
+    throw e;
+  }
+  return c.json({ id, acked: true });
 });
 
 // ----- Thiết bị chấm công -----
@@ -1145,6 +1291,20 @@ hrRoutes.post("/timesheets/:period/close", requirePerm("hr.manage"), async (c) =
   const db = c.env.DB;
   const cur = await db.prepare(`SELECT status FROM timesheets WHERE period=?`).bind(period).first<{ status: string }>();
   if (cur?.status === "closed") throw conflict("already_closed", "Kỳ công đã chốt");
+  // C-10: chỉ chốt kỳ đã kết thúc, và phải chốt theo thứ tự (kỳ trước đã chốt). Ngoại lệ cần force + lý do (kỳ tương lai thì không bao giờ).
+  const nowPeriod = vnPeriod();
+  const forced = !!b.force && !!b.reason;
+  if (period > nowPeriod) throw conflict("period_in_future", `Kỳ ${period} chưa bắt đầu, không thể chốt công`);
+  if (period === nowPeriod) {
+    if (!b.force) throw conflict("period_not_ended", `Kỳ ${period} chưa kết thúc — chấm công sau khi chốt sẽ bị chặn. Chỉ chốt sớm khi thật cần (force + lý do)`);
+    if (!b.reason) throw new AppError(422, "reason_required", "Chốt kỳ chưa kết thúc cần nhập lý do");
+  }
+  const prev = prevPeriod(period);
+  if (!(await isPeriodClosed(db, prev))) {
+    // kỳ đầu tiên của hệ thống (chưa chốt kỳ nào trước đó) thì được bắt đầu chuỗi chốt
+    const earlier = await db.prepare(`SELECT period FROM timesheets WHERE status='closed' AND period < ? LIMIT 1`).bind(period).first();
+    if (earlier && !forced) throw conflict("previous_period_open", `Kỳ ${prev} chưa chốt — chốt kỳ trước trước khi chốt kỳ ${period} (hoặc force + lý do)`, { previousPeriod: prev });
+  }
   const ts = await computeTimesheetLive(db, period);
   const unresolved = await collectUnresolved(db, period, ts);
   const bad = hasUnresolved(unresolved);
@@ -1157,7 +1317,7 @@ hrRoutes.post("/timesheets/:period/close", requirePerm("hr.manage"), async (c) =
     db.prepare(`DELETE FROM timesheet_days WHERE period=?`).bind(period),
     ...snap,
     db.prepare(`UPDATE timesheets SET status='closed', closed_by=?, closed_at=? WHERE period=? AND status='open'`).bind(c.get("user").id, at, period),
-    auditStmt(c, { action: "hr.timesheet.close", entity: "timesheet", entityId: period, after: { rows: snap.length, forced: bad && !!b.force, unresolved: bad ? unresolved : undefined }, reason: b.reason }),
+    auditStmt(c, { action: "hr.timesheet.close", entity: "timesheet", entityId: period, after: { rows: snap.length, forced: (bad && !!b.force) || forced, unresolved: bad ? unresolved : undefined }, reason: b.reason }),
   ]);
   return c.json({ period, status: "closed", closedAt: at, rows: snap.length, forced: bad });
 });

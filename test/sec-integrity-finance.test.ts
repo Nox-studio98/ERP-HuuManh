@@ -42,6 +42,7 @@ describe("payroll pay (audit #3)", () => {
   });
 
   it("advances above approval.cash_out_vnd need approval unless finance.approve", async () => {
+    await db().prepare(`INSERT OR REPLACE INTO settings(key, value) VALUES ('hr.advance_max_bp','0')`).run(); // C-12 (giới hạn % lương) có test riêng ở fix5d-hr
     const r = await api("accountant", "POST", `${V}/payroll/advances`, { employeeId: 9703, amount: 6_000_000, fundId: 1, reason: "ứng lớn", deductPeriod: "2027-03" });
     expect(r.status).toBe(201);
     expect(r.body.status).toBe("pending_approval");

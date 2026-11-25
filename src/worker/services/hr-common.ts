@@ -109,6 +109,35 @@ export async function assertPeriodsOpen(db: D1Database, dates: string[]) {
   if (results.length) throw conflict("timesheet_closed", `Kỳ công ${results[0].period} đã chốt, không thể thay đổi. Dùng điều chỉnh ở kỳ sau.`);
 }
 
+/** Kỳ liền trước của 'YYYY-MM'. */
+export const prevPeriod = (period: string) => {
+  const [y, m] = period.split("-").map(Number);
+  const t = y * 12 + (m - 1) - 1;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+};
+export const isPeriodClosed = async (db: D1Database, period: string) =>
+  !!(await db.prepare(`SELECT 1 x FROM timesheets WHERE period = ? AND status = 'closed'`).bind(period).first());
+
+/**
+ * C-26: những việc còn dang dở của một nhân viên/tài khoản trước khi cho nghỉ việc hoặc khoá tài khoản.
+ *  - openShifts: ca POS đang mở của tài khoản (tiền mặt chưa đối soát) → luôn chặn;
+ *  - pending: yêu cầu duyệt/đơn từ đang chờ do người đó gửi (hoặc đang chờ người đó nhận) → cảnh báo, cần xác nhận bằng force + lý do.
+ */
+export async function offboardingBlockers(db: D1Database, userId: number | null, employeeId: number | null) {
+  const n = async (sql: string, ...b: unknown[]) => (await db.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
+  const openShifts = userId ? await n(`SELECT COUNT(*) n FROM shifts WHERE user_id = ? AND status = 'open'`, userId) : 0;
+  const pending = {
+    approvals: userId ? await n(`SELECT COUNT(*) n FROM approvals WHERE requested_by = ? AND status = 'pending'`, userId) : 0,
+    leave: employeeId ? await n(`SELECT COUNT(*) n FROM leave_requests WHERE employee_id = ? AND status = 'pending'`, employeeId) : 0,
+    overtime: employeeId ? await n(`SELECT COUNT(*) n FROM overtime_requests WHERE employee_id = ? AND status = 'pending'`, employeeId) : 0,
+    corrections: employeeId ? await n(`SELECT COUNT(*) n FROM attendance_corrections WHERE employee_id = ? AND status = 'pending'`, employeeId) : 0,
+    swaps: userId || employeeId ? await n(`SELECT COUNT(*) n FROM shift_swap_requests WHERE status IN ('pending','accepted') AND (requested_by = ?1 OR to_employee_id = ?2)`, userId ?? -1, employeeId ?? -1) : 0,
+    devices: userId ? await n(`SELECT COUNT(*) n FROM devices_registry_requests WHERE user_id = ? AND status = 'pending'`, userId) : 0,
+  };
+  const pendingTotal = Object.values(pending).reduce((a, b) => a + b, 0);
+  return { openShifts, pending, pendingTotal };
+}
+
 export interface EmployeeRow {
   id: number;
   code: string;

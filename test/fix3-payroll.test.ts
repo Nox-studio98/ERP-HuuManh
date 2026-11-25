@@ -100,6 +100,7 @@ describe("C-05 tạm ứng vượt lương → chuyển kỳ sau, không mất",
     await db().batch([
       db().prepare(`INSERT INTO employees(id, code, full_name, position, store_id, hire_date, pay_type, base_salary, insurance_salary) VALUES (9511,'NV-C1','C Một','kho',1,'2026-01-01','monthly',2600000,0)`),
     ]);
+    await db().prepare(`INSERT OR REPLACE INTO settings(key, value) VALUES ('hr.advance_max_bp','0')`).run(); // C-12 có test riêng ở fix5d-hr
     const adv = await api("accountant", "POST", `${V}/payroll/advances`, { employeeId: 9511, amount: 4_000_000, fundId: 1, deductPeriod: "2026-10", reason: "việc nhà" });
     expect(adv.status).toBe(201);
     await closeTimesheet("2026-10", dayRows(9511, "2026-10", 26));

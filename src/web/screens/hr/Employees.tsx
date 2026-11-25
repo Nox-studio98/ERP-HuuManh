@@ -5,7 +5,7 @@ import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader,
 import { toast } from "../../components/toast";
 import { money, ROLES, todayVN } from "../../format";
 import { useAuth, useCan } from "../../store";
-import { Confirm, EMP_STATUS, PAY_TYPE, dmy, useLeaveTypes } from "./kit";
+import { Confirm, EMP_STATUS, PAY_TYPE, dmy, errCode, useLeaveTypes } from "./kit";
 
 const EMPTY = { fullName: "", position: "Nhân viên bán hàng", hireDate: todayVN(), payType: "monthly", baseSalary: 0, hourlyRate: 0, shiftRate: 0, insuranceSalary: 0, dependents: 0, annualLeaveDays: 12, locationExempt: false, pitEnabled: false, phone: "", email: "", idNumber: "", dob: "", address: "", bankName: "", bankAccount: "", note: "" };
 
@@ -140,13 +140,14 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
 const KV = ({ l, v }: { l: string; v?: string | null }) => <div><div className="small muted">{l}</div><div>{v || "—"}</div></div>;
 
 function Terminate({ e, onClose, onDone }: { e: any; onClose: () => void; onDone: () => void }) {
-  const [date, setDate] = useState(todayVN()), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const [date, setDate] = useState(todayVN()), [reason, setReason] = useState(""), [busy, setBusy] = useState(false), [force, setForce] = useState(false), [pend, setPend] = useState(false);
   return (
     <Confirm title={`Cho ${e.fullName} nghỉ việc`} danger confirmLabel="Xác nhận nghỉ việc" busy={busy} disabled={!reason.trim() || !date} onClose={onClose}
-      onConfirm={async () => { setBusy(true); try { await post(`/employees/${e.id}/terminate`, { terminationDate: date, reason: reason.trim() }); toast("Đã cho nghỉ việc", "ok"); onDone(); } catch { /* toast */ } finally { setBusy(false); } }}>
+      onConfirm={async () => { setBusy(true); try { await post(`/employees/${e.id}/terminate`, { terminationDate: date, reason: reason.trim(), ...(force ? { force: true } : {}) }); toast("Đã cho nghỉ việc", "ok"); onDone(); } catch (err) { if (errCode(err) === "pending_requests") setPend(true); } finally { setBusy(false); } }}>
       <Banner>{e.username ? <>Tài khoản <b>{e.username}</b> sẽ bị <b>khoá ngay</b> và mọi phiên đăng nhập đang mở bị thu hồi. </> : null}Các ca sau ngày nghỉ sẽ bị huỷ. Lịch sử chấm công và lương vẫn được giữ.</Banner>
       <Input label="Ngày nghỉ việc" type="date" value={date} onChange={(x) => setDate(x.target.value)} />
       <TextArea label="Lý do" rows={2} value={reason} onChange={(x) => setReason(x.target.value)} />
+      {pend && <Banner tone="danger"><label className="row"><input type="checkbox" checked={force} onChange={(x) => setForce(x.target.checked)} /> Nhân viên còn yêu cầu/đơn đang chờ xử lý. Vẫn cho nghỉ việc (ghi nhận vào nhật ký).</label></Banner>}
     </Confirm>
   );
 }
@@ -195,6 +196,7 @@ function EmpForm({ emp, sens, onClose, onSaved }: { emp: any | null; sens: boole
   const [username, setUsername] = useState("");
   const [role, setRole] = useState("staff");
   const [busy, setBusy] = useState(false);
+  const [effDate, setEffDate] = useState(todayVN());
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const nul = (s: string) => (s.trim() ? s.trim() : null);
   const save = async () => {
@@ -206,6 +208,7 @@ function EmpForm({ emp, sens, onClose, onSaved }: { emp: any | null; sens: boole
         const diff: any = { version: emp.version };
         for (const k of Object.keys(body)) { const old = emp[k] ?? null; if ((old ?? "") !== (body[k] ?? "")) diff[k] = body[k]; }
         if (sens && f.pitEnabled !== !!emp.pitEnabled) diff.pitEnabled = f.pitEnabled;
+        if (["baseSalary", "hourlyRate", "shiftRate", "insuranceSalary"].some((k) => k in diff)) diff.salaryEffectiveDate = effDate; // C-18
         if (Object.keys(diff).length === 1) { toast("Chưa có thay đổi nào", "info"); return; }
         await put("/employees/" + emp.id, diff);
         toast("Đã lưu hồ sơ", "ok"); onSaved({});
@@ -235,6 +238,7 @@ function EmpForm({ emp, sens, onClose, onSaved }: { emp: any | null; sens: boole
             {f.payType === "hourly" && <MoneyInput label="Lương theo giờ (₫)" value={f.hourlyRate} onChange={(n) => set("hourlyRate", n)} />}
             {f.payType === "shift" && <MoneyInput label="Lương theo ca (₫)" value={f.shiftRate} onChange={(n) => set("shiftRate", n)} />}
             <div className="grid2"><MoneyInput label="Lương đóng bảo hiểm (₫, 0 = không đóng)" value={f.insuranceSalary} onChange={(n) => set("insuranceSalary", n)} /><DecInput label="Người phụ thuộc" value={f.dependents} onChange={(n) => set("dependents", Math.round(n))} /></div>
+            {emp && <Input label="Mức lương mới có hiệu lực từ ngày" type="date" value={effDate} onChange={(x) => setEffDate(x.target.value)} />}
             {emp && <label className="row"><input type="checkbox" checked={f.pitEnabled} onChange={(e) => set("pitEnabled", e.target.checked)} /> Tính thuế TNCN</label>}
             <h3 style={{ margin: 0 }}>Thông tin cá nhân</h3>
             <div className="grid2"><Input label="Điện thoại" value={f.phone} onChange={(e) => set("phone", e.target.value)} inputMode="tel" /><Input label="Email" type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></div>
