@@ -249,7 +249,7 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 
 ## 10. Câu hỏi còn mở (có mặc định, chủ dự án xác nhận khi duyệt)
 
-1. ~~Giờ chốt~~ — đã chốt 03:00 (26/11/2026). Gom thiếu cho SO giao trong 2 ngày tới — đúng với nhịp nhập hàng chưa?
+1. ~~Giờ chốt~~ — đã chốt 03:00 (25/11/2026). Gom thiếu cho SO giao trong 2 ngày tới — đúng với nhịp nhập hàng chưa?
 2. Ngưỡng PO cần chủ duyệt: 20 triệu?
 3. Đơn online giao trong ngày vẫn chặn thiếu hàng (chỉ đơn đặt trước mới chờ hàng) — đồng ý?
 4. NCC có cần nhận email/Zalo khi có PO mới không, hay chỉ xem trên cổng?
