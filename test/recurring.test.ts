@@ -12,7 +12,7 @@ const orders = async (tpl: number) =>
 const lot = async (id: number) => (await db().prepare(`SELECT qty_on_hand_milli h, qty_reserved_milli r FROM lots WHERE id=?`).bind(id).first<{ h: number; r: number }>())!;
 
 async function customer(name: string, creditLimit: number) {
-  const r = await api("manager", "POST", "/api/v1/customers", {
+  const r = await api("owner", "POST", "/api/v1/customers", {
     name, type: "b2b", customerGroupId: 1, creditLimit, paymentTermsDays: 15,
     contacts: [{ name: "Người nhận", phone: "0900000002", isReceiver: true }],
     addresses: [{ label: "Kho", address: "2 Lê Lợi", isDefault: true }],

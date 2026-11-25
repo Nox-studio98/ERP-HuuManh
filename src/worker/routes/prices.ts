@@ -6,32 +6,45 @@ import { auditStmt } from "../lib/audit";
 import { AppError, conflict, notFound } from "../lib/errors";
 import { currentAvgCost, resolvePrice } from "../services/pricing";
 import { guarded, parseBody } from "../services/http";
+import { assertStmt } from "../services/guard";
 
 export const priceRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
 
-const listSel = `SELECT id, name, channel, customer_group_id AS customerGroupId, kind, priority, active FROM price_lists`;
+const listSel = `SELECT id, name, channel, customer_group_id AS customerGroupId, customer_id AS customerId, kind, priority, active, version FROM price_lists`;
 
 priceRoutes.get("/price-lists", requirePerm("prices.view_sell"), async (c) => {
   const { results } = await c.env.DB.prepare(`${listSel} ORDER BY priority DESC, id`).all<any>();
   return c.json({ items: results.map((r) => ({ ...r, active: !!r.active })), nextCursor: null });
 });
 
+const listFields = {
+  name: z.string().trim().min(1).max(100),
+  channel: z.enum(["pos", "online", "b2b", "all"]),
+  customerGroupId: z.number().int().positive().nullish(),
+  customerId: z.number().int().positive().nullish(), // A-22: bảng giá riêng của một khách (kind='customer')
+  kind: z.enum(["base", "group", "promo", "customer"]),
+  priority: z.number().int().min(0).max(1000),
+};
+
+/** A-22: bảng giá riêng (kind='customer') bắt buộc gắn một khách đang hoạt động; loại khác không được gắn khách. */
+async function checkListCustomer(db: D1Database, kind: string, customerId: number | null | undefined) {
+  if (kind === "customer") {
+    if (!customerId) throw new AppError(422, "customer_required", "Bảng giá riêng phải chọn khách hàng");
+    const cu = await db.prepare(`SELECT id FROM customers WHERE id = ? AND active = 1`).bind(customerId).first();
+    if (!cu) throw new AppError(422, "customer_not_found", "Không tìm thấy khách hàng");
+  } else if (customerId) {
+    throw new AppError(422, "customer_not_allowed", "Chỉ bảng giá loại 'riêng theo khách' mới gắn khách hàng");
+  }
+}
+
 priceRoutes.post("/price-lists", requirePerm("prices.write"), async (c) => {
   const db = c.env.DB;
-  const b = await parseBody(
-    c,
-    z.object({
-      name: z.string().trim().min(1).max(100),
-      channel: z.enum(["pos", "online", "b2b", "all"]),
-      customerGroupId: z.number().int().positive().nullish(),
-      kind: z.enum(["base", "group", "promo", "customer"]),
-      priority: z.number().int().min(0).max(1000),
-    }),
-  );
+  const b = await parseBody(c, z.object(listFields));
+  await checkListCustomer(db, b.kind, b.customerId);
   const stmt = db
-    .prepare(`INSERT INTO price_lists(name, channel, customer_group_id, kind, priority) VALUES (?,?,?,?,?)`)
-    .bind(b.name, b.channel, b.customerGroupId ?? null, b.kind, b.priority);
+    .prepare(`INSERT INTO price_lists(name, channel, customer_group_id, customer_id, kind, priority) VALUES (?,?,?,?,?,?)`)
+    .bind(b.name, b.channel, b.customerGroupId ?? null, b.customerId ?? null, b.kind, b.priority);
   const [res] = await guarded(() => db.batch([stmt, auditStmt(c, { action: "price_list.create", entity: "price_list", entityId: b.name, after: b })]));
   const row = await db.prepare(`${listSel} WHERE id = ?`).bind(res.meta.last_row_id).first<any>();
   return c.json({ ...row, active: !!row.active }, 201);
@@ -41,30 +54,25 @@ priceRoutes.put("/price-lists/:id", requirePerm("prices.write"), async (c) => {
   const db = c.env.DB;
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) throw notFound("price_list_not_found", "Không tìm thấy bảng giá");
-  const b = await parseBody(
-    c,
-    z.object({
-      name: z.string().trim().min(1).max(100),
-      channel: z.enum(["pos", "online", "b2b", "all"]),
-      customerGroupId: z.number().int().positive().nullish(),
-      kind: z.enum(["base", "group", "promo", "customer"]),
-      priority: z.number().int().min(0).max(1000),
-      active: z.boolean(),
-    }),
-  );
+  // C-30: version bắt buộc (EC-38) — hai người sửa cùng lúc thì lần lưu sau nhận 409
+  const b = await parseBody(c, z.object({ ...listFields, active: z.boolean(), version: z.number().int().positive() }));
   const cur = await db.prepare(`${listSel} WHERE id = ?`).bind(id).first<any>();
   if (!cur) throw notFound("price_list_not_found", "Không tìm thấy bảng giá");
+  if (cur.version !== b.version) throw conflict("version_conflict", "Bảng giá đã được người khác cập nhật, hãy tải lại", { currentVersion: cur.version });
+  await checkListCustomer(db, b.kind, b.customerId);
   if (cur.kind === "base" && cur.active && (!b.active || b.kind !== "base")) {
     const other = await db.prepare(`SELECT COUNT(*) n FROM price_lists WHERE kind='base' AND active=1 AND id<>?`).bind(id).first<{ n: number }>();
     if (!other?.n) throw conflict("last_base_price_list", "Phải còn ít nhất một bảng giá nền đang dùng");
   }
-  await guarded(() =>
+  const res = await guarded(() =>
     db.batch([
-      db.prepare(`UPDATE price_lists SET name=?, channel=?, customer_group_id=?, kind=?, priority=?, active=? WHERE id=?`)
-        .bind(b.name, b.channel, b.customerGroupId ?? null, b.kind, b.priority, b.active ? 1 : 0, id),
+      assertStmt(db, "price_list.update", `SELECT version = ? FROM price_lists WHERE id = ?`, [b.version, id]),
+      db.prepare(`UPDATE price_lists SET name=?, channel=?, customer_group_id=?, customer_id=?, kind=?, priority=?, active=?, version = version + 1 WHERE id=? AND version=?`)
+        .bind(b.name, b.channel, b.customerGroupId ?? null, b.customerId ?? null, b.kind, b.priority, b.active ? 1 : 0, id, b.version),
       auditStmt(c, { action: "price_list.update", entity: "price_list", entityId: id, before: { ...cur, active: !!cur.active }, after: b }),
     ]),
   );
+  void res;
   const row = await db.prepare(`${listSel} WHERE id = ?`).bind(id).first<any>();
   return c.json({ ...row, active: !!row.active });
 });
@@ -158,6 +166,13 @@ priceRoutes.post("/prices/bulk", requirePerm("prices.write"), async (c) => {
   return c.json(r, r.status === "active" ? 201 : 202);
 });
 
+/** Dòng giá active hẹn hiệu lực từ `from` trở đi (của cùng bảng giá + sản phẩm) bị thay bằng giá mới: đóng thành khoảng rỗng, giữ lịch sử. */
+function voidFutureStmt(db: D1Database, priceListId: number, productId: number, from: string, exceptId: number | null) {
+  return db
+    .prepare(`UPDATE prices SET effective_to = effective_from WHERE price_list_id = ? AND product_id = ? AND status = 'active' AND effective_from >= ? AND (effective_to IS NULL OR effective_to > effective_from) AND id <> ?`)
+    .bind(priceListId, productId, from, exceptId ?? 0);
+}
+
 /**
  * Đổi giá hàng loạt theo quy tắc M3 (giữ lịch sử, thời điểm hiệu lực không lùi về quá khứ,
  * người thiếu prices.approve → giá pending + approval 'price.activate'). Dùng lại cho M7 (chấp nhận gợi ý giá).
@@ -195,6 +210,8 @@ export async function applyBulkPrices(c: Ctx, b: z.infer<typeof bulkBody>) {
         db
           .prepare(`UPDATE prices SET effective_to = ? WHERE price_list_id = ? AND product_id = ? AND status = 'active' AND effective_to IS NULL AND effective_from < ?`)
           .bind(from, b.priceListId, i.productId, from),
+        // A-23/B-24: dòng hẹn hiệu lực SAU thời điểm mới bị thay thế → đóng thành khoảng rỗng (effective_to = effective_from), không bao giờ đè lên giá mới
+        voidFutureStmt(db, b.priceListId, i.productId, from, null),
         db
           .prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by, approved_by, note) VALUES (?,?,?,?,'active',?,?,?)`)
           .bind(b.priceListId, i.productId, i.unitPrice, from, u.id, u.id, b.note ?? null),
@@ -212,7 +229,7 @@ export async function applyBulkPrices(c: Ctx, b: z.infer<typeof bulkBody>) {
   }
   stmts.push(auditStmt(c, { action: autoApprove ? "price.bulk_update" : "price.bulk_request", entity: "price_list", entityId: b.priceListId, after: { items: b.items, effectiveFrom: from, belowCost }, reason: b.note }));
   const res = await guarded(() => db.batch(stmts));
-  const priceIds = res.filter((r, idx) => idx < stmts.length - 1 && r.meta.last_row_id && (autoApprove ? idx % 2 === 1 : idx % 2 === 0)).map((r) => r.meta.last_row_id as number);
+  const priceIds = res.filter((r, idx) => idx < stmts.length - 1 && r.meta.last_row_id && (autoApprove ? idx % 3 === 2 : idx % 2 === 0)).map((r) => r.meta.last_row_id as number);
   return { status: autoApprove ? ("active" as const) : ("pending_approval" as const), effectiveFrom: from, priceIds, belowCost };
 }
 
@@ -223,6 +240,7 @@ function activateStmts(c: Ctx, price: any, approverId: number, effectiveFrom: st
     db
       .prepare(`UPDATE prices SET effective_to = ? WHERE price_list_id = ? AND product_id = ? AND status = 'active' AND effective_to IS NULL AND effective_from < ? AND id <> ?`)
       .bind(effectiveFrom, price.price_list_id, price.product_id, effectiveFrom, price.id),
+    voidFutureStmt(db, price.price_list_id, price.product_id, effectiveFrom, price.id),
     db
       .prepare(`UPDATE prices SET status = 'active', approved_by = ?, effective_from = ? WHERE id = ? AND status = 'pending'`)
       .bind(approverId, effectiveFrom, price.id),

@@ -9,7 +9,7 @@ import { Lnk } from "./b2b/kit";
 import { navigate } from "../router";
 
 /** Loại yêu cầu thật của backend (routes/pos.ts, finance.ts, inventory.ts, prices.ts). */
-const TYPES: Record<string, string> = { "order.below_cost": "Bán dưới giá vốn", "order.discount": "Giảm giá vượt ngưỡng", "order.return": "Trả hàng POS cần duyệt", "stock_doc.post": "Chứng từ kho cần duyệt", "cash_voucher.post": "Chi tiền lớn", "price.activate": "Đổi giá bán", "order.credit_override": "Đơn sỉ vượt hạn mức công nợ", "quote.approve": "Báo giá giảm sâu / dưới giá vốn", "debt_adjustment.post": "Điều chỉnh công nợ", "debt_payment.post": "Chi công nợ vượt ngưỡng", "shop.b2b_link": "Khách web xin liên kết khách sỉ" };
+const TYPES: Record<string, string> = { "order.below_cost": "Bán dưới giá vốn", "order.discount": "Giảm giá vượt ngưỡng", "order.return": "Trả hàng POS cần duyệt", "stock_doc.post": "Chứng từ kho cần duyệt", "cash_voucher.post": "Chi tiền lớn", "price.activate": "Đổi giá bán", "order.credit_override": "Đơn sỉ vượt hạn mức công nợ", "quote.approve": "Báo giá giảm sâu / dưới giá vốn", "debt_adjustment.post": "Điều chỉnh công nợ", "debt_payment.post": "Chi công nợ vượt ngưỡng", "shop.b2b_link": "Khách web xin liên kết khách sỉ", "customer.credit_change": "Hạn mức nợ / hạn thanh toán khách sỉ" };
 const CREDIT: Record<string, string> = { overdue: "Khách đang có nợ quá hạn", over_limit: "Vượt hạn mức công nợ" };
 const ADJ: Record<string, string> = { discount: "Chiết khấu", write_off: "Xoá nợ", offset: "Cấn trừ" };
 export default function Approvals() {
@@ -35,6 +35,7 @@ const detail = (x: any) => {
   else if (x.type === "debt_payment.post") { d["Phiếu"] = p.code; d["Đối tác"] = p.partnerName; d["Số tiền"] = money(p.amount); }
   else if (x.type === "cash_voucher.post") { d["Phiếu"] = p.code; d["Số tiền"] = money(p.amount); }
   else if (x.type === "price.activate") { d["Giá mới"] = money(p.unitPrice); d["Mặt hàng #"] = p.productId; d["Có hiệu lực từ"] = fmtDateTime(p.effectiveFrom); if (p.belowCost) d["Cảnh báo"] = "Thấp hơn giá vốn"; }
+  else if (x.type === "customer.credit_change") { d["Khách"] = p.code ?? `#${x.refId}`; if (p.creditLimit != null) d["Hạn mức xin"] = money(p.creditLimit); if (p.paymentTermsDays != null) d["Hạn thanh toán xin"] = `${p.paymentTermsDays} ngày`; }
   else if (x.type === "shop.b2b_link") { d["Công ty"] = p.companyName; d["Mã số thuế"] = p.taxCode; if (p.note) d["Ghi chú"] = p.note; d["Tài khoản web #"] = x.refId; }
   else if (x.refType) d["Tham chiếu"] = `${x.refType} #${x.refId}`;
   return d;

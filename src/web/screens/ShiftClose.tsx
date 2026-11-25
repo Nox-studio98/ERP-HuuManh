@@ -5,12 +5,14 @@ import { Badge, Banner, Button, Card, DataTable, MoneyInput, Spinner, TextArea, 
 import { CHANNELS, METHODS, fmtDateTime, fmtTime, money, qtyText } from "../format";
 import { toast } from "../components/toast";
 import { navigate } from "../router";
+import { syncQueue, useQueue } from "../offline";
 
 /** Báo cáo cuối ca (backend salesSummary): byChannel[{channel,orders,revenue}], byMethod[{method,amount}], topProducts[{productId,name,qtyMilli,revenue}] */
 type Row = { label: string; value: number; extra?: string };
 const rowsOf = (x: any, labelKey: string): Row[] => (Array.isArray(x) ? x.map((r) => ({ label: String(r[labelKey] ?? "—"), value: r.revenue ?? r.amount ?? 0, extra: r.qtyMilli != null ? qtyText(r.qtyMilli) : r.orders != null ? `${r.orders} đơn` : undefined })) : []);
 
 export default function ShiftClose() {
+  const queue = useQueue(); // A-09: còn đơn offline chưa đồng bộ thì chưa được chốt ca
   const cur = useAsync(async () => { try { const r = await get("/shifts/current", undefined, { silent: true }); return r?.shift ?? (r?.id ? r : null); } catch { return null; } }, []);
   const [counted, setCounted] = useState(0), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   const [report, setReport] = useState<any>(null);
@@ -44,10 +46,16 @@ export default function ShiftClose() {
             <div className="kpi"><div className="l">Tiền đầu ca</div><div className="v">{money(s.openingCash)}</div></div>
             <div className="kpi"><div className="l">Dự kiến trong két</div><div className="v">{expected != null ? money(expected) : "Tính khi chốt"}</div></div>
           </div>
+          {queue.length > 0 && (
+            <Banner tone="danger">
+              Còn {queue.length} đơn bán offline chưa đồng bộ — phải đồng bộ xong mới chốt ca, nếu không tiền mặt của các đơn này sẽ lệch.{" "}
+              <Button size="sm" variant="soft" onClick={() => syncQueue(true)}>Đồng bộ ngay</Button>
+            </Banner>
+          )}
           <MoneyInput label="Tiền mặt kiểm đếm thực tế (₫)" value={counted} onChange={setCounted} />
           {diff !== undefined && <div className={"banner " + (diff === 0 ? "info" : "")}>{diff === 0 ? "Khớp, không chênh lệch." : `Chênh lệch ${diff > 0 ? "thừa" : "thiếu"} ${money(Math.abs(diff))}`}</div>}
           <TextArea label={needReason ? "Lý do chênh lệch (bắt buộc)" : "Lý do chênh lệch (nếu có)"} value={reason} onChange={(e) => setReason(e.target.value)} />
-          <Button size="lg" block loading={busy} disabled={needReason && reason.trim().length < 3} onClick={close}>Chốt ca</Button>
+          <Button size="lg" block loading={busy} disabled={queue.length > 0 || (needReason && reason.trim().length < 3)} onClick={close}>Chốt ca</Button>
         </div>
       </Card>
       <Card title="Thông tin ca">

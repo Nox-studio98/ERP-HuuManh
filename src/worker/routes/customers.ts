@@ -7,6 +7,9 @@ import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { customerDebtStatus } from "../services/debt";
 import { guarded, pageParams } from "../services/http";
+import { assertStmt } from "../services/guard";
+import { getSettingInt } from "../services/settings";
+import { registerApprovalHandler } from "../services/approval-registry";
 
 export const customerRoutes = new Hono<AppBindings>();
 
@@ -43,6 +46,38 @@ const createSchema = z.object({
   ownerUserId: z.number().int().positive().nullish(),
   contacts: z.array(contactSchema).max(20),
   addresses: z.array(addressSchema).max(20),
+  creditReason: z.string().trim().min(3).max(300).optional(), // A-10: lý do khi đặt hạn mức / hạn thanh toán vượt ngưỡng
+});
+
+// ---------------------------------------------------------------- A-10: hạn mức nợ / hạn thanh toán
+/**
+ * Chỉ người có `b2b.credit_override` (chủ) được tự đặt hạn mức nợ / hạn thanh toán tuỳ ý. Người khác (quản lý) chỉ tự đặt trong ngưỡng
+ * (settings b2b.new_credit_limit_max_vnd, b2b.new_payment_terms_max_days) hoặc hạ xuống; phần vượt ngưỡng thành yêu cầu duyệt `customer.credit_change` gửi chủ.
+ */
+async function creditThresholds(c: Ctx) {
+  const db = c.env.DB;
+  return {
+    maxLimit: await getSettingInt(db, "b2b.new_credit_limit_max_vnd", 50_000_000),
+    maxDays: await getSettingInt(db, "b2b.new_payment_terms_max_days", 30),
+    owner: can(c.get("user").role, "b2b.credit_override"),
+  };
+}
+
+registerApprovalHandler("customer.credit_change", {
+  perm: "b2b.credit_override",
+  async onApprove(c, a, note) {
+    const db = c.env.DB;
+    const id = Number(a.ref_id);
+    const cur = await db.prepare(`SELECT id, credit_limit, payment_terms_days FROM customers WHERE id = ?`).bind(id).first<any>();
+    if (!cur) throw notFound("customer_not_found", "Không tìm thấy khách hàng");
+    let p: { creditLimit?: number; paymentTermsDays?: number } = {};
+    try { p = JSON.parse(a.payload_json ?? "{}"); } catch { /* bỏ qua */ }
+    const next = { credit_limit: p.creditLimit ?? cur.credit_limit, payment_terms_days: p.paymentTermsDays ?? cur.payment_terms_days };
+    return [
+      c.env.DB.prepare(`UPDATE customers SET credit_limit = ?, payment_terms_days = ?, version = version + 1 WHERE id = ?`).bind(next.credit_limit, next.payment_terms_days, id),
+      auditStmt(c, { action: "customer.credit_approved", entity: "customer", entityId: id, before: { credit_limit: cur.credit_limit, payment_terms_days: cur.payment_terms_days }, after: next, reason: note ?? a.reason ?? undefined }),
+    ];
+  },
 });
 
 /** KH-0001: số tăng liên tục, nguyên tử qua doc_sequences (day cố định). */
@@ -141,6 +176,12 @@ customerRoutes.post("/customers", requirePerm("b2b.write"), async (c) => {
     if (a.receiverContactIndex != null && a.receiverContactIndex >= b.contacts.length) throw new AppError(422, "validation_error", "receiverContactIndex vượt quá số liên hệ");
   const g = await db.prepare(`SELECT id FROM customer_groups WHERE id = ?`).bind(b.customerGroupId).first();
   if (!g) throw new AppError(422, "invalid_group", "Nhóm khách hàng không tồn tại");
+  // A-10: quản lý chỉ tự đặt trong ngưỡng; phần vượt tạo khách với mức trần và gửi yêu cầu duyệt cho chủ
+  const th = await creditThresholds(c);
+  const overLimit = !th.owner && (b.creditLimit > th.maxLimit || b.paymentTermsDays > th.maxDays);
+  if (overLimit && !b.creditReason) throw new AppError(422, "credit_reason_required", "Hạn mức / hạn thanh toán vượt ngưỡng cho phép, cần nhập lý do để gửi chủ duyệt", { maxLimit: th.maxLimit, maxDays: th.maxDays });
+  const startLimit = overLimit ? Math.min(b.creditLimit, th.maxLimit) : b.creditLimit;
+  const startDays = overLimit ? Math.min(b.paymentTermsDays, th.maxDays) : b.paymentTermsDays;
   const code = await nextCustomerCode(db);
   const firstReceiver = b.contacts.findIndex((x) => x.isReceiver);
   const defaultIdx = Math.max(0, b.addresses.findIndex((a) => a.isDefault));
@@ -151,7 +192,7 @@ customerRoutes.post("/customers", requirePerm("b2b.write"), async (c) => {
         `INSERT INTO customers(code, type, name, phone, email, customer_group_id, tax_code, credit_limit, payment_terms_days, owner_user_id, billing_address, note, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
       )
-      .bind(code, "b2b", b.name, b.phone ?? null, b.email ?? null, b.customerGroupId, b.taxCode ?? null, b.creditLimit, b.paymentTermsDays, b.ownerUserId ?? null, b.billingAddress ?? null, b.note ?? null),
+      .bind(code, "b2b", b.name, b.phone ?? null, b.email ?? null, b.customerGroupId, b.taxCode ?? null, startLimit, startDays, b.ownerUserId ?? null, b.billingAddress ?? null, b.note ?? null),
     ...b.contacts.map((x) =>
       db
         .prepare(`INSERT INTO customer_contacts(customer_id, name, phone, email, role, is_receiver) VALUES (${byCode},?,?,?,?,?)`)
@@ -165,11 +206,17 @@ customerRoutes.post("/customers", requirePerm("b2b.write"), async (c) => {
         )
         .bind(code, a.label, a.address, code, a.receiverContactIndex ?? firstReceiver, a.deliveryNote ?? null, i === defaultIdx ? 1 : 0),
     ),
-    auditStmt(c, { action: "customer.create", entity: "customer", entityId: code, after: { name: b.name, creditLimit: b.creditLimit, paymentTermsDays: b.paymentTermsDays, customerGroupId: b.customerGroupId } }),
+    auditStmt(c, { action: "customer.create", entity: "customer", entityId: code, after: { name: b.name, creditLimit: startLimit, paymentTermsDays: startDays, requestedCreditLimit: b.creditLimit, requestedPaymentTermsDays: b.paymentTermsDays, customerGroupId: b.customerGroupId }, reason: b.creditReason }),
   ];
+  if (overLimit)
+    stmts.push(
+      db
+        .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('customer.credit_change','customer',(SELECT CAST(id AS TEXT) FROM customers WHERE code = ?),?,?,?)`)
+        .bind(code, JSON.stringify({ creditLimit: b.creditLimit, paymentTermsDays: b.paymentTermsDays, code }), b.creditReason!, c.get("user").id),
+    );
   await guarded(() => db.batch(stmts));
   const row = await db.prepare(`SELECT id FROM customers WHERE code = ?`).bind(code).first<{ id: number }>();
-  return c.json(await customerDetail(c, row!.id), 201);
+  return c.json({ ...(await customerDetail(c, row!.id)), ...(overLimit ? { creditApprovalPending: true, requestedCreditLimit: b.creditLimit, requestedPaymentTermsDays: b.paymentTermsDays } : {}) }, 201);
 });
 
 const updateSchema = z.object({
@@ -185,6 +232,7 @@ const updateSchema = z.object({
   paymentTermsDays: z.number().int().min(0).max(365).optional(),
   ownerUserId: z.number().int().positive().nullish(),
   active: z.boolean().optional(),
+  creditReason: z.string().trim().min(3).max(300).optional(), // A-10: bắt buộc khi đổi hạn mức / hạn thanh toán
 });
 
 customerRoutes.put("/customers/:id", requirePerm("b2b.write"), async (c) => {
@@ -193,11 +241,20 @@ customerRoutes.put("/customers/:id", requirePerm("b2b.write"), async (c) => {
   const b = await parse(c, updateSchema);
   const cur = await loadCustomer(db, id);
   if (cur.version !== b.version) throw conflict("version_conflict", "Khách hàng đã được người khác cập nhật", { currentVersion: cur.version });
-  const sensitive =
-    (b.creditLimit !== undefined && b.creditLimit !== cur.credit_limit) ||
-    (b.paymentTermsDays !== undefined && b.paymentTermsDays !== cur.payment_terms_days) ||
-    (b.customerGroupId !== undefined && b.customerGroupId !== cur.customer_group_id);
-  if (sensitive && !can(c.get("user").role, "b2b.approve")) throw new AppError(403, "forbidden", "Đổi hạn mức, hạn thanh toán hoặc nhóm khách cần quyền duyệt");
+  const limitChanged = b.creditLimit !== undefined && b.creditLimit !== cur.credit_limit;
+  const termsChanged = b.paymentTermsDays !== undefined && b.paymentTermsDays !== cur.payment_terms_days;
+  const groupChanged = b.customerGroupId !== undefined && b.customerGroupId !== cur.customer_group_id;
+  const user = c.get("user");
+  if ((limitChanged || termsChanged || groupChanged) && !can(user.role, "b2b.approve")) throw new AppError(403, "forbidden", "Đổi hạn mức, hạn thanh toán hoặc nhóm khách cần quyền duyệt");
+  // A-10: đổi hạn mức / hạn thanh toán phải có lý do; quản lý nâng vượt ngưỡng → yêu cầu duyệt của chủ (các thay đổi khác vẫn lưu ngay)
+  if ((limitChanged || termsChanged) && !b.creditReason) throw new AppError(422, "credit_reason_required", "Đổi hạn mức hoặc hạn thanh toán cần nhập lý do");
+  const th = await creditThresholds(c);
+  const needApproval =
+    !th.owner &&
+    ((limitChanged && b.creditLimit! > Math.max(th.maxLimit, cur.credit_limit)) || (termsChanged && b.paymentTermsDays! > Math.max(th.maxDays, cur.payment_terms_days)));
+  const deferred = needApproval
+    ? { creditLimit: limitChanged && b.creditLimit! > Math.max(th.maxLimit, cur.credit_limit) ? b.creditLimit : undefined, paymentTermsDays: termsChanged && b.paymentTermsDays! > Math.max(th.maxDays, cur.payment_terms_days) ? b.paymentTermsDays : undefined }
+    : null;
   const next = {
     name: b.name ?? cur.name,
     tax_code: b.taxCode !== undefined ? b.taxCode : cur.tax_code,
@@ -206,23 +263,31 @@ customerRoutes.put("/customers/:id", requirePerm("b2b.write"), async (c) => {
     billing_address: b.billingAddress !== undefined ? b.billingAddress : cur.billing_address,
     note: b.note !== undefined ? b.note : cur.note,
     customer_group_id: b.customerGroupId ?? cur.customer_group_id,
-    credit_limit: b.creditLimit ?? cur.credit_limit,
-    payment_terms_days: b.paymentTermsDays ?? cur.payment_terms_days,
+    credit_limit: deferred?.creditLimit !== undefined ? cur.credit_limit : (b.creditLimit ?? cur.credit_limit),
+    payment_terms_days: deferred?.paymentTermsDays !== undefined ? cur.payment_terms_days : (b.paymentTermsDays ?? cur.payment_terms_days),
     owner_user_id: b.ownerUserId !== undefined ? b.ownerUserId : cur.owner_user_id,
     active: b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
   };
   const pick = (o: any) => ({ name: o.name, tax_code: o.tax_code, billing_address: o.billing_address, customer_group_id: o.customer_group_id, credit_limit: o.credit_limit, payment_terms_days: o.payment_terms_days, owner_user_id: o.owner_user_id, active: o.active });
   const res = await db.batch([
+    assertStmt(db, "customer.update", `SELECT version = ? FROM customers WHERE id = ?`, [b.version, id]),
     db
       .prepare(
         `UPDATE customers SET name=?, tax_code=?, phone=?, email=?, billing_address=?, note=?, customer_group_id=?, credit_limit=?, payment_terms_days=?, owner_user_id=?, active=?, version = version + 1
           WHERE id = ? AND version = ?`,
       )
       .bind(next.name, next.tax_code, next.phone, next.email, next.billing_address, next.note, next.customer_group_id, next.credit_limit, next.payment_terms_days, next.owner_user_id, next.active, id, b.version),
-    auditStmt(c, { action: "customer.update", entity: "customer", entityId: id, before: pick(cur), after: pick(next) }),
+    auditStmt(c, { action: "customer.update", entity: "customer", entityId: id, before: pick(cur), after: pick(next), reason: limitChanged || termsChanged ? b.creditReason : undefined }),
+    ...(deferred
+      ? [
+          db
+            .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('customer.credit_change','customer',?,?,?,?)`)
+            .bind(String(id), JSON.stringify({ ...deferred, code: cur.code, currentCreditLimit: cur.credit_limit, currentPaymentTermsDays: cur.payment_terms_days }), b.creditReason!, user.id),
+        ]
+      : []),
   ]);
-  if (res[0].meta.changes === 0) throw conflict("version_conflict", "Khách hàng đã được người khác cập nhật");
-  return c.json(await customerDetail(c, id));
+  if (res[1].meta.changes === 0) throw conflict("version_conflict", "Khách hàng đã được người khác cập nhật");
+  return c.json({ ...(await customerDetail(c, id)), ...(deferred ? { creditApprovalPending: true, requestedCreditLimit: deferred.creditLimit ?? null, requestedPaymentTermsDays: deferred.paymentTermsDays ?? null } : {}) });
 });
 
 // ---------------------------------------------------------------- liên hệ & địa chỉ

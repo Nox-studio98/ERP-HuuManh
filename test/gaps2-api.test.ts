@@ -15,7 +15,7 @@ describe("PUT /price-lists/:id", () => {
   it("quản lý sửa bảng giá + audit; thu ngân bị chặn; 404; validate", async () => {
     const c = await api("manager", "POST", `${V}/price-lists`, { name: "KM G2", channel: "pos", kind: "promo", priority: 5 });
     expect(c.status).toBe(201);
-    const body = { name: "KM G2 sửa", channel: "online", kind: "group", priority: 30, customerGroupId: 2, active: false };
+    const body = { name: "KM G2 sửa", channel: "online", kind: "group", priority: 30, customerGroupId: 2, active: false, version: c.body.version };
     const u = await api("manager", "PUT", `${V}/price-lists/${c.body.id}`, body);
     expect(u.status).toBe(200);
     expect(u.body).toMatchObject({ name: "KM G2 sửa", channel: "online", kind: "group", priority: 30, customerGroupId: 2, active: false });
@@ -26,7 +26,7 @@ describe("PUT /price-lists/:id", () => {
     expect((await api("manager", "PUT", `${V}/price-lists/${c.body.id}`, { ...body, priority: -1 })).status).toBe(422);
   });
   it("không cho tắt bảng giá nền cuối cùng", async () => {
-    const r = await api("manager", "PUT", `${V}/price-lists/1`, { name: "Giá chung", channel: "all", kind: "base", priority: 0, active: false });
+    const r = await api("manager", "PUT", `${V}/price-lists/1`, { name: "Giá chung", channel: "all", kind: "base", priority: 0, active: false, version: 1 });
     expect(r.status).toBe(409);
   });
 });

@@ -237,6 +237,8 @@ export async function evaluatePromotions(db: D1Database, input: EngineInput): Pr
     else if (!v.active) fail("voucher_inactive");
     else if (v.max_uses != null && v.used_count >= v.max_uses) fail("voucher_exhausted");
     else if (v.customer_id != null && v.customer_id !== (input.customerId ?? null)) fail("voucher_wrong_customer");
+    // A-21: tại quầy, voucher không giới hạn tổng lượt chỉ bị chặn bằng "lượt/khách" → bắt buộc gắn khách, nếu không dùng vô hạn được
+    else if (input.channel === "pos" && !input.customerId && v.max_uses == null) fail("voucher_customer_required");
     else {
       let limited = false;
       if (input.customerId) {
