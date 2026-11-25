@@ -5,6 +5,10 @@ import { mkProduct, mkSupplier } from "./po-helpers";
 export { api, call, testEnv };
 export const V = "/api/v1";
 export const NCC_PW = "NccMatkhau-2026";
+/** Mật khẩu giả cho test đổi mật khẩu (không phải bí mật thật). */
+export const NCC_PW_NEW = "MatKhauMoi-12345";
+export const NCC_PW_NEW_B = "MatKhauMoiAAA-1";
+export const NCC_PW_WRONG = "SaiSaiSai-1234";
 export const db = () => testEnv.DB;
 
 /** Phiên cổng NCC: header Cookie + CSRF. */

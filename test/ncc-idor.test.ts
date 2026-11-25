@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { api, call, db, mkNcc, mkProduct, mkSentPo, mkSupplier, ncc, seedBase, V, type NccSession } from "./ncc-helpers";
+import { api, call, db, mkNcc, mkProduct, mkSentPo, mkSupplier, ncc, seedBase, V, type NccSession, NCC_PW, NCC_PW_NEW, NCC_PW_NEW_B } from "./ncc-helpers";
 import { seedShop, testEnv } from "./shop-helpers";
 import { FONT_KEYS } from "../src/worker/services/pdf";
 import regularFont from "@expo-google-fonts/be-vietnam-pro/400Regular/BeVietnamPro_400Regular.ttf?inline";
@@ -117,10 +117,10 @@ describe("IDOR theo từng route /api/ncc", () => {
   });
 
   it("phiên NCC A không thao tác được tài khoản NCC B (đổi mật khẩu chỉ ảnh hưởng chính mình); mời/khoá chỉ có ở ERP", async () => {
-    const r = await ncc(A, "POST", "/me/password", { currentPassword: "NccMatkhau-2026", newPassword: "MatKhauMoiAAA-1", accountId: B.account.id });
+    const r = await ncc(A, "POST", "/me/password", { currentPassword: NCC_PW, newPassword: NCC_PW_NEW_B, accountId: B.account.id });
     expect(r.status).toBe(200);
     // B vẫn đăng nhập được bằng mật khẩu cũ
-    expect((await call("POST", "/api/ncc/auth/login", { email: "idor-b@example.com", password: "NccMatkhau-2026" })).status).toBe(200);
+    expect((await call("POST", "/api/ncc/auth/login", { email: "idor-b@example.com", password: NCC_PW })).status).toBe(200);
     // các route quản lý tài khoản của ERP không tồn tại ở cổng; cũng không dùng phiên NCC để gọi ERP
     for (const p of ["/api/ncc/invites", "/api/ncc/portal", "/api/ncc/users/1/lock"]) expect((await call("POST", p, {}, { headers: A.headers })).status, p).toBe(404);
     const tok = A.headers.cookie.split("=")[1];

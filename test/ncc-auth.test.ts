@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { api, call, cookieOf, db, invite, loginNcc, mkNcc, mkSupplier, ncc, NCC_PW, seedBase, tokenOf, V } from "./ncc-helpers";
+import { api, call, cookieOf, db, invite, loginNcc, mkNcc, mkSupplier, ncc, NCC_PW, seedBase, tokenOf, V, NCC_PW_NEW, NCC_PW_NEW_B, NCC_PW_WRONG } from "./ncc-helpers";
 import { register, seedShop } from "./shop-helpers";
 import { sha256 } from "../src/worker/lib/crypto";
 import { _resetRateLimitWarn } from "../src/shop/worker/lib/ratelimit";
@@ -73,7 +73,7 @@ describe("mời NCC từ ERP", () => {
     expect(ok.res.headers.get("set-cookie")).toMatch(/__Host-ncc=.*HttpOnly.*Secure.*SameSite=Strict/i);
     expect((await db().prepare(`SELECT status, pass_hash FROM supplier_accounts WHERE email = 'dat-mk@example.com'`).first<any>())).toMatchObject({ status: "active" });
     // dùng lại link → 400
-    expect((await call("POST", "/api/ncc/auth/accept", { token: tok, password: "MatKhauKhac-9999" })).status).toBe(400);
+    expect((await call("POST", "/api/ncc/auth/accept", { token: tok, password: NCC_PW_NEW_B })).status).toBe(400);
     expect((await call("POST", "/api/ncc/auth/invite", { token: tok })).status).toBe(400);
     expect((await login("dat-mk@example.com", "MatKhauKhac-9999")).status).toBe(401);
     expect((await login("dat-mk@example.com", NCC_PW)).status).toBe(200);
@@ -194,11 +194,11 @@ describe("phiên riêng, CSRF, tách khỏi khách và nhân viên", () => {
     const s = await mkNcc(9601, "csrf@example.com");
     const cookie = { cookie: s.headers.cookie };
     for (const h of [cookie, { ...cookie, authorization: "Bearer x" }]) {
-      const r = await call("POST", "/api/ncc/me/password", { currentPassword: NCC_PW, newPassword: "MatKhauMoi-12345" }, { headers: h });
+      const r = await call("POST", "/api/ncc/me/password", { currentPassword: NCC_PW, newPassword: NCC_PW_NEW }, { headers: h });
       expect(r.status).toBe(403);
       expect(r.body.error.code).toBe("csrf");
     }
-    expect((await ncc(s, "POST", "/me/password", { currentPassword: "sai-sai-sai-sai", newPassword: "MatKhauMoi-12345" })).status).toBe(403); // có header → vào được logic (sai mật khẩu)
+    expect((await ncc(s, "POST", "/me/password", { currentPassword: NCC_PW_WRONG, newPassword: NCC_PW_NEW })).status).toBe(403); // có header → vào được logic (sai mật khẩu)
     expect((await call("GET", "/api/ncc/me", undefined, { headers: cookie })).status).toBe(200); // GET không cần header
   });
 
@@ -220,14 +220,14 @@ describe("phiên riêng, CSRF, tách khỏi khách và nhân viên", () => {
   it("đổi mật khẩu: sai mật khẩu hiện tại → 403; trùng cũ → 422; thành công thu hồi phiên khác, giữ phiên hiện tại", async () => {
     const a = await mkNcc(9601, "doi-mk@example.com");
     const b = await loginNcc("doi-mk@example.com");
-    expect((await ncc(a, "POST", "/me/password", { currentPassword: "SaiSaiSai-1234", newPassword: "MatKhauMoi-12345" })).status).toBe(403);
+    expect((await ncc(a, "POST", "/me/password", { currentPassword: NCC_PW_WRONG, newPassword: NCC_PW_NEW })).status).toBe(403);
     expect((await ncc(a, "POST", "/me/password", { currentPassword: NCC_PW, newPassword: NCC_PW })).status).toBe(422);
     expect((await ncc(a, "POST", "/me/password", { currentPassword: NCC_PW, newPassword: "ngan" })).status).toBe(422);
-    expect((await ncc(a, "POST", "/me/password", { currentPassword: NCC_PW, newPassword: "MatKhauMoi-12345" })).status).toBe(200);
+    expect((await ncc(a, "POST", "/me/password", { currentPassword: NCC_PW, newPassword: NCC_PW_NEW })).status).toBe(200);
     expect((await ncc(a, "GET", "/me")).status).toBe(200);
     expect((await ncc(b, "GET", "/me")).status).toBe(401);
     expect((await login("doi-mk@example.com", NCC_PW)).status).toBe(401);
-    expect((await login("doi-mk@example.com", "MatKhauMoi-12345")).status).toBe(200);
+    expect((await login("doi-mk@example.com", NCC_PW_NEW)).status).toBe(200);
   });
 
   it("khoá từ ERP thu hồi phiên đang mở ngay; NCC ngừng giao dịch cũng không vào được; portal_enabled=0 chặn cả đăng nhập lẫn phiên", async () => {
