@@ -8,6 +8,8 @@ let warnedMissing = false;
 export function rateBucket(method: string, path: string): { bucket: string; strict: boolean } {
   if (/^\/api\/auth\/(login|register|forgot|reset|verify-email)$/.test(path)) return { bucket: `auth:${path.slice(10)}`, strict: true };
   if (path.startsWith("/api/auth/")) return { bucket: "auth", strict: true };
+  // Cổng NCC: đăng nhập / kiểm tra + đặt mật khẩu từ link mời / đổi mật khẩu dùng nhóm chặt (RL_AUTH)
+  if (/^\/api\/ncc\/auth\/(login|invite|accept)$/.test(path) || path === "/api/ncc/me/password") return { bucket: `ncc-auth:${path.split("/").pop()}`, strict: true };
   if (path === "/api/checkout") return { bucket: "checkout", strict: false };
   if (path.startsWith("/api/payments/")) return { bucket: "payments", strict: false };
   if (/quote/.test(path)) return { bucket: "quote", strict: false };

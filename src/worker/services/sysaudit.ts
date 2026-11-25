@@ -6,11 +6,14 @@ export interface SysAuditEntry {
   before?: unknown;
   after?: unknown;
   reason?: string;
+  /** Người thực hiện không phải nhân viên (vd. 'supplier_account:12' ở cổng NCC). */
+  actor?: string;
+  ip?: string | null;
 }
 
 export function sysAuditStmt(db: D1Database, e: SysAuditEntry, userId: number | null = null): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO audit_log(user_id, action, entity, entity_id, before_json, after_json, reason) VALUES (?,?,?,?,?,?,?)`)
+    .prepare(`INSERT INTO audit_log(user_id, action, entity, entity_id, before_json, after_json, reason, actor, ip) VALUES (?,?,?,?,?,?,?,?,?)`)
     .bind(
       userId,
       e.action,
@@ -19,6 +22,8 @@ export function sysAuditStmt(db: D1Database, e: SysAuditEntry, userId: number | 
       e.before !== undefined ? JSON.stringify(e.before) : null,
       e.after !== undefined ? JSON.stringify(e.after) : null,
       e.reason ?? null,
+      e.actor ?? null,
+      e.ip ?? null,
     );
 }
 

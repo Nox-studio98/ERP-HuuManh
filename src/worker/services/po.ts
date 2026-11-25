@@ -10,6 +10,7 @@ import { assertStmt, onceStmt } from "./guard";
 import { assertPeriodOpen } from "./period";
 import { getSettingInt } from "./settings";
 import { sysAuditStmt } from "./sysaudit";
+import { enqueueJobStmt } from "./outbox";
 import { unitFactor } from "./http";
 import { allocateReceivedToShortages, sweepDeadShortagesStmt } from "./shortages";
 
@@ -34,12 +35,14 @@ export interface PoActor {
   id?: number | null;
   role?: Role;
   c?: Ctx | null;
+  /** IP request (cổng NCC) để ghi audit */
+  ip?: string | null;
 }
 
 const audit = (db: D1Database, a: PoActor, e: { action: string; entityId: number | string; before?: unknown; after?: unknown; reason?: string }) =>
   a.c
     ? auditStmt(a.c, { ...e, entity: "purchase_order" })
-    : sysAuditStmt(db, { ...e, entity: "purchase_order", after: { ...(e.after as object | undefined), actor: a.type === "supplier" ? `supplier_account:${a.id ?? "?"}` : a.type } }, a.userId);
+    : sysAuditStmt(db, { ...e, entity: "purchase_order", actor: a.type === "supplier" ? `supplier_account:${a.id ?? "?"}` : undefined, ip: a.ip, after: { ...(e.after as object | undefined), actor: a.type === "supplier" ? `supplier_account:${a.id ?? "?"}` : a.type } }, a.userId);
 
 // ---------------------------------------------------------------- thời gian chốt đêm
 
@@ -547,6 +550,19 @@ export interface SupplierResponse {
   version: number;
 }
 
+/** Thông báo trong ERP (+ push cho quản lý/chủ) khi NCC tự phản hồi PO trên cổng — cùng batch với việc đổi trạng thái. Nhân viên ghi nhận hộ thì không cần báo. */
+function supplierResponseNotify(db: D1Database, po: any, actor: PoActor, action: SupplierResponse["action"], note: string | null): D1PreparedStatement[] {
+  if (actor.type !== "supplier") return [];
+  const what = action === "confirm" ? "đã xác nhận" : action === "propose" ? "đề xuất sửa" : "từ chối";
+  const title = `NCC ${po.supplier_name} ${what} đơn ${po.code}`;
+  const body = action === "reject" ? `Lý do: ${(note ?? "").slice(0, 160)}` : action === "propose" ? "Mở đơn để chấp nhận hoặc từ chối đề xuất." : "Đơn đã chuyển sang trạng thái NCC đã xác nhận.";
+  const url = `/purchase-orders?open=${po.id}`;
+  return [
+    db.prepare(`INSERT INTO notifications(kind, title, body, audience_perm, ref_type, ref_id, url) VALUES (?,?,?,?,?,?,?)`).bind(`po_supplier_${action}`, title, body, "purchasing.approve", "purchase_order", po.id, url),
+    enqueueJobStmt(db, "notify.managers", "purchase_order", po.id, { title, body, url }),
+  ];
+}
+
 /**
  * NCC phản hồi PO đã gửi (docs/PO-NCC.md 4.4). Dùng chung cho: nhân viên ghi nhận hộ (qua điện thoại/Zalo) và cổng NCC (đợt sau).
  *  confirm → confirmed (chốt SL/giá = số đặt); propose → supplier_proposed (kèm SL/giá/ngày giao đề xuất); reject → rejected (bắt buộc lý do).
@@ -568,6 +584,7 @@ export async function applySupplierResponse(db: D1Database, poId: number, input:
         .bind(input.expectedDate ?? null, noteTxt, poId),
       recomputeTotalStmt(db, poId),
       audit(db, actor, { action: "po.supplier_confirm", entityId: poId, before: { status: "sent" }, after: { status: "confirmed", expectedDate: input.expectedDate ?? po.expected_date }, reason: noteTxt ?? undefined }),
+      ...supplierResponseNotify(db, po, actor, "confirm", noteTxt),
     ]);
     return;
   }
@@ -577,6 +594,7 @@ export async function applySupplierResponse(db: D1Database, poId: number, input:
       guard,
       db.prepare(`UPDATE purchase_orders SET status = 'rejected', supplier_note = ?, reject_reason = ?, closed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), version = version + 1 WHERE id = ? AND status = 'sent'`).bind(noteTxt, noteTxt, poId),
       audit(db, actor, { action: "po.supplier_reject", entityId: poId, before: { status: "sent" }, after: { status: "rejected" }, reason: noteTxt }),
+      ...supplierResponseNotify(db, po, actor, "reject", noteTxt),
     ]);
     return;
   }
@@ -602,6 +620,7 @@ export async function applySupplierResponse(db: D1Database, poId: number, input:
       .prepare(`UPDATE purchase_orders SET status = 'supplier_proposed', proposed_expected_date = ?, supplier_note = ?, version = version + 1 WHERE id = ? AND status = 'sent'`)
       .bind(input.expectedDate ?? null, noteTxt, poId),
     audit(db, actor, { action: "po.supplier_propose", entityId: poId, before: { status: "sent" }, after: { status: "supplier_proposed", lines: input.lines?.length ?? 0, expectedDate: input.expectedDate ?? null }, reason: noteTxt ?? undefined }),
+    ...supplierResponseNotify(db, po, actor, "propose", noteTxt),
   );
   if (!input.lines?.length && !input.expectedDate) throw new AppError(422, "validation_error", "Đề xuất cần ít nhất một thay đổi (số lượng, giá hoặc ngày giao)");
   await db.batch(stmts);

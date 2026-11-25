@@ -53,6 +53,8 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "po.allow_short_confirm", group: "Bán hàng & giá", label: "Cho xác nhận đơn khi thiếu hàng (chờ hàng về)", help: "Bật: đơn sỉ / đơn online đặt trước giao ngày sau vẫn xác nhận được, giữ phần có tồn và ghi phần thiếu để đặt NCC. Tắt: thiếu hàng thì chặn như cũ.", type: "bool" },
   { key: "po.cutoff_time", group: "Bán hàng & giá", label: "Giờ chốt đêm gom phần thiếu thành đơn đặt NCC", help: "Giờ Việt Nam, dạng HH:MM. Đơn nhập trước giờ này (kể cả sau nửa đêm) thuộc ngày chốt của buổi tối hôm trước. Có nút \"Chốt ngay\" nếu nhập đơn xong sớm.", type: "text", maxLen: 5 },
   { key: "po.horizon_days", group: "Bán hàng & giá", label: "Đơn đặt NCC: gom phần thiếu của đơn giao trong N ngày tới", help: "Chỉ phần thiếu của đơn có ngày giao trong số ngày này (tính cả hôm nay) mới vào đơn đặt NCC.", type: "int", unit: "ngày", min: 0, max: 30 },
+  { key: "ncc.portal_enabled", group: "Online/website", label: "Bật cổng nhà cung cấp (/ncc)", help: "Bật: nhà cung cấp được mời đăng nhập cổng trên website để xem/xác nhận đơn đặt hàng, công nợ và thanh toán. Tắt: NCC không đăng nhập được và phiên đang mở bị từ chối. [Cần xác nhận]", type: "bool" },
+  { key: "ncc.invite_ttl_hours", group: "Online/website", label: "Hạn link mời vào cổng nhà cung cấp", help: "Link mời / đặt mật khẩu dùng một lần, hết hạn sau số giờ này. [Cần xác nhận]", type: "int", unit: "giờ", min: 1, max: 720 },
   { key: "reorder.cover_days", group: "Bán hàng & giá", label: "Gợi ý đặt hàng: số ngày tồn mục tiêu", help: "Số ngày bán đủ hàng mong muốn sau khi hàng về.", type: "int", unit: "ngày", min: 1, max: 90 },
 
   // ===== Công nợ =====

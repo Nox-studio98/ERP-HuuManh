@@ -119,7 +119,7 @@ imgRoutes.get("/img/*", async (c) => {
 
 export const seoRoutes = new Hono<ShopBindings>();
 seoRoutes.get("/robots.txt", (c) =>
-  c.text(`User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${baseUrl(c)}/sitemap.xml\n`),
+  c.text(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /ncc\nSitemap: ${baseUrl(c)}/sitemap.xml\n`),
 );
 seoRoutes.get("/sitemap.xml", async (c) => {
   const db = c.env.DB;

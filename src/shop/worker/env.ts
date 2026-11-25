@@ -35,7 +35,19 @@ export interface ShopAccount {
   sessionId: string;
 }
 
+/** Tài khoản nhà cung cấp đang đăng nhập cổng /ncc (phiên riêng, KHÔNG dùng chung với khách). */
+export interface SupplierAccount {
+  id: number;
+  supplierId: number;
+  supplierName: string;
+  supplierCode: string;
+  email: string;
+  phone: string | null;
+  fullName: string;
+  sessionId: string;
+}
+
 export type ShopBindings = {
   Bindings: ShopEnv;
-  Variables: { requestId: string; account: ShopAccount | null };
+  Variables: { requestId: string; account: ShopAccount | null; supplier: SupplierAccount | null };
 };

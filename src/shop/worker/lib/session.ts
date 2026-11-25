@@ -71,6 +71,9 @@ export const requireB2b: MiddlewareHandler<ShopBindings> = async (c, next) => {
  */
 export const csrfGuard: MiddlewareHandler<ShopBindings> = async (c, next) => {
   const m = c.req.method;
+  // Cổng NCC chỉ nhận cookie (không Bearer): request ghi mang cookie __Host-ncc luôn phải có header, kể cả khi có Authorization
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && getCookie(c, "__Host-ncc") && c.req.header("x-requested-with") !== "hm-shop")
+    throw new AppError(403, "csrf", "Yêu cầu không hợp lệ (thiếu header X-Requested-With)");
   if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && !c.req.header("authorization") && getCookie(c, SESSION_COOKIE)) {
     if (c.req.header("x-requested-with") !== "hm-shop") throw new AppError(403, "csrf", "Yêu cầu không hợp lệ (thiếu header X-Requested-With)");
   }
