@@ -128,6 +128,9 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "retention.employee_pii_months", group: "Hệ thống", label: "Che dữ liệu cá nhân nhân viên nghỉ việc sau", help: "Nhân viên nghỉ việc quá số tháng này: che CCCD, ngân hàng, địa chỉ, SĐT, email, ngày sinh. Họ tên, mã và dữ liệu lương/kế toán được giữ.", type: "int", unit: "tháng", min: 12, max: 240 },
   { key: "retention.audit_years", group: "Hệ thống", label: "Giữ nhật ký thay đổi (audit) tối thiểu", help: "Chính sách ghi nhận: hiện hệ thống không tự xoá nhật ký audit.", type: "int", unit: "năm", min: 5, max: 50 },
   { key: "notify.email_provider", group: "Hệ thống", label: "Nhà cung cấp email thông báo", help: "fake = chỉ ghi nhật ký; cloudflare = gửi thật.", type: "enum", options: o(["fake", "Chạy thử (fake)"], ["cloudflare", "Cloudflare Email"]) },
+  { key: "notify.approval.enabled", group: "Hệ thống", label: "Thông báo yêu cầu chờ duyệt", help: "Bật: người có quyền duyệt nhận thông báo (chuông + đẩy) khi có yêu cầu, người yêu cầu được báo lại khi được duyệt hoặc từ chối.", type: "bool" },
+  { key: "notify.approval.push", group: "Hệ thống", label: "Gửi thêm thông báo đẩy khi có yêu cầu duyệt", help: "Chỉ gửi cho người đã bật thông báo đẩy trên thiết bị. Tắt: chỉ hiện ở chuông trong ứng dụng.", type: "bool" },
+  { key: "notify.approval.groups", group: "Hệ thống", label: "Nhóm yêu cầu có thông báo", help: "Chọn nhóm cần thông báo: chi tiền/công nợ, bán hàng/giá, kho, nhân sự, khác.", type: "multi", options: o(["finance", "Chi tiền, công nợ"], ["sales", "Giảm giá, dưới giá vốn, hạn mức nợ, báo giá, giá"], ["stock", "Kiểm kê, trả hàng NCC"], ["hr", "Nghỉ phép, đổi ca, tăng ca, bổ sung công, chấm offline"], ["other", "Khác"]) },
 ];
 
 export const DEF_BY_KEY = new Map(SETTING_DEFS.map((d) => [d.key, d]));

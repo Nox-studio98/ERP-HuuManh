@@ -5,7 +5,7 @@ import { Scanner } from "../../components/Scanner";
 import { toast } from "../../components/toast";
 import { navigate } from "../../router";
 import { useCan } from "../../store";
-import { money, todayVN } from "../../format";
+import { downloadHref, money, todayVN } from "../../format";
 import { CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, addDaysS, days10, dm, dmy, errCode, hm, periodLabel, reqTone, useLeaveTypes, vnIso, vnTime, WD_SHORT, wdOf } from "./kit";
 
 type Tab = "today" | "schedule" | "swap" | "leave" | "ot" | "corr" | "payslip";
@@ -429,6 +429,7 @@ function PayslipSheet({ period, onClose }: { period: string; onClose: () => void
               ))}
             </div>
           ))}
+          <a className="btn soft" href={downloadHref(`/me/payslips/${period}/pdf`)} download data-testid="payslip-pdf">Tải phiếu lương PDF</a>
           <div className="hint">Công thức và mức bảo hiểm/thuế còn chờ xác nhận của chủ cửa hàng.</div>
         </div>
       )}

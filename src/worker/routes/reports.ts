@@ -7,6 +7,8 @@ import { AppError, notFound } from "../lib/errors";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { salesSummary } from "../services/salesreport";
 import { pnlAdjustments } from "../services/finance-reports";
+import { renderPnlPdf } from "../services/report-pdf";
+import { audit } from "../lib/audit";
 
 export const reportRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -150,6 +152,13 @@ async function pnl(c: Ctx) {
 
 const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
 reportRoutes.get("/reports/pnl", requirePerm("reports.view"), async (c) => c.json(await pnl(c)));
+// C-28: PDF lãi lỗ — cùng quyền và cùng số liệu với màn xem
+reportRoutes.get("/reports/pnl.pdf", requirePerm("reports.view"), async (c) => {
+  const p = await pnl(c);
+  const bytes = await renderPnlPdf(c.env, p);
+  await audit(c, { action: "export.pnl.pdf", entity: "export", entityId: "pnl", after: { from: p.from, to: p.to } });
+  return new Response(bytes as BodyInit, { status: 200, headers: { "content-type": "application/pdf", "content-disposition": `attachment; filename="lai-lo_${p.from}_${p.to}.pdf"`, "cache-control": "no-store" } });
+});
 
 async function inventoryReport(c: Ctx) {
   const db = c.env.DB;

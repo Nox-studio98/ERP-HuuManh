@@ -13,7 +13,7 @@ export const FONT_KEYS = { regular: "fonts/BeVietnamPro-Regular.ttf", bold: "fon
 const missingFont = (key: string) =>
   new AppError(501, "pdf_font_missing", `Chưa tải font tiếng Việt lên R2 (${key}). Tải BeVietnamPro-Regular.ttf và BeVietnamPro-Bold.ttf vào thư mục fonts/ của bucket FILES.`);
 
-async function loadFonts(env: Env, doc: PDFDocument) {
+export async function loadFonts(env: Env, doc: PDFDocument) {
   const [r, b] = await Promise.all([env.FILES.get(FONT_KEYS.regular), env.FILES.get(FONT_KEYS.bold)]);
   if (!r) throw missingFont(FONT_KEYS.regular);
   if (!b) throw missingFont(FONT_KEYS.bold);
@@ -36,7 +36,7 @@ const fmtQty = (milli: number) => {
   const frac = String(m % 1000).padStart(3, "0").replace(/0+$/, "");
   return neg + fmtVnd(Math.floor(m / 1000)) + (frac ? "," + frac : "");
 };
-const fmtDate = (ymd: string) => (/^\d{4}-\d{2}-\d{2}/.test(ymd) ? `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}/${ymd.slice(0, 4)}` : ymd);
+export const fmtDate = (ymd: string) => (/^\d{4}-\d{2}-\d{2}/.test(ymd) ? `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}/${ymd.slice(0, 4)}` : ymd);
 
 interface DocLine {
   name: string;
@@ -55,7 +55,7 @@ interface DocData {
   note?: string | null;
 }
 
-async function shopHeader(env: Env) {
+export async function shopHeader(env: Env) {
   const s = await env.DB.prepare(`SELECT name, address FROM stores WHERE active=1 ORDER BY id LIMIT 1`).first<{ name: string; address: string | null }>();
   return { name: s?.name ?? "Hữu Mạnh - Trái cây", address: s?.address ?? "" };
 }
@@ -67,7 +67,7 @@ async function displayFactor(env: Env, productId: number | null, unit: string): 
   return r?.f ?? 1000;
 }
 
-function wrap(text: string, font: PDFFont, size: number, maxW: number): string[] {
+export function wrap(text: string, font: PDFFont, size: number, maxW: number): string[] {
   const out: string[] = [];
   for (const para of text.split("\n")) {
     let cur = "";

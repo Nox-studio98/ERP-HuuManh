@@ -320,6 +320,7 @@ tr.sel td { background: var(--accent-soft) !important; }
 .pop .pop-item:hover { background: var(--surface-2); }
 .pop hr { border: 0; border-top: 1px solid var(--border); margin: var(--s-1) 0; }
 .pop.notif { width: min(380px, calc(100vw - 24px)); padding: 0; }
+@media (max-width: 640px) { .pop.notif { position: fixed; left: 12px; right: 12px; top: 58px; width: auto; } }
 .notif-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-3) var(--s-2); font-weight: 600; }
 .notif-list { max-height: 420px; overflow-y: auto; }
 .notif-item { display: block; width: 100%; text-align: left; padding: var(--s-2) var(--s-3); border: 0; border-top: 1px solid var(--border); background: none; cursor: pointer; }

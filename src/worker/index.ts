@@ -9,6 +9,7 @@ import { registerModuleRoutes } from "./routes";
 import { runScheduled } from "./scheduled";
 import { webhookRoutes } from "./routes/webhooks";
 import { processJob } from "./services/jobs";
+import { kickApprovalJobs } from "./services/notify-approval";
 
 const app = new Hono<AppBindings>();
 
@@ -54,6 +55,14 @@ app.route("/api/integrations", webhookRoutes);
 // Mọi route nghiệp vụ dưới /api/v1 đều yêu cầu đăng nhập; quyền chi tiết khai báo từng route bằng requirePerm()
 const v1 = new Hono<AppBindings>();
 v1.use("*", requireAuth);
+// C-27: sau mỗi request ghi thành công, đẩy ngay các job thông báo duyệt (trigger DB đã ghi vào outbox cùng giao dịch) — không chặn phản hồi.
+v1.use("*", async (c, next) => {
+  await next();
+  if (c.req.method === "GET" || c.req.method === "HEAD" || c.res.status >= 400) return;
+  try {
+    c.executionCtx.waitUntil(kickApprovalJobs(c.env, processJob).catch(() => {}));
+  } catch { /* không có ExecutionContext (test): cron/sweepJobs sẽ xử lý */ }
+});
 registerModuleRoutes(v1);
 app.route("/api/v1", v1);
 

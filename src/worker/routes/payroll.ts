@@ -12,6 +12,7 @@ import { assertStmt, onceStmt } from "../services/guard";
 import { assertPeriodOpen } from "../services/period";
 import { getSettingInt } from "../services/settings";
 import { buildXlsx, XLSX_MIME } from "../services/xlsx";
+import { renderPayrollPdf, renderPayslipPdf } from "../services/report-pdf";
 import { periodValue, pick, type HistRow } from "../services/salary-history";
 import { calculatePayslip, loadPayrollSettings, type PayslipInput, type TimesheetDayInput } from "../services/payroll-calc";
 
@@ -620,8 +621,7 @@ payrollRoutes.get("/me/payslips", requirePerm("hr.self"), async (c) => {
     .all<any>();
   return c.json({ items: results.map((r) => ({ period: r.period, status: r.status, gross: r.gross, net: r.net })), nextCursor: null });
 });
-payrollRoutes.get("/me/payslips/:period", requirePerm("hr.self"), async (c) => {
-  const period = periodParam(c.req.param("period"));
+async function myPayslip(c: Ctx, period: string) {
   const e = await myEmployee(c);
   const i = await c.env.DB
     .prepare(
@@ -630,12 +630,41 @@ payrollRoutes.get("/me/payslips/:period", requirePerm("hr.self"), async (c) => {
     .bind(e.id, period)
     .first<any>();
   if (!i) throw notFound("payslip_not_found", "Chưa có phiếu lương kỳ này");
-  return c.json({
+  return {
     period, status: i.status, employee: { id: e.id, code: e.code, name: e.full_name, position: e.position }, payType: i.pay_type, workedMinutes: i.worked_minutes,
     paidDaysX10: i.paid_days_x10, shifts: i.shifts, basePay: i.base_pay, allowances: i.allowances, overtimePay: i.overtime_pay, bonus: i.bonus, salesBonus: i.sales_bonus,
     penalties: i.penalties, adjustments: i.adjustments, gross: i.gross, insuranceEmployee: i.insurance_employee, taxableIncome: i.taxable_income, pit: i.pit,
     advances: i.advances, advancesCarried: i.advances_carried ?? 0, net: i.net, lines: i.detail_json ? JSON.parse(i.detail_json) : [],
-  });
+  };
+}
+payrollRoutes.get("/me/payslips/:period", requirePerm("hr.self"), async (c) => c.json(await myPayslip(c, periodParam(c.req.param("period")))));
+
+// C-28: PDF phiếu lương — nhân viên chỉ tải phiếu CỦA MÌNH (kỳ đã duyệt/đã chi); chủ/kế toán (hr.sensitive) tải cho từng nhân viên
+const pdfResponse = (bytes: Uint8Array, name: string) =>
+  new Response(bytes as BodyInit, { status: 200, headers: { "content-type": "application/pdf", "content-disposition": `attachment; filename="${name}"`, "cache-control": "no-store" } });
+payrollRoutes.get("/me/payslips/:period/pdf", requirePerm("hr.self"), async (c) => {
+  const period = periodParam(c.req.param("period"));
+  const p = await myPayslip(c, period);
+  const bytes = await renderPayslipPdf(c.env, { period, status: p.status, employee: { code: p.employee.code, name: p.employee.name, position: p.employee.position }, item: p });
+  await audit(c, { action: "payslip.pdf", entity: "employee", entityId: p.employee.id, after: { period, self: true } });
+  return pdfResponse(bytes, `phieu-luong_${p.employee.code}_${period}.pdf`);
+});
+payrollRoutes.get("/payroll/periods/:period/payslips/:employeeId/pdf", requirePerm("hr.sensitive"), async (c) => {
+  const period = periodParam(c.req.param("period"));
+  const empId = Number(c.req.param("employeeId"));
+  const { body } = await loadPeriodDetail(c.env.DB, period);
+  const item = body.items.find((x) => x.employeeId === empId);
+  if (!item) throw notFound("payslip_not_found", "Không có phiếu lương của nhân viên này trong kỳ");
+  const bytes = await renderPayslipPdf(c.env, { period, status: body.status, employee: { code: item.code, name: item.name, position: item.position }, item });
+  await audit(c, { action: "payslip.pdf", entity: "employee", entityId: empId, after: { period } });
+  return pdfResponse(bytes, `phieu-luong_${item.code}_${period}.pdf`);
+});
+payrollRoutes.get("/payroll/periods/:period/export.pdf", requirePerm("hr.sensitive"), async (c) => {
+  const period = periodParam(c.req.param("period"));
+  const { body } = await loadPeriodDetail(c.env.DB, period);
+  const bytes = await renderPayrollPdf(c.env, body);
+  await viewAudit(c, "export.pdf", { period });
+  return pdfResponse(bytes, `bang-luong_${period}.pdf`);
 });
 
 // ---------------------------------------------------------------- báo cáo chi phí
