@@ -7,14 +7,15 @@ import { fmtDateTime, todayVN } from "../../format";
 import { navigate } from "../../router";
 import { Confirm, CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, days10, dmy, errCode, hm, reqTone, useLeaveTypes } from "./kit";
 
-type Tab = "punches" | "corr" | "leave" | "ot" | "dev" | "log";
+type Tab = "punches" | "corr" | "leave" | "ot" | "dev" | "alerts" | "log";
 
 export default function Attendance() {
   const [tab, setTab] = useState<Tab>("punches");
   const counts = useAsync(async () => {
     const q = (p: string, k: any = { status: "pending", limit: 100 }) => get(p, k, { silent: true }).then((r) => items<any>(r).length).catch(() => 0);
-    const [punches, corr, leave, ot, dev] = await Promise.all([q("/attendance/punches"), q("/attendance/corrections"), q("/leave-requests"), q("/overtime-requests"), q("/devices/requests", { status: "pending" })]);
-    return { punches, corr, leave, ot, dev };
+    const [punches, corr, leave, ot, dev, alerts] = await Promise.all([q("/attendance/punches"), q("/attendance/corrections"), q("/leave-requests"), q("/overtime-requests"), q("/devices/requests", { status: "pending" }),
+      get<any>("/attendance/alerts", { status: "open", limit: 1 }, { silent: true }).then((r) => Number(r?.openCount ?? 0)).catch(() => 0)]);
+    return { punches, corr, leave, ot, dev, alerts };
   }, []);
   const c = counts.data;
   const lab = (t: string, n?: number) => (n ? `${t} (${n})` : t);
@@ -30,13 +31,14 @@ export default function Attendance() {
       <div className="row wrap between">
         <Segmented fit wrap value={tab} onChange={setTab} options={[
           { v: "punches", label: lab("Chấm công chờ duyệt", c?.punches) }, { v: "corr", label: lab("Bổ sung công", c?.corr) }, { v: "leave", label: lab("Nghỉ phép", c?.leave) },
-          { v: "ot", label: lab("Tăng ca", c?.ot) }, { v: "dev", label: lab("Thiết bị", c?.dev) }, { v: "log", label: "Nhật ký" }]} />
+          { v: "ot", label: lab("Tăng ca", c?.ot) }, { v: "dev", label: lab("Thiết bị", c?.dev) }, { v: "alerts", label: lab("Cảnh báo", c?.alerts) }, { v: "log", label: "Nhật ký" }]} />
       </div>
       {tab === "punches" && <Punches onChange={counts.reload} />}
       {tab === "corr" && <Corrections onChange={counts.reload} />}
       {tab === "leave" && <Leaves onChange={counts.reload} />}
       {tab === "ot" && <Overtime onChange={counts.reload} />}
       {tab === "dev" && <Devices onChange={counts.reload} />}
+      {tab === "alerts" && <Alerts onChange={counts.reload} />}
       {tab === "log" && <Log />}
     </div>
   );
@@ -55,6 +57,40 @@ function Decide({ onDecide, approveLabel = "Duyệt", disabled }: { onDecide: (d
 }
 const Empty = ({ t }: { t: string }) => <Card className="grid-full"><div className="muted">{t}</div></Card>;
 
+const ALERT_KIND: Record<string, string> = { late_no_checkin: "Chưa vào ca", open_in_2300: "Quên chấm ra", multi_device: "Nhiều thiết bị", far_punch: "Chấm xa cửa hàng", offline_unverified: "Chấm offline chưa xác thực" };
+
+/** C-11: danh sách cảnh báo chấm công (cron ghi) — lọc ngày/loại, đánh dấu đã xem. */
+function Alerts({ onChange }: { onChange: () => void }) {
+  const [kind, setKind] = useState(""), [status, setStatus] = useState("open"), [from, setFrom] = useState(""), [to, setTo] = useState("");
+  const l = useAsync(() => get("/attendance/alerts", { status, ...(kind ? { kind } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), limit: 100 }).then((r) => items<any>(r)), [kind, status, from, to]);
+  const ack = async (id: number) => { try { await post(`/attendance/alerts/${id}/ack`, {}); toast("Đã đánh dấu đã xem", "ok"); l.reload(); onChange(); } catch { /* toast */ } };
+  return (
+    <div className="stack" data-testid="hr-alerts">
+      <div className="row wrap">
+        <Segmented fit value={status} onChange={setStatus} options={[{ v: "open", label: "Chưa xem" }, { v: "acked", label: "Đã xem" }, { v: "all", label: "Tất cả" }]} />
+        <Select label="Loại" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">Tất cả loại</option>{Object.entries(ALERT_KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+        <Input label="Từ ngày" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <Input label="Đến ngày" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+      </div>
+      {l.loading ? <Spinner /> : (
+        <div className="card-grid">
+          {!(l.data ?? []).length && <Empty t="Không có cảnh báo nào." />}
+          {l.data!.map((a) => (
+            <Card key={a.id}>
+              <div className="stack" style={{ gap: 6 }}>
+                <div className="row between"><b>{ALERT_KIND[a.kind] ?? a.kind}</b><Badge tone={a.acked ? "info" : "warn"}>{a.acked ? "Đã xem" : "Mới"}</Badge></div>
+                <div>{a.message}</div>
+                <div className="small muted">{fmtDateTime(a.at)}{a.acked ? ` · ${a.ackedByName ?? ""}${a.ackNote ? `: ${a.ackNote}` : ""}` : ""}</div>
+                {!a.acked && <div><Button size="sm" variant="soft" onClick={() => ack(a.id)}>Đánh dấu đã xem</Button></div>}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Punches({ onChange }: { onChange: () => void }) {
   // chờ duyệt (giờ máy không hợp lý) + chấm offline đã tính công ngay nhưng cần xem lại (reviewFlag)
   const l = useAsync(async () => {
@@ -72,6 +108,7 @@ function Punches({ onChange }: { onChange: () => void }) {
           <div className="stack" style={{ gap: 6 }}>
             <div className="row between"><b>{p.employeeName} · {KIND[p.kind]}</b><span className="row">{p.reviewFlag && <Badge tone="info">Đã tính công</Badge>}<Badge tone="warn">{PUNCH_METHOD[p.method] ?? p.method}</Badge></span></div>
             <div className="small">Giờ máy khách: {fmtDateTime(p.clientAt)} · giờ nhận: {fmtDateTime(p.serverAt)}{p.reviewFlag ? ` · tính công theo ${fmtDateTime(p.effectiveAt)}` : ""}</div>
+            {p.note && p.method === "offline" && <div className="small" style={{ color: "var(--warn, #b45309)" }}>{p.note}</div>}
             {p.distanceM != null && <div className="small muted">Cách cửa hàng {p.distanceM} m{p.accuracyM != null ? `, sai số GPS ${Math.round(p.accuracyM)} m` : ""}</div>}
             <Decide onDecide={async (d, note) => { await post(`/attendance/punches/${p.id}/decide`, { decision: d, note }); toast(d === "approved" ? "Đã xác nhận" : "Đã từ chối", "ok"); l.reload(); onChange(); }} approveLabel="Xác nhận" />
           </div>

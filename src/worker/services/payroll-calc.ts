@@ -17,6 +17,11 @@ export interface PayrollSettings {
   salesBonusBp: number;
   /** C-14: 'proportional' = theo giờ làm thực tế (mặc định) | 'day_present' = kiểu cũ (≥1 phút công = 1 ngày). */
   monthlyPayMode: "proportional" | "day_present";
+  /** C-19: phụ trội (bp cộng thêm trên lương giờ thường) cho giờ làm TRONG CA vào ngày lễ / cuối tuần. 0 = tắt. */
+  holidayPremiumBp: number;
+  weekendPremiumBp: number;
+  /** C-24: phụ cấp cố định + lương đóng BH tính theo tỉ lệ ngày làm khi vào/nghỉ giữa tháng hoặc cả tháng không có công. */
+  prorateFixedPay: boolean;
 }
 
 export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
@@ -34,6 +39,9 @@ export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
   pitBrackets: [[10_000_000, 500], [30_000_000, 1000], [60_000_000, 2000], [100_000_000, 3000], [null, 3500]],
   salesBonusBp: 0,
   monthlyPayMode: "proportional",
+  holidayPremiumBp: 0,
+  weekendPremiumBp: 0,
+  prorateFixedPay: true,
 };
 
 export interface TimesheetDayInput {
@@ -59,7 +67,12 @@ export interface PayslipInput {
     insuranceSalary: number;
     dependents: number;
     pitEnabled: boolean;
+    /** C-24: ngày vào làm / nghỉ việc (YYYY-MM-DD) để tính tỉ lệ ngày làm; chỉ dùng khi có `period`. */
+    hireDate?: string;
+    terminationDate?: string | null;
   };
+  /** C-24: kỳ lương 'YYYY-MM'. Thiếu → không prorate phụ cấp/bảo hiểm. */
+  period?: string;
   days: TimesheetDayInput[];
   /** timesheet_adjustments có target_period = kỳ này (phút, có thể âm). */
   adjustMinutes: { work: number; overtime: number };
@@ -160,8 +173,10 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
     basePay = Math.round((e.hourlyRate * regularMinutes) / 60);
     lines.push({ label: "Lương theo giờ", amount: basePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(regularMinutes / 60).toFixed(2)} giờ thường (đã trừ giờ tăng ca, trả riêng)` });
   } else {
-    basePay = Math.round(e.shiftRate * shifts);
-    lines.push({ label: "Lương theo ca", amount: basePay, group: "income", note: `${fmt(e.shiftRate)} × ${shifts} ca` });
+    // C-24: phút điều chỉnh công quy đổi 480 phút = 1 ca (trước đây lương theo ca bỏ qua điều chỉnh)
+    const adjShifts = input.adjustMinutes.work / 480;
+    basePay = Math.round(e.shiftRate * (shifts + adjShifts));
+    lines.push({ label: "Lương theo ca", amount: basePay, group: "income", note: `${fmt(e.shiftRate)} × ${shifts} ca${input.adjustMinutes.work ? ` ${adjShifts >= 0 ? "+" : "−"} ${Math.abs(Math.round(adjShifts * 100) / 100)} ca điều chỉnh công (${input.adjustMinutes.work} phút / 480)` : ""}` });
   }
 
   // ---- Tăng ca ----
@@ -181,13 +196,52 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
     lines.push({ label: `Tăng ca ×${bp / 10000}`, amount: amt, group: "income", note: `${(mins / 60).toFixed(2)} giờ × ${fmt(Math.round(hourRate))} đ/giờ × ${bp / 10000}` });
   }
 
+  // ---- Phụ trội giờ làm TRONG CA vào ngày lễ / cuối tuần (C-19) ----
+  // Giờ tăng ca đã duyệt trả riêng ở trên; ở đây chỉ phần giờ thường (làm − tăng ca) của ngày lễ/cuối tuần được cộng thêm hệ số phụ trội.
+  const premium = { holiday: 0, weekend: 0 };
+  for (const d of input.days) {
+    const regular = Math.max(0, d.workedMinutes - d.overtimeMinutes);
+    if (regular <= 0) continue;
+    if (d.holiday) premium.holiday += regular;
+    else if ([0, 6].includes(new Date(d.workDate + "T00:00:00Z").getUTCDay())) premium.weekend += regular;
+  }
+  for (const [label, mins, bp] of [["Phụ trội ngày lễ (giờ làm trong ca)", premium.holiday, s.holidayPremiumBp], ["Phụ trội cuối tuần (giờ làm trong ca)", premium.weekend, s.weekendPremiumBp]] as const) {
+    if (mins <= 0 || bp <= 0) continue;
+    const amt = Math.round(((hourRate * mins) / 60) * (bp / 10000));
+    if (amt <= 0) continue;
+    overtimePay += amt;
+    overtimeExempt += amt; // phần trả cao hơn giờ làm việc bình thường được miễn thuế TNCN như tăng ca
+    lines.push({ label, amount: amt, group: "income", note: `${(mins / 60).toFixed(2)} giờ × ${fmt(Math.round(hourRate))} đ/giờ × +${bp / 100}%` });
+  }
+
+  // ---- C-24: tỉ lệ ngày làm cho phụ cấp cố định / bảo hiểm ----
+  let fixedNum = 1;
+  let fixedDen = 1;
+  let fixedNote = "";
+  if (s.prorateFixedPay && input.period && /^\d{4}-\d{2}$/.test(input.period)) {
+    const [y, m] = input.period.split("-").map(Number);
+    const first = `${input.period}-01`;
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const last = `${input.period}-${String(dim).padStart(2, "0")}`;
+    const lo = e.hireDate && e.hireDate > first ? e.hireDate : first;
+    const hi = e.terminationDate && e.terminationDate < last ? e.terminationDate : last;
+    const empDays = hi >= lo ? Math.round((Date.parse(hi + "T00:00:00Z") - Date.parse(lo + "T00:00:00Z")) / 86400_000) + 1 : 0;
+    const active = workedDays > 0 || leaveX10 > 0 || holidayOff > 0 || input.adjustMinutes.work > 0;
+    fixedNum = active ? empDays : 0;
+    fixedDen = dim;
+    if (fixedNum !== fixedDen) fixedNote = active ? `theo ${empDays}/${dim} ngày trong kỳ (vào/nghỉ giữa tháng)` : "không có công trong kỳ";
+  }
+  const prorate = (n: number) => (fixedNum === fixedDen ? n : Math.round((n * fixedNum) / fixedDen));
+
   // ---- Phụ cấp, thưởng, phạt, điều chỉnh ----
   let allowances = 0;
   let nonTaxable = Math.max(0, overtimeExempt);
   for (const a of input.allowances) {
-    allowances += a.amount;
-    if (!a.taxable) nonTaxable += a.amount;
-    lines.push({ label: `Phụ cấp ${a.name}`, amount: a.amount, group: "income", note: a.taxable ? undefined : "không chịu thuế" });
+    const amount = prorate(a.amount);
+    allowances += amount;
+    if (!a.taxable) nonTaxable += amount;
+    const notes = [a.taxable ? "" : "không chịu thuế", fixedNote ? `${fixedNote} (đủ tháng ${fmt(a.amount)})` : ""].filter(Boolean).join("; ");
+    lines.push({ label: `Phụ cấp ${a.name}`, amount, group: "income", note: notes || undefined });
   }
   let bonus = 0;
   let penalties = 0;
@@ -216,10 +270,10 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
   lines.push({ label: "Tổng thu nhập (gross)", amount: gross, group: "info" });
 
   // ---- Bảo hiểm ----
-  const insBase = e.insuranceSalary > 0 ? Math.min(e.insuranceSalary, s.insuranceCapVnd) : 0;
+  const insBase = e.insuranceSalary > 0 ? prorate(Math.min(e.insuranceSalary, s.insuranceCapVnd)) : 0;
   const insuranceEmployee = Math.round((insBase * s.insuranceEmployeeBp) / 10000);
   const insuranceEmployer = Math.round((insBase * s.insuranceEmployerBp) / 10000);
-  if (insuranceEmployee > 0) lines.push({ label: "Bảo hiểm (người lao động)", amount: -insuranceEmployee, group: "deduction", note: `${fmt(insBase)} × ${s.insuranceEmployeeBp / 100}%` });
+  if (insuranceEmployee > 0) lines.push({ label: "Bảo hiểm (người lao động)", amount: -insuranceEmployee, group: "deduction", note: `${fmt(insBase)} × ${s.insuranceEmployeeBp / 100}%${fixedNote ? ` (lương đóng BH ${fixedNote})` : ""}` });
   if (insuranceEmployer > 0) lines.push({ label: "Bảo hiểm (doanh nghiệp đóng, không trừ lương)", amount: insuranceEmployer, group: "info", note: `${fmt(insBase)} × ${s.insuranceEmployerBp / 100}%` });
 
   // ---- TNCN ----
@@ -282,5 +336,8 @@ export async function loadPayrollSettings(db: D1Database): Promise<PayrollSettin
     pitBrackets: brackets,
     salesBonusBp: num("hr.sales_bonus_bp", d.salesBonusBp),
     monthlyPayMode: m.get("hr.monthly_pay_mode")?.trim() === "day_present" ? "day_present" : "proportional",
+    holidayPremiumBp: Math.max(0, num("hr.holiday_premium_bp", d.holidayPremiumBp)),
+    weekendPremiumBp: Math.max(0, num("hr.weekend_premium_bp", d.weekendPremiumBp)),
+    prorateFixedPay: m.has("hr.prorate_fixed_pay") ? m.get("hr.prorate_fixed_pay")!.trim() !== "0" : d.prorateFixedPay,
   };
 }

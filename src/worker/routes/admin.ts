@@ -12,6 +12,7 @@ import { applyStockDocPost } from "./inventory";
 import { activatePrice } from "./prices";
 import { DEF_BY_KEY, GROUPS, SETTING_DEFS, isInternalKey, isSensitive, needsConfirmNote, validateSetting } from "../services/settings-registry";
 import { misaConfigured } from "../services/einvoice";
+import { offboardingBlockers } from "../services/hr-common";
 
 export const adminRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -153,6 +154,8 @@ adminRoutes.put("/users/:id", requirePerm("users.manage"), async (c) => {
       storeId: z.number().int().positive().nullable().optional(),
       active: z.union([z.boolean(), z.literal(0), z.literal(1)]).optional(),
       resetPassword: z.boolean().optional(),
+      /** C-26: vẫn khoá dù người này còn yêu cầu/đơn đang chờ xử lý (ca POS đang mở thì luôn chặn). */
+      force: z.boolean().optional(),
     }),
   );
   const db = c.env.DB;
@@ -161,6 +164,15 @@ adminRoutes.put("/users/:id", requirePerm("users.manage"), async (c) => {
   if (!before) throw notFound("user_not_found", "Không tìm thấy người dùng");
   const active = body.active === undefined ? undefined : body.active ? 1 : 0;
   if (id === me.id && (active === 0 || (body.role && body.role !== me.role))) throw conflict("self_change", "Không thể tự khoá hoặc đổi vai trò của chính mình");
+  // C-26: khoá tài khoản khi còn ca POS đang mở → chặn; còn yêu cầu đang chờ → cần force
+  let pendingAtLock: unknown;
+  if (active === 0 && before.active) {
+    const emp = await db.prepare(`SELECT id FROM employees WHERE user_id = ?`).bind(id).first<{ id: number }>();
+    const bl = await offboardingBlockers(db, id, emp?.id ?? null);
+    if (bl.openShifts > 0) throw conflict("open_shift", "Tài khoản này còn ca bán hàng đang mở — hãy chốt ca (quản lý đóng thay) trước khi khoá", { openShifts: bl.openShifts });
+    if (bl.pendingTotal > 0 && !body.force) throw conflict("pending_requests", `Tài khoản còn ${bl.pendingTotal} yêu cầu/đơn đang chờ xử lý. Xử lý trước, hoặc gửi force=true để vẫn khoá`, bl.pending);
+    if (bl.pendingTotal > 0) pendingAtLock = bl.pending;
+  }
   const sets: string[] = [];
   const params: unknown[] = [];
   if (body.fullName !== undefined) { sets.push("full_name=?"); params.push(body.fullName); }
@@ -185,7 +197,7 @@ adminRoutes.put("/users/:id", requirePerm("users.manage"), async (c) => {
       entity: "user",
       entityId: id,
       before,
-      after: { ...body, resetPassword: undefined, passwordReset: !!pw },
+      after: { ...body, resetPassword: undefined, passwordReset: !!pw, pendingAtLock },
     }),
   );
   await db.batch(stmts);
