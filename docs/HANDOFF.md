@@ -45,6 +45,7 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 - **M9 lương**: lương tháng/giờ/ca, phụ cấp, tăng ca theo hệ số, thưởng/phạt, thưởng doanh số, BHXH (trần), TNCN luỹ tiến có giảm trừ, tạm ứng & khấu trừ; chủ duyệt; chi lương sinh phiếu chi M6; phiếu lương cho NV trên điện thoại; xuất Excel; báo cáo chi phí nhân sự. Vai trò mới `staff` (chỉ chấm công + phiếu lương).
 - **M7 giá đối thủ**: nguồn web/sàn/nhập tay, thu thập theo lịch **tôn trọng robots.txt, giới hạn tốc độ, chặn URL nội bộ**, ghép sản phẩm có duyệt, chuẩn hoá đơn vị (kg/trái), so sánh min/TB, lịch sử, lọc giá bất thường, cảnh báo, **gợi ý giá đi qua luồng duyệt M3** (không tự đổi giá).
 - **M2-11** gợi ý đặt hàng theo tốc độ bán + thời gian giao → tạo phiếu nhập nháp.
+- **PO tự động từ phần thiếu SO** (bước 1–3 ERP, 25/11/2026): xác nhận SO thiếu hàng không bị chặn (ghi phần thiếu), job chốt đêm 03:00 + "Chốt ngay" gom thành PO nháp theo NCC, duyệt/gửi (vượt `approval.po_vnd` → chủ duyệt), phản hồi NCC, nhận hàng theo PO tự giữ hàng cho SO chờ. Xem `docs/PO-NCC.md` (mục 11), `docs/API-po.md`; **cổng NCC `/ncc` chưa làm**.
 - **Khuyến mãi** (%, số tiền, đồng giá, combo, xả cuối ngày), **voucher** (sinh hàng loạt, giới hạn lượt/khách), **tích & đổi điểm** — áp ở POS và website; giỏ quà (đóng giỏ tiêu thụ thành phần FEFO) & **đặt cọc** đơn đặt trước tại quầy.
 - **Tài chính**: dòng tiền, lãi lỗ theo kênh (phân bổ chi phí chung), tổng hợp GTGT, ngân sách & thực tế; đơn sỉ lặp tự sinh lúc 08:00.
 

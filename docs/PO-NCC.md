@@ -1,6 +1,6 @@
 # Thiết kế: Đơn đặt hàng NCC (PO) tự động và Cổng nhà cung cấp
 
-Trạng thái: **bản thiết kế chờ duyệt** (25/11/2026). Chưa có code.
+Trạng thái (25/11/2026): thiết kế đã duyệt. **Bước 1–3 (phía ERP) đã làm** — hợp đồng API ở `docs/API-po.md`, ghi chú triển khai ở mục 11. **Bước 4–5 (cổng NCC `/ncc`) chưa làm.**
 
 ## 1. Bối cảnh và mục tiêu
 
@@ -239,9 +239,9 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 
 | Bước | Nội dung | Kiểm thử |
 |---|---|---|
-| 1 | Migration + phần thiếu khi xác nhận SO (sỉ + online đặt trước) | vitest: giữ một phần, chống bán quá tồn đồng thời, hạn mức nợ, huỷ SO |
-| 2 | PO: CRUD nháp, job chốt đêm, duyệt/gửi, màn "Đơn đặt NCC" + "Phần thiếu" | vitest job (idempotent, trừ hàng sắp về, làm tròn), phân quyền, giá vốn ẩn |
-| 3 | Nhận hàng theo PO + tự giữ hàng cho SO chờ + hoá đơn mua | vitest nguyên tử, khoá sổ, phân bổ thứ tự |
+| 1 ✅ | Migration + phần thiếu khi xác nhận SO (sỉ + online đặt trước) | vitest: giữ một phần, chống bán quá tồn đồng thời, hạn mức nợ, huỷ SO |
+| 2 ✅ | PO: CRUD nháp, job chốt đêm, duyệt/gửi, màn "Đơn đặt NCC" + "Phần thiếu" | vitest job (idempotent, trừ hàng sắp về, làm tròn), phân quyền, giá vốn ẩn |
+| 3 ✅ | Nhận hàng theo PO + tự giữ hàng cho SO chờ + hoá đơn mua | vitest nguyên tử, khoá sổ, phân bổ thứ tự |
 | 4 | Cổng NCC `/ncc`: mời, đăng nhập, PO (xác nhận/đề xuất/từ chối), công nợ, sao kê, thanh toán | vitest IDOR, CSRF, rate limit; E2E `e2e/ncc.mjs` |
 | 5 | Tài liệu `docs/API-po.md`, ảnh 1440/390, cập nhật HANDOFF/GO-LIVE | 10 bộ E2E cũ + bộ mới |
 
@@ -256,3 +256,25 @@ API theo quy ước hiện có (`requirePerm` + zod, phân trang `items/nextCurs
 | 3 | Ngưỡng PO cần chủ duyệt (`approval.po_vnd`) | ⏳ Chờ khách trả lời. Triển khai với mặc định **20.000.000 đ**, nhãn "Cần xác nhận" |
 | 4 | Đơn online giao trong ngày vẫn chặn thiếu hàng; chỉ đơn đặt trước mới chờ hàng | ✅ Đồng ý (25/11/2026) |
 | 5 | NCC nhận email/Zalo khi có PO mới | ⏳ Chưa chốt. Mặc định: chỉ thông báo trên cổng; email bật được sau khi có dịch vụ email thật |
+
+## 11. Ghi chú triển khai (bước 1–3, ERP)
+
+Đã làm đúng thiết kế ở các mục 3–7, trừ những chỗ lệch dưới đây (kèm lý do).
+
+| # | Lệch / bổ sung | Lý do |
+|---|---|---|
+| 1 | `so_shortages.qty_milli` có `CHECK (>= 0)` (thiết kế `> 0`) và thêm cột `initial_milli` | Phần thiếu đã lấp đủ cần giữ `qty_milli = 0` với `status = 'filled'`; `initial_milli` để hiện "thiếu bao nhiêu lúc xác nhận" |
+| 2 | Thêm quyền `purchasing.approve_high` (chỉ chủ) | Thiết kế nhắc "chủ duyệt khi vượt ngưỡng" nhưng chưa đặt tên quyền; cần quyền riêng để luồng duyệt chung (`approval-registry`) kiểm đúng người |
+| 3 | `purchase_orders` thêm `proposed_expected_date, reject_reason, cancel_reason, close_reason, approval_id, closed_at`; `purchase_order_lines` thêm `line_note, supplier_line_note` | Lưu đề xuất ngày giao của NCC, lý do các chuyển trạng thái và liên kết yêu cầu duyệt |
+| 4 | Chưa khai báo `po.auto_send` và `ncc.invite_ttl_hours` trong Cài đặt | Không có logic dùng tới (tự gửi PO nhỏ "để sau"; mời NCC thuộc đợt cổng NCC). Khai báo khi làm tới |
+| 5 | Đơn online chờ hàng: chỉ dòng đặt trước (`preorder_milli > 0`) của đơn có `slot_date > hôm nay`; đơn vẫn `confirmed`, không thêm trạng thái | Khớp quyết định #4 mục 10; "Chờ hàng" tính từ `so_shortages` |
+| 6 | Giữ hàng cho SO chờ chạy **sau** batch ghi sổ nhận hàng, mỗi phần thiếu một batch (có `assertStmt` và thử lại một lần khi tồn đổi) | Id lô chỉ có sau khi chèn; phần nhận hàng (tiền + kho) vẫn nguyên tử. Nếu giữ hàng lỗi giữa chừng, hàng đã vào kho và phần thiếu vẫn mở (không mất dữ liệu) |
+| 7 | "Tính lại"/"Chốt ngay" **ghi đè dòng của PO nháp tự động** cùng ngày chốt (số lượng sửa tay trên nháp tự động sẽ bị tính lại) | Giữ logic đơn giản và idempotent; muốn sửa tay chắc chắn nên duyệt/gửi PO trước khi chạy lại, hoặc tạo PO tay |
+| 8 | Thêm route `POST /purchase-orders/:id/supplier-response` (nhân viên ghi nhận hộ NCC qua điện thoại/Zalo) | Cần cho e2e và dùng được ngay khi chưa có cổng; cổng NCC gọi cùng hàm `applySupplierResponse` |
+| 9 | Chặn giao phần chưa có hàng: đơn online `prepare`/`ship` → 409 `awaiting_stock`; đơn sỉ giao vượt phần đã giữ → 409 `awaiting_stock`; giao xong đóng phần thiếu | Không cho lấy trộm tồn tự do / tồn đang giữ cho đơn khác khi đơn còn chờ hàng |
+| 10 | Nhận quá số còn lại của PO bị từ chối (`over_receive`) | Tránh vượt PO; muốn nhận thêm thì tạo PO / phiếu nhập thường |
+| 11 | Chỉ nhận hàng theo PO mới tự giữ hàng cho SO chờ (phiếu nhập thường chưa tự giữ) | Phạm vi bước 3; phiếu nhập thường vẫn được tính vào tồn, phần thiếu quay lại nhu cầu ở lần chốt sau |
+| 12 | Dòng thiếu của PO chưa có giá (sản phẩm chưa từng nhập) để `unit_cost = NULL`; người lập điền giá ở PO nháp hoặc khi nhận | Giá gợi ý lấy từ lô nhập gần nhất của NCC |
+| 13 | Thông báo "SO đã đủ hàng" chỉ gửi khi đơn không còn dòng thiếu nào | Tránh thông báo lặp theo từng dòng |
+
+Việc còn lại cho đợt cổng NCC (bước 4–5): `supplier_accounts`/`supplier_sessions`, mời NCC từ màn Nhà cung cấp, `/api/ncc/*` (xem PO, xác nhận/đề xuất/từ chối qua `applySupplierResponse`, công nợ, sao kê, thanh toán), thông báo NCC, màn hình `/ncc`, test IDOR/CSRF/rate limit, `e2e/ncc.mjs`.

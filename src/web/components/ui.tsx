@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { fmtDateTime, parseDec } from "../format";
 
 export function Button({ variant = "primary", size, block, loading, className = "", children, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "soft" | "ghost" | "danger"; size?: "sm" | "lg"; block?: boolean; loading?: boolean }) {
@@ -92,7 +93,8 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
     return () => { document.removeEventListener("keydown", k); document.body.style.overflow = o; prev?.focus?.(); };
   }, [open]); // eslint-disable-line
   if (!open) return null;
-  return (
+  // Render ra document.body: Sheet mở từ trong khung chi tiết (sticky) không bị tiêu đề bảng / thanh trên che
+  const node = (
     <div className="sheet-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={"sheet" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1} ref={ref}>
         <header><h2 id={id}>{title}</h2><Button variant="ghost" className="icon-btn" aria-label="Đóng" onClick={onClose}>✕</Button></header>
@@ -101,6 +103,7 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
       </div>
     </div>
   );
+  return typeof document === "undefined" ? node : createPortal(node, document.body);
 }
 
 export const Card = ({ title, children, className = "", actions }: { title?: string; children: ReactNode; className?: string; actions?: ReactNode }) => (

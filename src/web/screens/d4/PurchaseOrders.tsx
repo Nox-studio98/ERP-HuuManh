@@ -24,7 +24,6 @@ const HISTORY: Record<string, string> = {
   "po.cutoff.create": "Chốt đêm tạo PO nháp", "po.cutoff.update": "Chốt đêm cập nhật PO nháp", "po.cutoff_now.create": "Chốt ngay tạo PO nháp", "po.cutoff_now.update": "Chốt ngay cập nhật PO nháp",
   "po.recalc.create": "Tính lại: tạo PO nháp", "po.recalc.update": "Tính lại: cập nhật PO nháp", "po.recalc.cancel": "Tính lại: huỷ nháp hết nhu cầu",
 };
-const num = (v: any, k: string) => v?.[k] ?? v?.[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] ?? 0;
 const q3 = (n: number) => new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(n);
 
 export default function PurchaseOrders() {
@@ -83,12 +82,12 @@ function PoList({ onCreate }: { onCreate: () => void }) {
           { label: "Ngày giao dự kiến", value: (r) => r.expectedDate }, { label: "Số dòng", value: (r) => r.lineCount }, ...(costVisible ? [{ label: "Tổng tiền", value: (r: any) => r.total }] : []),
         ]} />
       </FilterBar>
-      <KpiRow items={[
+      <KpiRow cols={5} items={[
         { label: "Nháp chờ duyệt", value: sum ? draftN : "—", sub: sum?.pendingApproval ? `${sum.pendingApproval} chờ chủ duyệt` : undefined, tone: draftN ? "warn" : undefined, onClick: () => setStatus("draft") },
         { label: "Chờ NCC xác nhận", value: sum ? sum.awaitingSupplier : "—", tone: "info", onClick: () => setStatus("sent") },
         { label: "NCC đề xuất sửa", value: sum ? sum.supplierProposed : "—", tone: sum?.supplierProposed ? "warn" : undefined, onClick: () => setStatus("supplier_proposed") },
         { label: "Trễ hẹn giao", value: sum ? sum.overdue : "—", tone: sum?.overdue ? "danger" : undefined },
-        { label: "Chờ nhận hàng", value: sum ? sum.receivable : "—", sub: sum?.openValue != null ? `${money(sum.openValue)} đang mở` : undefined, onClick: () => setStatus("confirmed,partially_received") },
+        { label: "Chờ nhận hàng", value: sum ? sum.receivable : "—", sub: sum?.openValue ? `${money(sum.openValue)} đang mở` : undefined, onClick: () => setStatus("confirmed,partially_received") },
       ]} />
       <SplitLayout open={sel != null} panel={sel != null ? <PoDetail key={sel} id={sel} onClose={() => setSel(null)} onChanged={list.reload} /> : null}>
         {list.loading && !list.rows.length ? <Spinner /> : (
@@ -126,7 +125,6 @@ function PoDetail({ id, onClose, onChanged }: { id: number; onClose: () => void;
     setBusy(path);
     try { const r = await post(`/purchase-orders/${id}/${path}`, body); toast(r?.result === "pending_approval" ? "Đã gửi chủ duyệt (PO vượt ngưỡng)" : ok, "ok"); reload(); } catch { /* toast */ } finally { setBusy(""); }
   };
-  const approveTxt = po.status === "pending_approval" ? "Duyệt & gửi NCC" : "Duyệt & gửi NCC";
   const canApprove = can("purchasing.approve");
   return (
     <DetailPanel title={po.code} onClose={onClose}>
@@ -183,7 +181,7 @@ function PoDetail({ id, onClose, onChanged }: { id: number; onClose: () => void;
 
         <div className="row wrap">
           {po.status === "draft" && can("purchasing.write") && <Button variant="soft" onClick={() => setMode("edit")}>Sửa nháp</Button>}
-          {(po.status === "draft" || po.status === "pending_approval") && canApprove && (po.status === "draft" || can("purchasing.approve_high")) && <Button loading={busy === "approve"} onClick={() => call("approve", { version: po.version }, "Đã duyệt và gửi NCC")}>{approveTxt}</Button>}
+          {(po.status === "draft" || po.status === "pending_approval") && canApprove && (po.status === "draft" || can("purchasing.approve_high")) && <Button loading={busy === "approve"} onClick={() => call("approve", { version: po.version }, "Đã duyệt và gửi NCC")}>Duyệt &amp; gửi NCC</Button>}
           {po.status === "sent" && canApprove && <Button onClick={() => setMode("respond")}>Ghi nhận NCC phản hồi</Button>}
           {po.status === "supplier_proposed" && canApprove && <><Button loading={busy === "proposal/accept"} onClick={() => call("proposal/accept", { version: po.version }, "Đã chấp nhận đề xuất của NCC")}>Chấp nhận đề xuất</Button><Button variant="soft" onClick={() => setMode("reject_proposal")}>Từ chối đề xuất</Button></>}
           {["confirmed", "partially_received"].includes(po.status) && can("purchasing.write") && can("inventory.write") && <Button onClick={() => setMode("receive")}>Nhận hàng</Button>}
@@ -337,7 +335,7 @@ function Shortages() {
           {p.noSupplier ? <Badge tone="danger">Chưa có NCC</Badge> : <Badge>{p.supplier.supplierName}</Badge>}
           {p.uncoveredMilli > 0 ? <Badge tone="warn">Chưa phủ {qtyText(p.uncoveredMilli, p.baseUnit)}</Badge> : <Badge tone="ok">Đã có PO</Badge>}
         </span>}>
-          <div className="row between"><span>Thiếu tổng <b>{qtyText(p.totalMilli, p.baseUnit)}</b> · {p.lines.length} dòng đơn</span><Button size="sm" variant="ghost" onClick={() => toggle(p.productId)}>{open.has(p.productId) ? "Thu gọn" : "Xem đơn"}</Button></div>
+          <div className="row between"><span>Thiếu tổng <b>{qtyText(p.totalMilli, p.baseUnit)}</b> · {p.lines.length} dòng đơn</span><Button size="sm" variant="ghost" className="nw" onClick={() => toggle(p.productId)}>{open.has(p.productId) ? "Thu gọn" : "Xem đơn"}</Button></div>
           {open.has(p.productId) && (
             <div className="stack" style={{ gap: 4, marginTop: 10 }}>
               {p.lines.map((l: any) => (
@@ -350,4 +348,3 @@ function Shortages() {
     </div>
   );
 }
-void num;

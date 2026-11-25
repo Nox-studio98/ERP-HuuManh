@@ -54,7 +54,7 @@ function ReceiveForm({ id, onBack, onClose, onDone }: { id: number; onBack?: () 
         {r.filledShortages?.length > 0 ? (
           <Card title="Đã giữ hàng cho đơn đang chờ">
             <div className="stack small" style={{ gap: 4 }}>{r.filledShortages.map((f: any, i: number) => (
-              <div key={i} className="row between"><b className="num">{f.orderCode}</b><span>{qtyText(f.qtyMilli)} {f.done ? <Badge tone="ok">Đã đủ hàng</Badge> : <Badge tone="warn">Còn thiếu</Badge>}</span></div>))}</div>
+              <div key={i} className="row between"><span><b className="num">{f.orderCode}</b> <span className="muted">· {f.productName}</span></span><span>{qtyText(f.qtyMilli, f.baseUnit)} {f.done ? <Badge tone="ok">Đã đủ hàng</Badge> : <Badge tone="warn">Còn thiếu</Badge>}</span></div>))}</div>
           </Card>) : <div className="hint">Không có đơn nào đang chờ hàng này — hàng nhập vào tồn bán lẻ.</div>}
         <div className="row wrap"><Button onClick={() => { onClose(); navigate(`/purchase-orders?open=${id}`); }}>Mở PO</Button><Button variant="ghost" onClick={onClose}>Đóng</Button></div>
       </div>

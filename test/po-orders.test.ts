@@ -7,6 +7,7 @@ import boldFont from "@expo-google-fonts/be-vietnam-pro/700Bold/BeVietnamPro_700
 import { vnDate } from "../src/worker/lib/time";
 import { addDays } from "../src/worker/services/debt";
 import { cutoffWindowDay, roundOrderQty, runPoCutoff, runPoCutoffIfDue, shapePo, shapePoLine } from "../src/worker/services/po";
+import { notifyApproval } from "../src/worker/services/notify-approval";
 import { db, mkB2bOrder, mkCustomer, mkProduct, mkSupplier } from "./po-helpers";
 
 // PO tự động — bước 2: job chốt đêm, duyệt/gửi, phản hồi NCC, phân quyền (docs/PO-NCC.md 4.2–4.4)
@@ -196,6 +197,12 @@ describe("duyệt / ngưỡng / thông báo", () => {
     expect(req.body.approvalId).toBeTruthy();
     const job = await db().prepare(`SELECT * FROM integration_jobs WHERE type='notify.approval' AND ref_type='approvals' AND ref_id = ?`).bind(req.body.approvalId).first<any>();
     expect(job).toBeTruthy(); // C-27: thông báo duyệt đi qua luồng duyệt chung
+    // xử lý job: chỉ chủ (có purchasing.approve_high) nhận thông báo, không có số tiền trong nội dung
+    await notifyApproval(testEnv, job);
+    const notes = (await db().prepare(`SELECT target_user_id, title, body FROM notifications WHERE ref_type = 'approvals' AND ref_id = ?`).bind(req.body.approvalId).all<any>()).results;
+    expect(notes.map((n) => n.target_user_id)).toEqual([1]); // owner = user id 1 (seedBase)
+    expect(notes[0].title).toBe("Đơn đặt NCC vượt ngưỡng chờ duyệt");
+    expect(notes[0].body).not.toMatch(/\d{4,}/);
     // quản lý không duyệt được loại này
     expect((await api("manager", "POST", `/api/v1/approvals/${req.body.approvalId}/decide`, { decision: "approved" })).status).toBe(403);
     expect((await api("manager", "POST", `/api/v1/purchase-orders/${po.id}/approve`, {})).status).toBe(409);

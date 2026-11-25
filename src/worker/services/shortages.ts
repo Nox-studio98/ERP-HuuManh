@@ -125,6 +125,8 @@ interface OpenShort {
   channel: string;
   store_id: number;
   status: string;
+  product_name: string;
+  base_unit: string;
 }
 
 const CHECK_FAIL = /CHECK constraint failed/i;
@@ -140,13 +142,13 @@ export async function allocateReceivedToShortages(
   actorUserId: number | null,
   poCode: string,
 ) {
-  const filled: { orderId: number; orderCode: string; productId: number; qtyMilli: number; done: boolean }[] = [];
+  const filled: { orderId: number; orderCode: string; productId: number; productName: string; baseUnit: string; qtyMilli: number; done: boolean }[] = [];
   for (const r of received) {
     let remaining = r.qtyMilli;
     const { results } = await db
       .prepare(
-        `SELECT s.id, s.order_id, s.order_line_id, s.product_id, s.qty_milli, s.need_by, o.code AS order_code, o.channel, o.store_id, o.status
-           FROM po_shortage_links l JOIN so_shortages s ON s.id = l.shortage_id JOIN orders o ON o.id = s.order_id
+        `SELECT s.id, s.order_id, s.order_line_id, s.product_id, s.qty_milli, s.need_by, o.code AS order_code, o.channel, o.store_id, o.status, p.name AS product_name, p.base_unit
+           FROM po_shortage_links l JOIN so_shortages s ON s.id = l.shortage_id JOIN orders o ON o.id = s.order_id JOIN products p ON p.id = s.product_id
           WHERE l.po_line_id = ? AND s.status = 'open' AND s.qty_milli > 0 AND o.status IN ('confirmed','preparing','shipping','delivery_failed')
           ORDER BY (s.need_by IS NULL), s.need_by, s.created_at, s.id`,
       )
@@ -193,7 +195,7 @@ export async function allocateReceivedToShortages(
           throw e;
         }
         remaining -= got;
-        filled.push({ orderId: s.order_id, orderCode: s.order_code, productId: s.product_id, qtyMilli: got, done: left === 0 });
+        filled.push({ orderId: s.order_id, orderCode: s.order_code, productId: s.product_id, productName: s.product_name, baseUnit: s.base_unit, qtyMilli: got, done: left === 0 });
         break;
       }
     }

@@ -58,7 +58,7 @@ function Alerts({ onGoDocs }: { onGoDocs: () => void }) {
   return (
     <div className="stack">
       {(notes.data?.items ?? []).map((n: any) => (
-        <div key={n.id} className="banner danger" role="alert">
+        <div key={n.id} className={"banner " + (n.kind === "so_filled" ? "info" : "danger")} role="alert">
           <div className="row between" style={{ alignItems: "flex-start", gap: 8 }}>
             <div><b>{n.title}</b><div className="small">{n.body}</div></div>
             <Button size="sm" variant="soft" onClick={async () => { try { await post(`/notifications/${n.id}/read`, {}); notes.reload(); } catch {} }}>Đã xem</Button>
