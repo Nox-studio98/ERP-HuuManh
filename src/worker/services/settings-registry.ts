@@ -8,7 +8,7 @@ export type SettingType = "vnd" | "bp" | "int" | "bool" | "enum" | "multi" | "in
 
 export const GROUPS = [
   "Ngưỡng duyệt", "Bán hàng & giá", "Công nợ", "Online/website", "Tích điểm & khuyến mãi",
-  "Nhân sự & lương", "Thuế TNCN", "Giá đối thủ", "Hệ thống",
+  "Thanh toán SePay", "Nhân sự & lương", "Thuế TNCN", "Giá đối thủ", "Hệ thống",
 ] as const;
 export type SettingGroup = (typeof GROUPS)[number];
 
@@ -64,7 +64,10 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "online.weight_tolerance_bp", group: "Online/website", label: "Dung sai lệch cân đơn online", help: "Lệch cân trong mức này thì tự chấp nhận; vượt thì khách phải xác nhận lại.", type: "bp", min: 0, max: 10000 },
   { key: "online.hold_minutes_transfer", group: "Online/website", label: "Giữ đơn chuyển khoản chờ tiền", help: "Quá số phút này chưa nhận được tiền thì huỷ đơn.", type: "int", unit: "phút", min: 1, max: 1440 },
   { key: "online.auto_confirm", group: "Online/website", label: "Tự xác nhận đơn online khi đủ hàng", help: "Tắt: nhân viên xác nhận thủ công.", type: "bool" },
-  { key: "online.cancel_fee_policy", group: "Online/website", label: "Ai chịu phí giao khi khách huỷ sau khi giao cho shipper", help: "Áp dụng khi khách huỷ sau khi đơn đã giao cho đơn vị vận chuyển.", type: "enum", options: o(["shop", "Cửa hàng chịu"], ["customer", "Khách chịu"]) },
+  { key: "online.cancel_fee_policy", group: "Online/website", label: "Phí giao khi huỷ đơn (tham số cũ, không còn dùng)", help: "Đã thay bằng ba tham số theo giai đoạn ngay bên dưới. Giữ lại để tương thích dữ liệu cũ.", type: "enum", options: o(["shop", "Cửa hàng chịu"], ["customer", "Khách chịu"]) },
+  { key: "online.cancel_fee_before_prepare", group: "Online/website", label: "Phí giao khi huỷ đơn: chưa soạn hàng", help: "Đơn mới / đã xác nhận / chờ thanh toán, chưa soạn hàng. Mặc định: cửa hàng chịu (miễn phí giao cho khách).", type: "enum", options: o(["shop", "Cửa hàng chịu (hoàn phí giao)"], ["customer", "Khách chịu (giữ phí giao)"]) },
+  { key: "online.cancel_fee_preparing", group: "Online/website", label: "Phí giao khi huỷ đơn: đã soạn / đóng gói", help: "Đơn đang soạn hoặc đã đóng gói. Mặc định: khách chịu phí giao.", type: "enum", options: o(["shop", "Cửa hàng chịu (hoàn phí giao)"], ["customer", "Khách chịu (giữ phí giao)"]) },
+  { key: "online.cancel_fee_shipping", group: "Online/website", label: "Phí giao khi huỷ đơn: giao thất bại", help: "Đơn đã giao cho shipper nhưng giao không thành công rồi trả hàng (đơn đang giao chỉ huỷ được sau khi chuyển sang giao thất bại). Mặc định: khách chịu phí giao.", type: "enum", options: o(["shop", "Cửa hàng chịu (hoàn phí giao)"], ["customer", "Khách chịu (giữ phí giao)"]) },
   { key: "online.pack_recalc_promo", group: "Online/website", label: "Tính lại khuyến mãi sau khi cân hàng", help: "Bật: sau khi cân/đóng gói, khuyến mãi % và voucher được tính lại theo tiền hàng thực tế; voucher không còn đủ điều kiện thì bỏ giảm giá và hoàn lượt dùng.", type: "bool" },
   { key: "online.pack_recalc_shipping", group: "Online/website", label: "Xét lại ngưỡng miễn phí giao sau khi cân hàng", help: "Bật: tiền hàng thực tế dưới ngưỡng miễn phí giao của khu vực thì thu phí giao hàng (và ngược lại).", type: "bool" },
   { key: "b2b.backorder_on_short", group: "Bán hàng & giá", label: "Giao thiếu đơn sỉ: tự tạo đơn bổ sung", help: "Bật: phần đặt nhưng chưa giao (không phải hàng bị từ chối) được tạo thành đơn bổ sung chờ xác nhận. Có thể chọn lại ở từng lần xác nhận giao.", type: "bool" },
@@ -75,6 +78,17 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "shop.name", group: "Online/website", label: "Tên cửa hàng trên website", help: "Hiển thị trên website bán hàng và email.", type: "text", maxLen: 100 },
   { key: "shop.hotline", group: "Online/website", label: "Hotline", help: "Số điện thoại hiển thị cho khách.", type: "text", maxLen: 30 },
   { key: "fresco.enabled", group: "Online/website", label: "Nhận đơn từ sàn Fresco", help: "Bật khi đã có tài khoản và khoá webhook Fresco.", type: "bool" },
+
+  // ===== Thanh toán SePay =====
+  { key: "sepay.enabled", group: "Thanh toán SePay", label: "Bật xác nhận chuyển khoản qua SePay", help: "Chỉ bật sau khi đã tạo webhook ở my.sepay.vn và đặt secret SEPAY_WEBHOOK_SECRET (xem docs/SEPAY.md). Tắt: mọi giao dịch SePay gửi tới đều bị ghi là chưa khớp. [Cần xác nhận]", type: "bool" },
+  { key: "sepay.account_numbers", group: "Thanh toán SePay", label: "Tài khoản nhận tiền đăng ký ở SePay", help: "Số tài khoản (hoặc số VA) SePay báo về; nhiều số cách nhau dấu phẩy. Để trống = dùng 'Số tài khoản nhận tiền' của website. Giao dịch vào tài khoản khác bị bỏ qua. [Cần xác nhận]", type: "text", maxLen: 200 },
+  { key: "sepay.flow_web", group: "Thanh toán SePay", label: "Tự xác nhận đơn website chuyển khoản", help: "Tiền về đúng mã đơn và đúng số tiền thì đơn tự chuyển sang đã thanh toán.", type: "bool" },
+  { key: "sepay.flow_b2b", group: "Thanh toán SePay", label: "Tự thu nợ khách sỉ theo mã hoá đơn", help: "Khách chuyển khoản kèm mã thanh toán của hoá đơn, đúng số còn nợ: tự lập phiếu thu và gạch nợ hoá đơn đó.", type: "bool" },
+  { key: "sepay.flow_pos", group: "Thanh toán SePay", label: "Xác nhận QR tại quầy POS", help: "Bật: thanh toán 'QR' ở POS phải có mã QR đã nhận tiền; tắt: thu ngân tự xác nhận như trước.", type: "bool" },
+  { key: "sepay.prefix_b2b", group: "Thanh toán SePay", label: "Tiền tố mã thanh toán nợ sỉ", help: "2–5 chữ cái in hoa, + 8 chữ số. Phải khớp một 'Cấu trúc mã thanh toán' ở my.sepay.vn (Số nguyên, hậu tố 8–8). [Cần xác nhận]", type: "text", maxLen: 5 },
+  { key: "sepay.prefix_pos", group: "Thanh toán SePay", label: "Tiền tố mã QR tại quầy", help: "2–5 chữ cái in hoa, + 8 chữ số. Phải khớp một 'Cấu trúc mã thanh toán' ở my.sepay.vn (Số nguyên, hậu tố 8–8), khác tiền tố nợ sỉ. [Cần xác nhận]", type: "text", maxLen: 5 },
+  { key: "sepay.pos_qr_ttl_min", group: "Thanh toán SePay", label: "Thời hạn mã QR tại quầy", help: "Quá số phút này mã hết hiệu lực; tiền về sau đó vào danh sách chờ hoàn.", type: "int", unit: "phút", min: 1, max: 120 },
+  { key: "sepay.api_base", group: "Thanh toán SePay", label: "Địa chỉ API SePay (đối soát)", help: "Production: https://userapi.sepay.vn/v2 · Sandbox: https://userapi-sandbox.sepay.vn/v2. Đối soát chỉ chạy khi có secret SEPAY_API_KEY. [Cần xác nhận]", type: "text", maxLen: 100 },
 
   // ===== Tích điểm & khuyến mãi =====
   { key: "loyalty.enabled", group: "Tích điểm & khuyến mãi", label: "Bật tích điểm", help: "Bật: khách có số điện thoại được tích điểm theo đơn.", type: "bool" },
@@ -120,8 +134,14 @@ export const SETTING_DEFS: SettingDef[] = [
   // ===== Hệ thống =====
   { key: "session.ttl_hours", group: "Hệ thống", label: "Thời hạn phiên đăng nhập", help: "Hết số giờ này phải đăng nhập lại.", type: "int", unit: "giờ", min: 1, max: 720 },
   { key: "timezone", group: "Hệ thống", label: "Múi giờ", help: "Cố định theo giờ Việt Nam.", type: "enum", options: o(["Asia/Ho_Chi_Minh", "Giờ Việt Nam (UTC+7)"]) },
-  { key: "backup.retention_days", group: "Hệ thống", label: "Số ngày giữ bản sao lưu", help: "Bản sao lưu R2 cũ hơn số ngày này sẽ bị xoá.", type: "int", unit: "ngày", min: 1, max: 3650 },
+  { key: "backup.retention_days", group: "Hệ thống", label: "Số ngày giữ bản sao lưu", help: "Bản sao lưu R2 cũ hơn số ngày này sẽ bị xoá (mặc định 90 ngày).", type: "int", unit: "ngày", min: 1, max: 3650 },
+  { key: "retention.gps_months", group: "Hệ thống", label: "Xoá toạ độ GPS chấm công sau", help: "Sau số tháng này, toạ độ GPS của lượt chấm công bị xoá (vẫn giữ giờ, loại, trạng thái). Tối thiểu 6 tháng.", type: "int", unit: "tháng", min: 6, max: 120 },
+  { key: "retention.employee_pii_months", group: "Hệ thống", label: "Che dữ liệu cá nhân nhân viên nghỉ việc sau", help: "Nhân viên nghỉ việc quá số tháng này: che CCCD, ngân hàng, địa chỉ, SĐT, email, ngày sinh. Họ tên, mã và dữ liệu lương/kế toán được giữ.", type: "int", unit: "tháng", min: 12, max: 240 },
+  { key: "retention.audit_years", group: "Hệ thống", label: "Giữ nhật ký thay đổi (audit) tối thiểu", help: "Chính sách ghi nhận: hiện hệ thống không tự xoá nhật ký audit.", type: "int", unit: "năm", min: 5, max: 50 },
   { key: "notify.email_provider", group: "Hệ thống", label: "Nhà cung cấp email thông báo", help: "fake = chỉ ghi nhật ký; cloudflare = gửi thật.", type: "enum", options: o(["fake", "Chạy thử (fake)"], ["cloudflare", "Cloudflare Email"]) },
+  { key: "notify.approval.enabled", group: "Hệ thống", label: "Thông báo yêu cầu chờ duyệt", help: "Bật: người có quyền duyệt nhận thông báo (chuông + đẩy) khi có yêu cầu, người yêu cầu được báo lại khi được duyệt hoặc từ chối.", type: "bool" },
+  { key: "notify.approval.push", group: "Hệ thống", label: "Gửi thêm thông báo đẩy khi có yêu cầu duyệt", help: "Chỉ gửi cho người đã bật thông báo đẩy trên thiết bị. Tắt: chỉ hiện ở chuông trong ứng dụng.", type: "bool" },
+  { key: "notify.approval.groups", group: "Hệ thống", label: "Nhóm yêu cầu có thông báo", help: "Chọn nhóm cần thông báo: chi tiền/công nợ, bán hàng/giá, kho, nhân sự, khác.", type: "multi", options: o(["finance", "Chi tiền, công nợ"], ["sales", "Giảm giá, dưới giá vốn, hạn mức nợ, báo giá, giá"], ["stock", "Kiểm kê, trả hàng NCC"], ["hr", "Nghỉ phép, đổi ca, tăng ca, bổ sung công, chấm offline"], ["other", "Khác"]) },
 ];
 
 export const DEF_BY_KEY = new Map(SETTING_DEFS.map((d) => [d.key, d]));

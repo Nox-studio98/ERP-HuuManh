@@ -9,7 +9,7 @@ import { Confirm, WD_SHORT, dm, hm, periodLabel, shiftPeriod, thisPeriod, wdOf, 
 
 export default function Timesheets() {
   const can = useCan();
-  const manage = can("hr.manage");
+  const manage = can("timesheet.close");
   const qp = (() => { try { return new URLSearchParams(location.search).get("period"); } catch { return null; } })();
   const [period, setPeriod] = useState(qp && /^\d{4}-\d{2}$/.test(qp) ? qp : shiftPeriod(thisPeriod(), 0));
   const l = useAsync(() => get("/timesheets/" + period), [period]);

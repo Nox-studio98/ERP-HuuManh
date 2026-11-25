@@ -42,8 +42,8 @@ Hook cron có sẵn (điền nội dung, KHÔNG sửa `scheduled.ts`): `services
 | GET | /devices/requests, POST /devices/requests/:id/decide | hr.schedule | đổi điện thoại chấm công cần quản lý duyệt |
 | **Bảng công** ||||
 | GET | /timesheets/:period?employeeId= | hr.view | M9-16/19 tính "sống" từ punches nếu kỳ open, đọc snapshot nếu closed: `{period, status, employees:[{employeeId, name, days:[{workDate, scheduledMinutes, workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, missingPunch, leaveCode, holiday}], totals:{workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, missingDays, shiftsWorked, paidLeaveX10, workDays}}]}` |
-| POST | /timesheets/:period/close | hr.manage | chốt công: ghi snapshot `timesheet_days` + status closed. Còn punch pending / thiếu công chưa xử lý → 409 `unresolved_items` (details liệt kê), trừ khi `{force:true, reason}` |
-| POST | /timesheets/adjustments | hr.manage | sai sót kỳ đã chốt → dòng điều chỉnh vào kỳ sau |
+| POST | /timesheets/:period/close | timesheet.close | chốt công: ghi snapshot `timesheet_days` + status closed. Còn punch pending / thiếu công chưa xử lý → 409 `unresolved_items` (details liệt kê), trừ khi `{force:true, reason}` |
+| POST | /timesheets/adjustments | timesheet.close | sai sót kỳ đã chốt → dòng điều chỉnh vào kỳ sau |
 
 **Quy tắc tính công (bắt buộc, có test):** ghép cặp in→out theo thứ tự thời gian trong ngày làm việc (ca qua đêm thuộc ngày bắt đầu); in không có out → `missing_punch` (KHÔNG đoán giờ ra); worked = Σ(out−in) − break của ca; late = max(0, in − start − `hr.late_grace_minutes`); early_leave = max(0, end − out); overtime chỉ tính phần **đã duyệt** trong `overtime_requests`, làm tròn xuống bội số `hr.rounding_minutes`, hệ số theo ngày thường/cuối tuần/lễ; ca gãy (2 ca/ngày) cộng tổng; NV nghỉ việc giữa tháng chỉ tính đến `termination_date`; chỉ punch `accepted`.
 
@@ -134,7 +134,8 @@ Hook cron có sẵn (điền nội dung, KHÔNG sửa `scheduled.ts`): `services
 |---|---|---|---|---|---|---|---|
 | hr.self | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | hr.view / hr.schedule | ✓ | ✓ / ✓ | | | ✓ / – | | |
-| hr.manage / hr.sensitive / payroll.write | ✓ | | | | ✓ | | |
+| hr.manage (tạo/sửa hồ sơ, hợp đồng, phụ cấp, nghỉ việc, loại phép, ngày lễ, cửa hàng) | ✓ | | | | – (C-21, thu hẹp) | | |
+| hr.sensitive / payroll.write / timesheet.close (chốt công + điều chỉnh công) | ✓ | | | | ✓ | | |
 | payroll.approve | ✓ | | | | | | |
 | competitors.view / write | ✓ | ✓ | | | | | |
 | purchasing.view | ✓ | ✓ | | ✓ | | | |
@@ -167,3 +168,8 @@ Migration `0012_leave_types_active.sql` thêm cột `leave_types.active`. `GET /
 | C-07 cửa hàng | `GET /stores`, `GET /stores/:id`, `PUT /stores/:id` `{name?, address?, lat?, lng?, geofenceM?}` (quyền `users.manage` hoặc `hr.manage`; lat −90..90, lng −180..180 phải đi cùng nhau, `geofenceM` 10..2000; audit `store.update`). UI: Nhân sự → Cửa hàng (nút "Lấy vị trí hiện tại"). |
 | C-08 phép | `POST /leave-requests/:id/decide` (approved) tính lại số dư lúc duyệt (mọi đơn đã duyệt cùng năm): vượt → **409 `over_balance`** trừ khi `allowOverBalance: true` **kèm `exceptionReason`** (thiếu → 422 `exception_reason_required`); lưu `leave_requests.exception_reason`. Cờ `overBalance` lúc tạo đơn tính cả đơn đang chờ. Chốt chặn bằng `assertStmt` trong batch. |
 | C-22 RBAC | `GET /bank-transactions` cần `debt.view` **và** `finance.view` (thủ kho không còn xem sao kê). |
+
+## Đợt 6b — C-21, C-26, C-29
+- **C-21**: kế toán (`accountant`) không còn `hr.manage`; chỉ xem hồ sơ (kể cả `hr.sensitive`), chốt/điều chỉnh công (`timesheet.close`, quyền mới) và làm bảng lương (`payroll.write`). Tạo/sửa hồ sơ, lương, hợp đồng, phụ cấp, nghỉ việc, loại phép, ngày lễ, cấu hình cửa hàng: chủ (`hr.manage`).
+- **C-26**: nghỉ việc / khoá tài khoản còn kiểm thêm chứng từ nháp/chờ duyệt do người đó lập (`draftOrders`, `draftStockDocs`, `draftQuotes`, `draftPromotions`, `draftPurchaseReturns`, `draftSettlements`) → 409 `pending_requests`, đi tiếp với `force` (+ lý do với nghỉ việc).
+- **C-29**: tham số `retention.gps_months` (12), `retention.employee_pii_months` (24), `retention.audit_years` (10), `backup.retention_days` (90); xem docs/SECOPS.md mục 11.

@@ -7,9 +7,9 @@ import { pushConfigured, sendWebPush } from "./webpush";
 /** Đường dẫn tra cứu đơn trên website (không chứa dữ liệu cá nhân ngoài token không đoán được). */
 export const trackingPath = (token: string) => `/track/${token}`;
 
-interface Sub { id: number; endpoint: string; p256dh: string; auth: string }
+export interface Sub { id: number; endpoint: string; p256dh: string; auth: string }
 
-async function pushAll(env: Env, subs: Sub[], message: unknown) {
+export async function pushAll(env: Env, subs: Sub[], message: unknown) {
   let sent = 0, removed = 0, failed = 0;
   if (!pushConfigured(env)) return { sent, removed, failed, skipped: "no_vapid" as string | undefined };
   for (const s of subs) {

@@ -8,7 +8,7 @@ import { lineAmount, toMilli } from "../lib/money";
 import { vnDate } from "../lib/time";
 import { allocateFefo, allocationCost, availableQty, moveStatements, type LotAllocation } from "./stock";
 import { resolvePrice } from "./pricing";
-import { nextCode } from "../lib/codes";
+import { nextCode, nextOnlineCode } from "../lib/codes";
 import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveStmts } from "./reservations";
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
@@ -404,15 +404,18 @@ export async function returnToStock(
   }
   // Giao không thành công: chưa từng ghi nhận doanh thu → vẫn chuyển đơn gốc sang 'returned' (không có phiếu trả)
   // A-14: chỉ ghi nghĩa vụ hoàn tiền; kế toán (finance.write) hoàn thực tế qua /refund
-  const due = await refundObligation(db, id, o.refund_due ?? 0);
+  // A-28: giao thất bại → phí giao do bên chịu theo `online.cancel_fee_shipping` (mặc định khách chịu): giữ lại, chỉ hoàn phần còn lại
+  const feePolicy = await cancelFeePolicy(db, o.status);
+  const keepFee = feePolicy === "customer" ? o.shipping_fee ?? 0 : 0;
+  const due = await refundObligation(db, id, (o.refund_due ?? 0) + keepFee);
   const t = transitionStmts(db, id, o.status, "returned", staff(c), {
     note: "Đơn đã được trả hàng",
     internalNote: input.lines.map((l) => `${l.orderLineId}: ${l.reason}${l.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500) || undefined,
-    extraSet: "refund_due = refund_due + ?3, diff_status = 'none', diff_amount = 0",
-    extraBinds: [due],
+    extraSet: "refund_due = refund_due + ?3, shipping_fee_policy = ?4, diff_status = 'none', diff_amount = 0",
+    extraBinds: [due, feePolicy],
   });
   stmts.unshift(t[0]);
-  stmts.push(...t.slice(1), notifyJob(db, id, { status: "returned" }), auditStmt(c, { action: "online_order.return", entity: "order", entityId: id, before: { status: o.status }, after: { status: "returned", lines: summary, refundDue: due } }));
+  stmts.push(...t.slice(1), notifyJob(db, id, { status: "returned" }), auditStmt(c, { action: "online_order.return", entity: "order", entityId: id, before: { status: o.status }, after: { status: "returned", lines: summary, refundDue: due, shippingFeeKept: keepFee } }));
   await runOrderBatch(db, id, o.status, stmts);
   await finish(c, id);
   return { refund: 0, refundDue: due };
@@ -613,6 +616,19 @@ export async function waiveDiff(c: Ctx, id: number, reason: string) {
   return { waived: o.diff_amount };
 }
 
+/**
+ * A-28 (chủ đã chốt): ai chịu phí giao khi huỷ/trả đơn online, theo giai đoạn. Mặc định:
+ * chưa soạn (awaiting_payment/new/confirmed) → cửa hàng chịu (hoàn đủ); đã soạn/đóng gói (preparing) → khách chịu;
+ * giao thất bại (delivery_failed, đơn đang giao chỉ thành huỷ/trả qua bước này) → khách chịu.
+ * Tham số: online.cancel_fee_before_prepare / online.cancel_fee_preparing / online.cancel_fee_shipping ('shop' | 'customer').
+ * `online.cancel_fee_policy` (cũ) không còn dùng.
+ */
+export async function cancelFeePolicy(db: D1Database, status: string): Promise<"shop" | "customer"> {
+  const key = status === "preparing" ? "online.cancel_fee_preparing" : status === "shipping" || status === "delivery_failed" ? "online.cancel_fee_shipping" : "online.cancel_fee_before_prepare";
+  const v = (await db.prepare(`SELECT value FROM settings WHERE key=?`).bind(key).first<{ value: string }>())?.value;
+  return v === "shop" || v === "customer" ? v : key === "online.cancel_fee_before_prepare" ? "shop" : "customer";
+}
+
 // ---------------------------------------------------------------- cancel (EC-06)
 
 export async function cancelOrder(c: Ctx, id: number, reason: string) {
@@ -628,12 +644,13 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
     const p = takeFromLots(sh.lots, line!.qty_milli, 0);
     restock.push(...restockStmts(db, sh.productId, p.restock, [], "order_cancel", id, user.id));
   }
-  const policy = (await db.prepare(`SELECT value FROM settings WHERE key='online.cancel_fee_policy'`).first<{ value: string }>())?.value ?? "shop";
-  const keepFee = policy === "customer" && o.status === "preparing" ? o.shipping_fee : 0;
+  // A-28: phí giao khi huỷ theo giai đoạn (xem cancelFeePolicy)
+  const policy = await cancelFeePolicy(db, o.status);
+  const keepFee = policy === "customer" ? o.shipping_fee ?? 0 : 0;
   // A-14: huỷ chỉ ghi nghĩa vụ hoàn tiền (refund_due); không chèn dòng quỹ. Hoàn thực tế do finance.write qua /refund. COD chưa thu → 0.
   const due = await refundObligation(db, id, keepFee);
   const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0", "refund_due = ?5"];
-  const binds: unknown[] = [reason, keepFee ? "customer" : policy, due];
+  const binds: unknown[] = [reason, policy, due];
   const t = transitionStmts(db, id, o.status, "cancelled", staff(c), { note: "Đơn đã được huỷ", internalNote: reason, extraSet: set.join(", "), extraBinds: binds });
   const stmts = [
     t[0],
@@ -760,7 +777,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     if ((await slotUsed(db, b.slotDate, b.slotId)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   }
   const total = subtotal + shippingFee;
-  const code = await nextCode(db, "DH");
+  const code = await nextOnlineCode(db);
   const token = newTrackingToken();
   const status: OnlineStatus = b.paymentMethod === "transfer" ? "awaiting_payment" : "new";
   const address = [b.addressLine, b.ward, b.district, b.province].filter(Boolean).join(", ");
@@ -808,7 +825,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
         stmts.push(
           db
             .prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, expires_at) VALUES (?, 'vietqr', ?, ?, ?)`)
-            .bind(orderId, total, `HM ${code.replaceAll("-", "")}`, new Date(Date.now() + hold * 60_000).toISOString()),
+            .bind(orderId, total, code, new Date(Date.now() + hold * 60_000).toISOString()),
         );
       }
       stmts.push(

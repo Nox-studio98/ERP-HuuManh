@@ -2,7 +2,7 @@ import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "r
 import { useAuth, loadMe, logout, useCan } from "./store";
 import { navigate, onLink, usePath, useSearch } from "./router";
 import { Toaster } from "./components/toast";
-import { Badge, Button, Sheet, Spinner } from "./components/ui";
+import { Badge, Button, EmptyState, Sheet, Spinner } from "./components/ui";
 import { useQueue, syncQueue } from "./offline";
 import { get } from "./api";
 import { ROLES } from "./format";
@@ -18,6 +18,7 @@ const Inventory = lazy(() => import("./screens/Inventory"));
 const Products = lazy(() => import("./screens/Products"));
 const Prices = lazy(() => import("./screens/Prices"));
 const Finance = lazy(() => import("./screens/Finance"));
+const Sepay = lazy(() => import("./screens/Sepay"));
 const Reports = lazy(() => import("./screens/Reports"));
 const Approvals = lazy(() => import("./screens/Approvals"));
 const Users = lazy(() => import("./screens/Users"));
@@ -74,6 +75,7 @@ const NAV: Nav[] = [
   { path: "/debts", label: "Công nợ", group: G.fin, perms: ["debt.view"], icon: I("M12 3v18M16.5 7.5C16 6 14.2 5 12 5S8 6.2 8 8c0 4.5 8 2.5 8 7 0 1.8-1.8 3-4 3s-4-1-4.5-2.5"), el: <Debts /> },
   { path: "/invoices", label: "Hoá đơn", group: G.fin, perms: ["debt.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3"), el: <Invoices /> },
   { path: "/bank", label: "Ngân hàng", group: G.fin, perms: ["debt.view", "finance.write"], icon: I("M3 10l9-6 9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"), el: <Bank /> },
+  { path: "/sepay", label: "Giao dịch SePay", group: G.fin, perms: ["finance.view"], icon: I("M12 3v12M8 11l4 4 4-4M4 19h16"), el: <Sepay /> },
   { path: "/exports", label: "Xuất Excel", group: G.fin, perms: ["reports.view"], icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), el: <Exports /> },
   { path: "/reports", label: "Báo cáo", group: G.fin, perms: ["reports.view"], icon: I("M4 20V10M10 20V4M16 20v-8M22 20H2"), el: <Reports /> },
   { path: "/approvals", label: "Duyệt", group: G.admin, perms: ["approvals.decide"], icon: I("M5 12l4 4 10-10"), el: <Approvals /> },
@@ -108,6 +110,18 @@ const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } ca
 const lsJson = <T,>(k: string, d: T): T => { try { return JSON.parse(lsGet(k) ?? "") as T; } catch { return d; } };
 const CHEV = "M6 9l6 6 6-6";
 const STAR = "M12 3l2.8 5.8 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.3l1.1-6.2L3 9.7l6.2-.9z";
+
+/** Gõ thẳng URL không có quyền (hoặc không tồn tại): quyền đã tải xong nên báo rõ thay vì quay mãi. */
+function NoAccess({ path }: { path: string }) {
+  const known = NAV.some((n) => path === n.path || path.startsWith(n.path + "/"));
+  return (
+    <EmptyState
+      title={known ? "Bạn không có quyền xem trang này" : "Không tìm thấy trang này"}
+      hint={known ? "Liên hệ chủ cửa hàng nếu bạn cần truy cập." : undefined}
+      action={<Button onClick={() => navigate("/", true)}>Về trang chính</Button>}
+    />
+  );
+}
 
 function Shell() {
   const { user } = useAuth();
@@ -197,7 +211,7 @@ function Shell() {
         </div>
       </header>
       <main className="main" id="main">
-        <Suspense fallback={<Spinner />}>{cur ? <Fragment key={cur.path + search}>{cur.el}</Fragment> : nav.length ? <Spinner /> : <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div>}</Suspense>
+        <Suspense fallback={<Spinner />}>{cur ? <Fragment key={cur.path + search}>{cur.el}</Fragment> : !nav.length ? <div className="empty">Tài khoản chưa được cấp quyền truy cập.</div> : path === "/" || path === "" ? <Spinner /> : <NoAccess path={path} />}</Suspense>
       </main>
       <nav className="tabbar" aria-label="Điều hướng nhanh">
         {mobileMain.map(link)}

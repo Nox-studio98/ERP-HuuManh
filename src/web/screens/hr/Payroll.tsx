@@ -86,6 +86,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
           {can("payroll.write") && st === "approved" && <Button size="sm" onClick={() => setAct("pay")} data-testid="pay">Chi lương</Button>}
           {can("payroll.approve") && st === "paid" && <Button size="sm" variant="danger" onClick={() => setAct("reverse")}>Đảo chi lương</Button>}
           {can("payroll.write") && d && <a className="btn ghost sm" href={downloadHref(`/payroll/periods/${period}/export.xlsx`)} download>Xuất Excel</a>}
+          {d && <a className="btn ghost sm" href={downloadHref(`/payroll/periods/${period}/export.pdf`)} download data-testid="payroll-pdf">Tải PDF</a>}
           {d && <ExportButton filename={`luong-${period}`} rows={d.items} columns={[{ label: "Mã", value: (r: any) => r.code }, { label: "Nhân viên", value: (r: any) => r.name }, { label: "Lương", value: (r: any) => r.basePay }, { label: "Phụ cấp", value: (r: any) => r.allowances }, { label: "Tăng ca", value: (r: any) => r.overtimePay }, { label: "Tổng thu nhập", value: (r: any) => r.gross }, { label: "BH + thuế", value: (r: any) => r.insuranceEmployee + r.pit }, { label: "Tạm ứng", value: (r: any) => r.advances }, { label: "Thực lĩnh", value: (r: any) => r.net }]} />}
         </div>
       </div>
@@ -100,7 +101,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
             { label: "BH + TNCN (NLĐ)", value: money(d.totals.insuranceEmployee + d.totals.pit) },
             { label: "Chi phí DN", value: money(d.totals.cost) },
           ]} />
-          <SplitLayout open={!!row} panel={row ? <RowDetail r={row} onClose={() => setRow(null)} /> : null}>
+          <SplitLayout open={!!row} panel={row ? <RowDetail r={row} period={period} onClose={() => setRow(null)} /> : null}>
           <DataTable<any> rows={d.items} rowKey={(r) => r.employeeId} onRowClick={setRow} selectedKey={row?.employeeId} emptyState={<EmptyState title="Kỳ này chưa có nhân viên" />}
             cols={[
               { key: "n", label: "Nhân viên (số tiền: ₫)", title: true, sort: (r) => r.name, render: (r) => <b>{r.name} <span className="muted small nw">{r.code}</span></b> },
@@ -126,7 +127,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
   );
 }
 const M = (n: number) => <span style={{ whiteSpace: "nowrap" }}>{moneyFmt(n)}</span>;
-function RowDetail({ r, onClose }: { r: any; onClose: () => void }) {
+function RowDetail({ r, period, onClose }: { r: any; period: string; onClose: () => void }) {
   return (
     <DetailPanel onClose={onClose} title={`${r.name} · ${PAY_TYPE[r.payType]}`}>
       <div className="stack" data-testid="payroll-row">
@@ -137,6 +138,7 @@ function RowDetail({ r, onClose }: { r: any; onClose: () => void }) {
           </div>
         ))}
         <div className="row between"><b>Thực lĩnh</b><b className="num">{money(r.net)}</b></div>
+        <a className="btn soft" href={downloadHref(`/payroll/periods/${period}/payslips/${r.employeeId}/pdf`)} download data-testid="payslip-pdf-admin">Tải phiếu lương PDF</a>
       </div>
     </DetailPanel>
   );

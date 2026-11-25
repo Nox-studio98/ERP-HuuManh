@@ -129,6 +129,8 @@ export async function openB2bExposure(db: D1Database, customerId: number, exclud
  * chặn nếu có nợ quá hạn hoặc balance + các đơn đang mở chưa xuất hoá đơn + giá trị đơn mới > hạn mức.
  * (Audit #9: trước đây bỏ qua đơn đang mở → nhiều đơn nhỏ cùng vượt hạn mức.) Chỉ chủ (b2b.credit_override) duyệt tay.
  * `exposure` = tổng đơn đang mở (trừ đơn đang xét) đã dùng để so — confirm dùng nó để chốt chặn đồng thời trong batch.
+ * A-25 (quyết định của chủ): hạn mức nợ giữ theo tổng đơn CHƯA VAT (orders.total là net), dù công nợ ghi theo hoá đơn có VAT khi
+ * `invoice.vat_rate_bp > 0`. Cố ý KHÔNG đổi cơ sở tính sang gross.
  */
 export async function checkCredit(db: D1Database, customerId: number, newOrderAmount: number, excludeOrderId = 0) {
   const s = await customerDebtStatus(db, customerId);

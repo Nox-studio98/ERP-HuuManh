@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { vnDay } from "../lib/time";
 import { getSettingInt } from "./settings";
+import { sysAudit } from "./sysaudit";
 
 /**
  * Sao lưu logic D1 → R2 (yêu cầu chung mục 12; audit C-06).
@@ -8,7 +9,7 @@ import { getSettingInt } from "./settings";
  *  - Đọc phân trang theo rowid (không SELECT * cả bảng vào RAM); mỗi phần ≤ PART_ROWS dòng, nén gzip → NDJSON gz.
  *  - Khoá: backups/YYYY-MM-DD/<bảng>.part-NNNN.ndjson.gz + backups/YYYY-MM-DD/manifest.json (số dòng + sha256 từng phần).
  *    Manifest được ghi CUỐI CÙNG: có manifest = bản sao lưu đủ.
- *  - Giữ N ngày (settings backup.retention_days, mặc định 30); xoá các thư mục ngày cũ hơn.
+ *  - Giữ N ngày (settings backup.retention_days, mặc định 90); xoá các thư mục ngày cũ hơn.
  *  - Cột mật khẩu (pass_hash...) bị bỏ khỏi bản sao lưu.
  * Khôi phục: scripts/restore-from-r2.mjs (xem README).
  */
@@ -74,7 +75,7 @@ async function* readPages(db: D1Database, table: string): AsyncGenerator<Record<
 export async function backupToR2(env: Env, day: string = vnDay()): Promise<BackupManifest> {
   const prefix = `backups/${day}/`;
   const tables = await listBackupTables(env.DB);
-  const manifest: BackupManifest = { day, createdAt: new Date().toISOString(), retentionDays: await getSettingInt(env.DB, "backup.retention_days", 30), tables: [], totalRows: 0 };
+  const manifest: BackupManifest = { day, createdAt: new Date().toISOString(), retentionDays: await getSettingInt(env.DB, "backup.retention_days", 90), tables: [], totalRows: 0 };
   for (const name of tables) {
     const entry = { name, rows: 0, parts: [] as BackupPart[] };
     let buf: string[] = [];
@@ -99,7 +100,8 @@ export async function backupToR2(env: Env, day: string = vnDay()): Promise<Backu
     manifest.totalRows += entry.rows;
   }
   await env.FILES.put(`${prefix}manifest.json`, JSON.stringify(manifest, null, 1), { httpMetadata: { contentType: "application/json" } });
-  await pruneBackups(env, day, manifest.retentionDays);
+  const pruned = await pruneBackups(env, day, manifest.retentionDays);
+  if (pruned.length) await sysAudit(env.DB, { action: "retention.backup_prune", entity: "backup", after: { removedDays: pruned.length, keepDays: manifest.retentionDays } }).catch(() => {});
   return manifest;
 }
 

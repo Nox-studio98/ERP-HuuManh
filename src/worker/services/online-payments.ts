@@ -53,7 +53,7 @@ export async function bankFundId(db: D1Database, storeId = 1) {
 export async function markOrderPaid(
   env: Env,
   order: PaidOrder,
-  o: { userId: number | null; fundId: number; amount?: number; ref?: string | null; bankTxnId?: number | null; audit: D1PreparedStatement },
+  o: { userId: number | null; fundId: number; amount?: number; ref?: string | null; bankTxnId?: number | null; audit: D1PreparedStatement; system?: boolean; extra?: D1PreparedStatement[] },
 ) {
   const db = env.DB;
   if (order.payment_status === "paid") throw conflict("already_paid", "Đơn đã được ghi nhận thanh toán");
@@ -72,6 +72,7 @@ export async function markOrderPaid(
     db.prepare(`UPDATE payment_intents SET status='succeeded', completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE order_id=? AND status='pending'`).bind(order.id),
     notifyJob(db, order.id, { status: "new", event: "paid" }),
     o.audit,
+    ...(o.extra ?? []), // vd. SePay: gắn sự kiện giao dịch vào đúng batch này
   ];
   if (o.bankTxnId) {
     rest.unshift(db.prepare(`UPDATE bank_transactions SET status='matched', matched_type='order', matched_id=? WHERE id=? AND status='unmatched'`).bind(order.id, o.bankTxnId));
@@ -80,7 +81,7 @@ export async function markOrderPaid(
   const paidSet = `payment_status = ?3, paid_total = paid_total + ?4`;
   let stmts: D1PreparedStatement[];
   if (order.status === "awaiting_payment") {
-    const t = transitionStmts(db, order.id, "awaiting_payment", "new", { type: "staff", id: o.userId }, { note: "Đã nhận thanh toán", extraSet: paidSet, extraBinds: ["paid", amount] });
+    const t = transitionStmts(db, order.id, "awaiting_payment", "new", o.system ? { type: "system" } : { type: "staff", id: o.userId }, { note: "Đã nhận thanh toán", extraSet: paidSet, extraBinds: ["paid", amount] });
     stmts = [notPaidYet, t[0], payIns, ...t.slice(1), ...rest];
   } else {
     stmts = [

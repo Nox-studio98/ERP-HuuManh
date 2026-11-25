@@ -153,6 +153,8 @@ export interface PaymentInput {
   bankTxnId?: number | null;
   /** Khoá idempotency do client gửi: gửi lại cùng khoá → 409 already_done, không tạo phiếu thứ hai. */
   idempotencyKey?: string | null;
+  /** Câu lệnh thêm vào CÙNG batch (vd. SePay: gắn sự kiện giao dịch); chỉ dùng cho phiếu ghi ngay (không chờ duyệt). */
+  extra?: D1PreparedStatement[];
 }
 
 export async function paymentResult(db: D1Database, paymentId: number) {
@@ -254,6 +256,7 @@ export async function createPayment(c: Ctx, input: PaymentInput) {
       .bind(pCode, input.direction, input.partnerType, input.partnerId, input.fundId, input.amount, input.method, input.ref ?? null, paidAt, vCode, input.bankTxnId ?? null, input.note ?? null, user.id),
     db.prepare(`UPDATE cash_vouchers SET ref_id = (SELECT id FROM debt_payments WHERE code = ?) WHERE code = ?`).bind(pCode, vCode),
     ...plan.allocs.map((a) => allocStmt(db, a.doc, a.amount, { paymentCode: pCode })),
+    ...(input.extra ?? []),
   ];
   if (input.bankTxnId)
     stmts.push(

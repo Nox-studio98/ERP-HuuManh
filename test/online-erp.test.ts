@@ -52,7 +52,7 @@ async function mk(o: Mk) {
   }
   if (o.intent) {
     await d.prepare(`INSERT INTO payment_intents(order_id, provider, amount, transfer_content, expires_at) VALUES (?, 'vietqr', ?, ?, ?)`)
-      .bind(oid, subtotal + shipping, `HM ${code.replaceAll("-", "")}`, future(0.01)).run();
+      .bind(oid, subtotal + shipping, code, future(0.01)).run();
   }
   return { id: oid, code, lineIds: ids, total: subtotal + shipping };
 }
@@ -238,16 +238,17 @@ describe("xuất kho theo số thực cân + giao hàng", () => {
     await post("online_staff", o.id, "fail", { reason: "Khách từ chối nhận" });
     const r = await post("online_staff", o.id, "return-to-stock", { lines: [{ orderLineId: o.lineIds[0], qty: 6, restock: true, reason: "Hàng còn tươi" }] });
     expect(r.status).toBe(200);
-    // A-14: online_staff chỉ tạo nghĩa vụ hoàn tiền, quỹ chưa đổi
-    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "paid", refundDue: o.total, result: { refund: 0, refundDue: o.total } });
+    // A-14: online_staff chỉ tạo nghĩa vụ hoàn tiền, quỹ chưa đổi. A-28: giao thất bại → khách chịu phí giao (15.000) nên chỉ hoàn phần còn lại
+    const due = o.total - 15000;
+    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "paid", refundDue: due, shippingFeePolicy: "customer", result: { refund: 0, refundDue: due } });
     expect(await lot(611)).toEqual({ h: 4000, r: 0 });
     expect(await lot(6112)).toEqual({ h: 5000, r: 0 });
     expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]);
     expect((await post("online_staff", o.id, "refund")).status).toBe(403);
     const rf = await post("accountant", o.id, "refund");
     expect(rf.status).toBe(200);
-    expect(rf.body).toMatchObject({ paymentStatus: "refunded", refundDue: 0 });
-    expect(rf.body.payments.map((p: any) => p.amount)).toEqual([o.total, -o.total]);
+    expect(rf.body).toMatchObject({ paymentStatus: "partially_refunded", refundDue: 0 });
+    expect(rf.body.payments.map((p: any) => p.amount)).toEqual([o.total, -due]);
 
     // restock=false → không cộng kho, ghi hao hụt
     await mkProduct(612, 5000, 20000);
@@ -271,7 +272,7 @@ describe("huỷ đơn EC-06 + hết hạn thanh toán", () => {
     expect((await post("online_staff", o.id, "cancel", { reason: "x" })).status).toBe(422);
     const r = await post("online_staff", o.id, "cancel", { reason: "Khách đổi ý" });
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "paid", refundDue: o.total });
+    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "paid", refundDue: o.total - 15000, shippingFeePolicy: "customer" }); // A-28: đã soạn → khách chịu phí giao
     expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]); // A-14: chưa ghi quỹ
     expect(await lot(613)).toEqual({ h: 10000, r: 0 });
     expect(r.body.paymentIntents[0].status).toBe("cancelled");
@@ -340,8 +341,8 @@ describe("khớp sao kê tự động", () => {
     const wrong = await mk({ status: "awaiting_payment", method: "transfer", lines: [{ pid: 618, qty: 1 }], intent: true });
     const csv = [
       "date,amount,description,ref",
-      `2026-11-23,${o.total},CK HM ${o.code.replaceAll("-", "")} thanh toan,BANK-ORD-1`,
-      `2026-11-23,${wrong.total - 1000},HM ${wrong.code.replaceAll("-", "")},BANK-ORD-2`,
+      `2026-11-23,${o.total},CK ${o.code} thanh toan,BANK-ORD-1`,
+      `2026-11-23,${wrong.total - 1000},${wrong.code},BANK-ORD-2`,
     ].join("\n");
     const r = await api("owner", "POST", "/api/v1/bank-transactions/import", { fundId: 2, csv });
     expect(r.status).toBe(201);
@@ -366,7 +367,7 @@ describe("đơn mạng xã hội + đặt trước", () => {
     const r = await api("online_staff", "POST", "/api/v1/online-orders", { ...base, clientUuid: uuid, items: [{ productId: 619, unit: "kg", qty: 2 }], paymentMethod: "transfer", slotDate: vnDate(), slotId: 2 });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ channel: "social", status: "awaiting_payment", paymentMethod: "transfer", subtotal: 200000, shippingFee: 15000, total: 215000, zone: { id: 1 } });
-    expect(r.body.code).toMatch(/^DH-/);
+    expect(r.body.code).toMatch(/^DH\d{12}$/);
     expect(r.body.paymentIntents[0]).toMatchObject({ provider: "vietqr", amount: 215000, status: "pending" });
     expect(r.body.lines[0]).toMatchObject({ unitPrice: 100000, orderedQtyMilli: 2000 });
     expect(await lot(619)).toEqual({ h: 10000, r: 2000 });

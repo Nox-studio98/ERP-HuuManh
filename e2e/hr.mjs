@@ -375,6 +375,18 @@ try {
   const pay = await apiGet(k.ctx, `/payroll/periods/${PAST}`);
   assert(pay.status === "calculated" && pay.items.length >= 2 && pay.items.find((i) => i.employeeId === A.id).bonus === 200000, "bảng lương đã tính, A có thưởng 200.000");
 
+  // C-21: kế toán chỉ xem hồ sơ, không thấy nút tạo/sửa/nghỉ việc; trang không có quyền báo rõ thay vì quay mãi
+  await go(k.page, "/hr/employees");
+  await k.page.locator(".dt-table tbody tr").first().waitFor();
+  assert((await btn(k.page, "+ Thêm nhân viên").count()) === 0, "C-21: kế toán không thấy nút + Thêm nhân viên");
+  await k.page.locator(".dt-table tbody tr").first().click();
+  await k.page.getByText("Hồ sơ", { exact: false }).first().waitFor().catch(() => {});
+  assert((await btn(k.page, "Sửa hồ sơ").count()) === 0 && (await btn(k.page, "Cho nghỉ việc").count()) === 0, "C-21: kế toán không thấy Sửa hồ sơ / Cho nghỉ việc");
+  await shot(k.page, "fix6b-accountant-employees-d.png");
+  await go(k.page, "/hr/stores");
+  await k.page.getByText("Bạn không có quyền xem trang này").waitFor();
+  ok("trang không có quyền (/hr/stores) hiện thông báo thay vì spinner");
+  await shot(k.page, "fix6b-no-access-d.png");
   step("Chủ duyệt bảng lương rồi chi lương (chọn quỹ); tạm ứng; chi phí");
   await go(w.page, "/payroll");
   await w.page.getByTestId("period-list").waitFor();

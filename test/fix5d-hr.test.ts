@@ -106,18 +106,18 @@ describe("C-18 lịch sử lương theo ngày hiệu lực", () => {
   it("sửa lương ghi lịch sử (không ghi giá trị vào audit_log), chỉ hr.sensitive xem, không tự sửa lương mình", async () => {
     await db().prepare(`INSERT INTO employees(id, code, full_name, position, store_id, hire_date, pay_type, base_salary) VALUES (620,'NV-H18','Lương Hai','kho',1,'2026-01-01','monthly',2600000)`).run();
     const e = await call("accountant", "GET", `${V}/employees/620`);
-    const up = await call("accountant", "PUT", `${V}/employees/620`, { baseSalary: 8_765_431, salaryEffectiveDate: "2026-09-16", salaryReason: "tăng lương", version: e.body.version });
+    const up = await call("owner", "PUT", `${V}/employees/620`, { baseSalary: 8_765_431, salaryEffectiveDate: "2026-09-16", salaryReason: "tăng lương", version: e.body.version });
     expect(up.status).toBe(200);
     const h = await call("accountant", "GET", `${V}/employees/620/salary-history`);
     expect(h.body.items[0]).toMatchObject({ field: "baseSalary", oldValue: 2_600_000, newValue: 8_765_431, effectiveDate: "2026-09-16" });
     expect((await call("manager", "GET", `${V}/employees/620/salary-history`)).status).toBe(403);
     const leaked = await db().prepare(`SELECT COUNT(*) n FROM audit_log WHERE entity='employee' AND entity_id='620' AND (before_json LIKE '%8765431%' OR after_json LIKE '%8765431%')`).first<any>();
     expect(leaked.n).toBe(0);
-    // kế toán tự sửa lương của chính mình → chặn
+    // C-21: kế toán không sửa lương của ai (kể cả của chính mình) — chỉ chủ sửa lương
     const me = await call("accountant", "GET", `${V}/employees/611`);
     const self = await call("accountant", "PUT", `${V}/employees/611`, { baseSalary: 99_000_000, version: me.body.version });
     expect(self.status).toBe(403);
-    expect(self.body.error.code).toBe("self_salary_edit");
+    expect((await call("accountant", "PUT", `${V}/employees/620`, { baseSalary: 1, version: 99 })).status).toBe(403);
   });
 
   it("periodValue: đổi lương giữa tháng → mỗi ngày dùng mức đúng ngày đó; kỳ trước dùng mức cũ, kỳ sau mức mới", () => {
@@ -203,18 +203,18 @@ describe("C-26 nghỉ việc / khoá tài khoản", () => {
     await seedStaff({ userId: 730, username: "f5_off", employeeId: 730, role: "cashier" });
     const sh = await db().prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (1,730,1,0) RETURNING id`).first<any>();
     const t = { terminationDate: vnDate(), reason: "Xin nghỉ" };
-    const a = await call("accountant", "POST", `${V}/employees/730/terminate`, t);
+    const a = await call("owner", "POST", `${V}/employees/730/terminate`, t);
     expect(a.status).toBe(409);
     expect(a.body.error.code).toBe("open_shift");
-    const u = await call("owner", "PUT", `/api/admin/users/730`, { active: false });
+    const u = await call("owner", "PUT", `/api/v1/users/730`, { active: false });
     expect([404, 409]).toContain(u.status);
     await db().prepare(`UPDATE shifts SET status='closed', closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`).bind(sh.id).run();
     await db().prepare(`INSERT INTO leave_requests(employee_id, leave_type_id, from_date, to_date, days_x10, requested_by) VALUES (730,(SELECT id FROM leave_types LIMIT 1),'2027-01-05','2027-01-05',10,730)`).run();
-    const b = await call("accountant", "POST", `${V}/employees/730/terminate`, t);
+    const b = await call("owner", "POST", `${V}/employees/730/terminate`, t);
     expect(b.status).toBe(409);
     expect(b.body.error.code).toBe("pending_requests");
     expect(b.body.error.details.leave).toBe(1);
-    const c = await call("accountant", "POST", `${V}/employees/730/terminate`, { ...t, force: true });
+    const c = await call("owner", "POST", `${V}/employees/730/terminate`, { ...t, force: true });
     expect(c.status).toBe(200);
   });
 });

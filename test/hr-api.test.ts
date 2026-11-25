@@ -22,7 +22,7 @@ describe("Phân quyền & dữ liệu nhạy cảm", () => {
   });
 
   it("kế toán tạo NV có lương; quản lý xem được nhưng không thấy trường lương/CCCD; xem nhạy cảm ghi audit", async () => {
-    const created = await call("accountant", "POST", "/api/v1/employees", {
+    const created = await call("owner", "POST", "/api/v1/employees", {
       fullName: "Nguyễn Văn Lương", position: "thu ngân", storeId: 1, hireDate: "2026-03-01", payType: "monthly",
       baseSalary: 9_000_000, insuranceSalary: 5_000_000, idNumber: "079123456789", bankName: "VCB", bankAccount: "0011223344", phone: "0901234567",
     });
@@ -54,13 +54,13 @@ describe("Phân quyền & dữ liệu nhạy cảm", () => {
   });
 
   it("sửa hồ sơ: version, audit before/after", async () => {
-    const e = await call("accountant", "POST", "/api/v1/employees", { fullName: "Sửa Lương", position: "kho", storeId: 1, hireDate: "2026-02-01", payType: "monthly", baseSalary: 7_000_000 });
+    const e = await call("owner", "POST", "/api/v1/employees", { fullName: "Sửa Lương", position: "kho", storeId: 1, hireDate: "2026-02-01", payType: "monthly", baseSalary: 7_000_000 });
     const id = e.body.id;
-    const up = await call("accountant", "PUT", `/api/v1/employees/${id}`, { baseSalary: 8_000_000, version: e.body.version });
+    const up = await call("owner", "PUT", `/api/v1/employees/${id}`, { baseSalary: 8_000_000, version: e.body.version });
     expect(up.status).toBe(200);
     expect(up.body.baseSalary).toBe(8_000_000);
     expect(up.body.version).toBe(e.body.version + 1);
-    const stale = await call("accountant", "PUT", `/api/v1/employees/${id}`, { baseSalary: 9_000_000, version: e.body.version });
+    const stale = await call("owner", "PUT", `/api/v1/employees/${id}`, { baseSalary: 9_000_000, version: e.body.version });
     expect(stale.status).toBe(409);
     const row = await db().prepare(`SELECT before_json, after_json FROM audit_log WHERE action='hr.employee.update' AND entity_id=?`).bind(String(id)).first<any>();
     // giá trị lương không được ghi vào nhật ký, chỉ tên trường đã đổi
@@ -71,7 +71,7 @@ describe("Phân quyền & dữ liệu nhạy cảm", () => {
 
 describe("Tạo tài khoản & nghỉ việc", () => {
   it("tạo NV kèm tài khoản, mật khẩu tạm một lần, nghỉ việc thu hồi phiên + huỷ ca tương lai", async () => {
-    const c = await call("accountant", "POST", "/api/v1/employees", {
+    const c = await call("owner", "POST", "/api/v1/employees", {
       fullName: "Trần Nghỉ Việc", position: "bán hàng", storeId: 1, hireDate: "2026-05-01", payType: "shift", shiftRate: 200_000,
       createUser: { username: "nghiviec", role: "staff" },
     });
@@ -81,7 +81,7 @@ describe("Tạo tài khoản & nghỉ việc", () => {
     const u = await db().prepare(`SELECT active, must_change_password, role FROM users WHERE username='nghiviec'`).first<any>();
     expect(u).toMatchObject({ active: 1, must_change_password: 1, role: "staff" });
     expect(JSON.stringify((await call("accountant", "GET", `/api/v1/employees/${c.body.id}`)).body)).not.toContain(c.body.tempPassword);
-    expect((await call("accountant", "POST", "/api/v1/employees", { fullName: "Trùng", position: "p", storeId: 1, hireDate: "2026-05-01", payType: "monthly", createUser: { username: "nghiviec" } })).status).toBe(409);
+    expect((await call("owner", "POST", "/api/v1/employees", { fullName: "Trùng", position: "p", storeId: 1, hireDate: "2026-05-01", payType: "monthly", createUser: { username: "nghiviec" } })).status).toBe(409);
 
     const login = await app.request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "nghiviec", password: c.body.tempPassword }) }, testEnv);
     expect(login.status).toBe(200);
@@ -99,7 +99,7 @@ describe("Tạo tài khoản & nghỉ việc", () => {
     expect(sched.status).toBe(201);
     expect(sched.body.created).toBe(2);
 
-    const t = await call("accountant", "POST", `/api/v1/employees/${c.body.id}/terminate`, { terminationDate: "2026-12-10", reason: "Xin nghỉ" });
+    const t = await call("owner", "POST", `/api/v1/employees/${c.body.id}/terminate`, { terminationDate: "2026-12-10", reason: "Xin nghỉ" });
     expect(t.status).toBe(200);
     expect(t.body.status).toBe("terminated");
     expect((await me()).status).toBe(401); // phiên đã bị thu hồi
@@ -109,7 +109,7 @@ describe("Tạo tài khoản & nghỉ việc", () => {
     // xếp ca sau ngày nghỉ → 422
     const after = await call("manager", "POST", "/api/v1/schedule/bulk", { assignments: [{ employeeId: c.body.id, workDate: "2026-12-15", shiftTemplateId: 1 }] });
     expect(after.status).toBe(422);
-    expect((await call("accountant", "POST", `/api/v1/employees/${c.body.id}/terminate`, { terminationDate: "2026-12-10", reason: "x" })).status).toBe(409);
+    expect((await call("owner", "POST", `/api/v1/employees/${c.body.id}/terminate`, { terminationDate: "2026-12-10", reason: "x" })).status).toBe(409);
   });
 });
 
@@ -154,8 +154,8 @@ describe("Lịch ca", () => {
 
 describe("Nghỉ phép", () => {
   it("days_x10 bỏ ngày lễ (không bỏ Chủ nhật), vượt số dư → over_balance, duyệt cần ngoại lệ", async () => {
-    await call("accountant", "POST", "/api/v1/holidays", { day: "2027-09-02", name: "Quốc khánh" });
-    expect((await call("accountant", "POST", "/api/v1/holidays", { day: "2027-09-02", name: "dup" })).status).toBe(409);
+    await call("owner", "POST", "/api/v1/holidays", { day: "2027-09-02", name: "Quốc khánh" });
+    expect((await call("owner", "POST", "/api/v1/holidays", { day: "2027-09-02", name: "dup" })).status).toBe(409);
     expect((await call("manager", "POST", "/api/v1/holidays", { day: "2027-09-03", name: "x" })).status).toBe(403);
     // 2027-08-30 (Th2) → 2027-09-05 (CN): 7 ngày trừ lễ 02/09 = 6 ngày
     const l1 = await call("staff1", "POST", "/api/v1/me/leave-requests", { leaveTypeCode: "annual", fromDate: "2027-08-30", toDate: "2027-09-05", reason: "Du lịch" });

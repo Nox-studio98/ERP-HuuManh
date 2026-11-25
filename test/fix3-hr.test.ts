@@ -84,7 +84,8 @@ describe("C-07 cấu hình cửa hàng", () => {
     expect((await call("owner", "PUT", "/api/v1/stores/1", { lat: 10, lng: null })).status).toBe(422); // thiếu kinh độ
     expect((await call("owner", "PUT", "/api/v1/stores/1", { lat: 10, lng: 106, geofenceM: 5 })).status).toBe(422);
     expect((await call("owner", "PUT", "/api/v1/stores/999", { lat: 10, lng: 106 })).status).toBe(404);
-    const r = await call("accountant", "PUT", "/api/v1/stores/1", { lat: 10.78, lng: 106.7, geofenceM: 150 });
+    expect((await call("accountant", "PUT", "/api/v1/stores/1", { lat: 10.78, lng: 106.7 })).status).toBe(403); // C-21
+    const r = await call("owner", "PUT", "/api/v1/stores/1", { lat: 10.78, lng: 106.7, geofenceM: 150 });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ id: 1, lat: 10.78, lng: 106.7, geofenceM: 150 });
     const g = await call("owner", "GET", "/api/v1/stores/1");

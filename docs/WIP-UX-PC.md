@@ -41,7 +41,7 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
 **Quyết định (25/11/2026):** quản lý (có `reports.view`, không có `hr.sensitive`) được xem **tổng** chi lương trong Báo cáo lãi lỗ, Dòng tiền, Lãi lỗ theo kênh — chủ dự án xác nhận là chấp nhận được. Lương từng người vẫn chỉ chủ + kế toán xem được (`/vouchers` ẩn phiếu lương, `/payroll/*` cần quyền riêng).
 
 **Còn để lại (nhỏ):**
-- Quản lý gõ thẳng `/payroll` (không có quyền) thì màn hiện spinner thay vì thông báo không có quyền (`App.tsx`: không tìm thấy mục NAV → `<Spinner/>`).
+- (Đã xong đợt 6b) Gõ thẳng URL không có quyền (vd `/payroll` với quản lý) nay hiện "Bạn không có quyền xem trang này" (`NoAccess` trong `App.tsx`); chỉ spinner khi đang ở `/`.
 - Website → Bài viết ở 1920px: lưới chỉ 2 thẻ nên nửa phải trống (do dữ liệu mẫu ít).
 - `e2e/gaps2.mjs` cần tồn kho có sẵn: chạy `smoke.mjs` trước trên cùng DB.
 

@@ -27,6 +27,8 @@ Nền tảng: Cloudflare Workers, D1 (SQLite), R2, Queues, Cron. Giao diện và
 
 Trong dự án, các skill dùng thực tế: `wrangler`, `workers-best-practices`, `workers-development`. Sẽ cần khi go-live: `cloudflare-email-service` (email thật), `turnstile-spin` (Turnstile thật), `web-perf`.
 
+**Skill nằm trong repo** (`.claude/skills/`, không cần cài): `sepay` — tích hợp SePay (webhook xác nhận chuyển khoản, VietQR, đối soát). Đọc `references/integration-design.md` + `webhook.md` trước khi sửa phần thanh toán chuyển khoản; tài liệu dự án: `docs/SEPAY.md`.
+
 **Skill mặc định của tài khoản claude.ai** (tự đồng bộ, không cần cài):
 - File: `docx`, `xlsx`, `pptx`, `pdf`, `docs`.
 - Khác: `deep-research`, `skill-creator`, `google-workspace`, `chrome-browser`, `built-in-browser`, `computer-use`, `morning`, `import-memory`.

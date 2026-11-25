@@ -6,8 +6,10 @@ import { swapBadReservationsAllStores } from "./services/reservations";
 import { hrAttendanceAlerts } from "./services/hr-cron";
 import { runDueCompetitorCrawls } from "./services/competitor-cron";
 import { generateRecurringOrders } from "./services/recurring-cron";
+import { runRetention } from "./services/retention";
 import { cleanupGuardsStmt } from "./services/guard";
 import { sweepStaleDrafts } from "./services/online-ops";
+import { reconcileSepay } from "./services/sepay-reconcile";
 import { cancelStaleCodOrders } from "../shop/worker/lib/cod-expiry";
 
 /** Chạy một bước cron độc lập: lỗi một bước không chặn bước khác. */
@@ -35,6 +37,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
     await step("stale_drafts", () => sweepStaleDrafts(env.DB)); // audit #16: đơn nháp mồ côi chặn đồng bộ offline
     await step("stale_cod", () => cancelStaleCodOrders(env)); // audit: đơn COD khách vãng lai chưa xác nhận quá hạn → nhả tồn
     await step("hr_alerts", () => hrAttendanceAlerts(env)); // Đợt 4 — M9-23
+    await step("sepay_reconcile", () => reconcileSepay(env)); // chỉ chạy khi có SEPAY_API_KEY
     await step("competitor_crawl", () => runDueCompetitorCrawls(env)); // Đợt 4 — M7
     return;
   }
@@ -59,6 +62,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
     .run();
   // A-17: lô vừa hết hạn đang giữ cho đơn → đổi sang lô tốt NGAY (không đợi 08:00 — giao buổi sáng sớm không xuất lô quá hạn)
   await step("swap_expired_reservations", () => swapBadReservationsAllStores(env.DB));
+  await step("retention", () => runRetention(env)); // C-29: GPS > 12 tháng, PII nhân viên nghỉ > 24 tháng
   await step("backup", () => backupToR2(env)); // C-06: lỗi sao lưu được ghi log, không chặn bước khác
 }
 
