@@ -9,6 +9,7 @@ import { nextCode, PREFIX } from "../lib/codes";
 import { vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { parseBody } from "../services/http";
 import { assertStmt, onceStmt } from "../services/guard";
+import { assertPeriodOpen } from "../services/period";
 import { getSettingInt } from "../services/settings";
 import { buildXlsx, XLSX_MIME } from "../services/xlsx";
 import { calculatePayslip, loadPayrollSettings, type PayslipInput, type TimesheetDayInput } from "../services/payroll-calc";
@@ -324,7 +325,7 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
         carriedTotal += rest;
         remaining = 0;
       } else {
-        stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, a.id));
+        stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=?, moved_from_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, period, a.id));
         carriedTotal += a.amount;
       }
     }
@@ -332,7 +333,7 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
   const itemEmps = new Set(items.map((i) => i.employee_id));
   for (const a of advRows) {
     if (itemEmps.has(a.employee_id)) continue; // NV không có phiếu lương kỳ này → khoản tạm ứng sang kỳ sau, không bị bỏ sót
-    stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, a.id));
+    stmts.push(db.prepare(`UPDATE salary_advances SET deduct_period=?, moved_from_period=? WHERE id=? AND status='paid'`).bind(nextPeriod, period, a.id));
     carriedTotal += a.amount;
   }
   stmts.push(
@@ -341,6 +342,111 @@ payrollRoutes.post("/payroll/periods/:period/pay", requirePerm("payroll.write"),
   );
   await db.batch(stmts);
   return c.json({ period, status: "paid", vouchers, advancesCarried: carriedTotal, carriedTo: carriedTotal > 0 ? nextPeriod : null });
+});
+
+// ---------------------------------------------------------------- đảo chi lương (C-23)
+const reverseSchema = z.object({ reason: z.string().trim().min(5).max(300) });
+/**
+ * Đảo toàn bộ chi lương của kỳ (chọn nhầm quỹ...): lập phiếu thu đảo cho từng phiếu chi lương (kỳ hiện tại, kiểm khoá sổ),
+ * đưa kỳ lương về 'approved' (chưa chi, chi lại được với quỹ khác), trả các khoản tạm ứng về trạng thái trước khi chi.
+ * Chỉ người duyệt lương (payroll.approve). Không sửa phiếu lương (payroll_items vẫn khoá).
+ */
+payrollRoutes.post("/payroll/periods/:period/reverse-pay", requirePerm("payroll.approve"), async (c) => {
+  const period = periodParam(c.req.param("period"));
+  const { reason } = await parseBody(c, reverseSchema);
+  const db = c.env.DB;
+  const user = c.get("user");
+  const pp = await getPeriodRow(db, period);
+  if (!pp) throw notFound("payroll_period_not_found", "Chưa có bảng lương kỳ này");
+  if (pp.status !== "paid") throw conflict("invalid_state", "Kỳ lương chưa chi, không có gì để đảo");
+  await assertPeriodOpen(db, new Date(), "phiếu đảo chi lương");
+  const { results: vs } = await db
+    .prepare(
+      `SELECT v.* FROM cash_vouchers v WHERE v.ref_type = 'payroll_item' AND v.status = 'posted' AND v.reverses_id IS NULL
+          AND v.ref_id IN (SELECT id FROM payroll_items WHERE payroll_period_id = ?)
+          AND NOT EXISTS (SELECT 1 FROM cash_vouchers r WHERE r.reverses_id = v.id) ORDER BY v.id`,
+    )
+    .bind(pp.id)
+    .all<any>();
+  if (!vs.length) throw conflict("nothing_to_reverse", "Không còn phiếu chi lương nào chưa đảo");
+  const curPeriod = vnPeriod();
+  const stmts: D1PreparedStatement[] = [
+    assertStmt(db, "payroll.reverse_pay", `SELECT status = 'paid' FROM payroll_periods WHERE id = ?`, [pp.id]),
+  ];
+  const reversals: { code: string; amount: number; of: string }[] = [];
+  for (const v of vs) {
+    const code = await nextCode(db, PREFIX.cashIn);
+    reversals.push({ code, amount: v.amount, of: v.code });
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, reverses_id)
+           VALUES (?, 'in', ?, ?, ?, ?, 'payroll_item', ?, 'posted', ?, ?, ?, ?, ?)`,
+        )
+        .bind(code, v.fund_id, v.category_id, v.amount, v.counterparty, v.ref_id, curPeriod, `Đảo chi lương kỳ ${period} (${v.code}): ${reason}`.slice(0, 500), user.id, user.id, v.id),
+    );
+  }
+  // Tạm ứng: khoản đã trừ → trả về 'paid'; khoản tách dở → gộp lại; khoản bị dời kỳ khi chi lương → về kỳ gốc
+  const { results: deducted } = await db.prepare(`SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'deducted'`).bind(period).all<any>();
+  for (const a of deducted) {
+    const carry = await db.prepare(`SELECT * FROM salary_advances WHERE carried_from_id = ?`).bind(a.id).first<any>();
+    if (carry) {
+      if (carry.status !== "paid") throw conflict("advance_carried_used", "Khoản tạm ứng chuyển kỳ sau đã bị khấu trừ/huỷ, không đảo được chi lương");
+      stmts.push(
+        assertStmt(db, "payroll.reverse_carry", `SELECT status = 'paid' FROM salary_advances WHERE id = ?`, [carry.id]),
+        db.prepare(`UPDATE salary_advances SET status='cancelled' WHERE id=? AND status='paid'`).bind(carry.id),
+        db.prepare(`UPDATE salary_advances SET amount = amount + ?, status='paid' WHERE id=? AND status='deducted'`).bind(carry.amount, a.id),
+      );
+    } else stmts.push(db.prepare(`UPDATE salary_advances SET status='paid' WHERE id=? AND status='deducted'`).bind(a.id));
+  }
+  stmts.push(
+    db.prepare(`UPDATE salary_advances SET deduct_period = moved_from_period, moved_from_period = NULL WHERE moved_from_period = ? AND status = 'paid'`).bind(period),
+    db.prepare(`DELETE FROM once_keys WHERE scope = 'payroll.pay' AND key = ?`).bind(String(pp.id)),
+    db.prepare(`UPDATE payroll_periods SET status='approved', paid_at=NULL, paid_fund_id=NULL WHERE id=? AND status='paid'`).bind(pp.id),
+    auditStmt(c, { action: "payroll.reverse_pay", entity: "payroll_period", entityId: period, before: { status: "paid", fundId: pp.paid_fund_id }, after: { status: "approved", reversals }, reason }),
+  );
+  await db.batch(stmts);
+  return c.json({ period, status: "approved", reversals });
+});
+
+// Huỷ tạm ứng chưa khấu trừ (chọn nhầm quỹ/nhân viên): đảo phiếu chi (hoặc huỷ phiếu chờ duyệt) + đánh dấu cancelled
+payrollRoutes.post("/payroll/advances/:id/cancel", requirePerm("payroll.write"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const { reason } = await parseBody(c, reverseSchema);
+  const db = c.env.DB;
+  const user = c.get("user");
+  const a = await db.prepare(`SELECT * FROM salary_advances WHERE id = ?`).bind(id).first<any>();
+  if (!a) throw notFound("advance_not_found", "Không tìm thấy khoản tạm ứng");
+  if (a.status !== "paid") throw conflict("advance_not_cancellable", a.status === "deducted" ? "Tạm ứng đã khấu trừ vào lương, không huỷ được" : "Tạm ứng đã huỷ");
+  const pp = await getPeriodRow(db, a.deduct_period);
+  if (pp && (pp.status === "approved" || pp.status === "paid")) throw conflict("payroll_locked", "Kỳ khấu trừ đã duyệt/đã chi: đảo chi lương của kỳ đó trước");
+  const v = a.cash_voucher_id ? await db.prepare(`SELECT * FROM cash_vouchers WHERE id = ?`).bind(a.cash_voucher_id).first<any>() : null;
+  const stmts: D1PreparedStatement[] = [
+    assertStmt(db, "payroll.advance_cancel", `SELECT status = 'paid' FROM salary_advances WHERE id = ?`, [id]),
+    db.prepare(`UPDATE salary_advances SET status='cancelled' WHERE id=? AND status='paid'`).bind(id),
+  ];
+  let reversal: string | null = null;
+  if (v?.status === "pending_approval") {
+    stmts.push(
+      db.prepare(`UPDATE cash_vouchers SET status='cancelled' WHERE id=? AND status='pending_approval'`).bind(v.id),
+      db.prepare(`UPDATE approvals SET status='rejected', decided_by=?, decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), decision_note=? WHERE type='cash_voucher.post' AND ref_id=? AND status='pending'`).bind(user.id, reason, String(v.id)),
+    );
+  } else if (v?.status === "posted") {
+    await assertPeriodOpen(db, new Date(), "phiếu đảo tạm ứng");
+    if (await db.prepare(`SELECT 1 FROM cash_vouchers WHERE reverses_id = ?`).bind(v.id).first()) throw conflict("already_reversed", "Phiếu chi tạm ứng đã được đảo");
+    reversal = await nextCode(db, PREFIX.cashIn);
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, reverses_id)
+           VALUES (?, 'in', ?, ?, ?, ?, 'salary_advance', ?, 'posted', ?, ?, ?, ?, ?)`,
+        )
+        .bind(reversal, v.fund_id, v.category_id, v.amount, v.counterparty, v.ref_id, vnPeriod(), `Đảo tạm ứng lương (${v.code}): ${reason}`.slice(0, 500), user.id, user.id, v.id),
+    );
+  }
+  stmts.push(auditStmt(c, { action: "payroll.advance_cancel", entity: "salary_advance", entityId: id, before: { status: a.status, voucher: v?.code ?? null }, after: { status: "cancelled", reversal }, reason }));
+  await db.batch(stmts);
+  return c.json({ id, status: "cancelled", reversalCode: reversal });
 });
 
 // ---------------------------------------------------------------- entries

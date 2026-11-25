@@ -108,13 +108,13 @@ financeExtraRoutes.get("/reports/vat", requirePerm("reports.view"), async (c) =>
     await db
       .prepare(
         `SELECT vat_rate_bp AS rateBp, COUNT(*) AS count, SUM(subtotal) AS base, SUM(vat_amount) AS vat
-           FROM invoices WHERE status <> 'cancelled' AND substr(issue_date,1,7) = ? GROUP BY vat_rate_bp ORDER BY vat_rate_bp`,
+           FROM invoices WHERE status <> 'cancelled' AND is_opening = 0 AND substr(issue_date,1,7) = ? GROUP BY vat_rate_bp ORDER BY vat_rate_bp`,
       )
       .bind(period)
       .all<{ rateBp: number; count: number; base: number; vat: number }>()
   ).results;
   const inp = await db
-    .prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(total),0) AS total, COALESCE(SUM(vat_amount),0) AS vat FROM supplier_bills WHERE status <> 'cancelled' AND substr(issue_date,1,7) = ?`)
+    .prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(total),0) AS total, COALESCE(SUM(vat_amount),0) AS vat FROM supplier_bills WHERE status <> 'cancelled' AND is_opening = 0 AND substr(issue_date,1,7) = ?`)
     .bind(period)
     .first<{ count: number; total: number; vat: number }>();
   const outVat = byRate.reduce((s, r) => s + r.vat, 0);
@@ -123,7 +123,7 @@ financeExtraRoutes.get("/reports/vat", requirePerm("reports.view"), async (c) =>
     output: { count: byRate.reduce((s, r) => s + r.count, 0), base: byRate.reduce((s, r) => s + r.base, 0), vat: outVat, byRate },
     input: { count: inp!.count, total: inp!.total, vat: inp!.vat },
     payable: outVat - inp!.vat,
-    notice: "[Cần xác nhận hình thức kinh doanh] Số liệu tham khảo từ hoá đơn bán và hoá đơn mua đã ghi nhận; thuế phải nộp thực tế theo hình thức kê khai của cửa hàng.",
+    notice: "[Cần xác nhận hình thức kinh doanh] Số liệu tham khảo từ hoá đơn bán B2B và hoá đơn mua đã ghi nhận (không gồm số dư đầu kỳ và doanh thu bán lẻ POS/online); thuế phải nộp thực tế theo hình thức kê khai của cửa hàng.",
   });
 });
 
