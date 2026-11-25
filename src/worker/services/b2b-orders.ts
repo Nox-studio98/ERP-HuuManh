@@ -209,6 +209,7 @@ export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApproval
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn sỉ");
   if (o.status !== "new" && o.status !== "delivery_failed") throw conflict("invalid_status", `Đơn đang ở trạng thái ${o.status}`, { status: o.status });
 
+  // A-25: hạn mức nợ so theo tổng đơn CHƯA VAT (chủ đã chốt giữ nguyên), xem checkCredit
   const chk = await checkCredit(db, o.customer_id, o.total, orderId);
   let override: number | null = null;
   if (!chk.ok) {

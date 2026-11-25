@@ -219,6 +219,7 @@ async function loadDelivery(db: D1Database, did: number) {
   return {
     id: d.id, code: d.code, orderId: d.order_id, addressId: d.address_id, status: d.status, shipper: d.shipper, receiverName: d.receiver_name,
     deliveredAt: d.delivered_at, note: d.note, createdAt: d.created_at,
+    backorderDefault: (await getSettingInt(db, "b2b.backorder_on_short", 0)) === 1, // A-27: mặc định ô "Tạo đơn bổ sung" ở màn xác nhận giao
     lines: lines.map((l) => ({
       orderLineId: l.order_line_id, productId: l.product_id, productName: l.product_name, unit: l.unit,
       qty: l.ordered_milli / l.factor, qtyMilli: l.ordered_milli, pickedMilli: l.picked_milli, deliveredMilli: l.delivered_milli,

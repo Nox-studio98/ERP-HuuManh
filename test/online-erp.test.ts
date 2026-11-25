@@ -238,16 +238,17 @@ describe("xuất kho theo số thực cân + giao hàng", () => {
     await post("online_staff", o.id, "fail", { reason: "Khách từ chối nhận" });
     const r = await post("online_staff", o.id, "return-to-stock", { lines: [{ orderLineId: o.lineIds[0], qty: 6, restock: true, reason: "Hàng còn tươi" }] });
     expect(r.status).toBe(200);
-    // A-14: online_staff chỉ tạo nghĩa vụ hoàn tiền, quỹ chưa đổi
-    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "paid", refundDue: o.total, result: { refund: 0, refundDue: o.total } });
+    // A-14: online_staff chỉ tạo nghĩa vụ hoàn tiền, quỹ chưa đổi. A-28: giao thất bại → khách chịu phí giao (15.000) nên chỉ hoàn phần còn lại
+    const due = o.total - 15000;
+    expect(r.body).toMatchObject({ status: "returned", paymentStatus: "paid", refundDue: due, shippingFeePolicy: "customer", result: { refund: 0, refundDue: due } });
     expect(await lot(611)).toEqual({ h: 4000, r: 0 });
     expect(await lot(6112)).toEqual({ h: 5000, r: 0 });
     expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]);
     expect((await post("online_staff", o.id, "refund")).status).toBe(403);
     const rf = await post("accountant", o.id, "refund");
     expect(rf.status).toBe(200);
-    expect(rf.body).toMatchObject({ paymentStatus: "refunded", refundDue: 0 });
-    expect(rf.body.payments.map((p: any) => p.amount)).toEqual([o.total, -o.total]);
+    expect(rf.body).toMatchObject({ paymentStatus: "partially_refunded", refundDue: 0 });
+    expect(rf.body.payments.map((p: any) => p.amount)).toEqual([o.total, -due]);
 
     // restock=false → không cộng kho, ghi hao hụt
     await mkProduct(612, 5000, 20000);
@@ -271,7 +272,7 @@ describe("huỷ đơn EC-06 + hết hạn thanh toán", () => {
     expect((await post("online_staff", o.id, "cancel", { reason: "x" })).status).toBe(422);
     const r = await post("online_staff", o.id, "cancel", { reason: "Khách đổi ý" });
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "paid", refundDue: o.total });
+    expect(r.body).toMatchObject({ status: "cancelled", cancelReason: "Khách đổi ý", paymentStatus: "paid", refundDue: o.total - 15000, shippingFeePolicy: "customer" }); // A-28: đã soạn → khách chịu phí giao
     expect(r.body.payments.map((p: any) => p.amount)).toEqual([o.total]); // A-14: chưa ghi quỹ
     expect(await lot(613)).toEqual({ h: 10000, r: 0 });
     expect(r.body.paymentIntents[0].status).toBe("cancelled");

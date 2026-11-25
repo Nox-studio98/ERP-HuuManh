@@ -218,7 +218,7 @@ try {
   if (dC.refundDue > 0) { // A-14: huỷ/trả chỉ ghi nghĩa vụ hoàn, finance.write hoàn thực
     await o.page.locator(".badge", { hasText: "Chờ hoàn tiền" }).first().waitFor();
     await o.page.getByRole("button", { name: /^Hoàn tiền/ }).click();
-    await o.page.locator(".badge", { hasText: /Đã hoàn/ }).first().waitFor();
+    await o.page.locator(".badge", { hasText: /Đã hoàn|Hoàn một phần/ }).first().waitFor();
     ok("hoàn tiền đơn đã trả");
   } else ok("không có khoản cần hoàn (" + dC.paymentStatus + ")");
 

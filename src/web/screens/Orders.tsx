@@ -8,6 +8,7 @@ import { CHANNELS, METHODS, ORDER_STATUS, fmtDateTime, fmtTime, money, qtyText, 
 import { navigate, setQuery } from "../router";
 import { useUnitMap } from "../units";
 import { useCan } from "../store";
+import { ExchangeForm } from "./Exchange";
 
 const tone = (s: string) => (s === "completed" ? "ok" : s === "cancelled" || s === "returned" ? "danger" : "info") as any;
 const STATUS_OPTS = [...Object.entries(ORDER_STATUS).filter(([k]) => k !== "draft").map(([v, label]) => ({ v, label })), { v: "returns", label: "Phiếu trả hàng" }];
@@ -93,7 +94,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
   const can = useCan();
   const o = useAsync(() => get(`/orders/${id}`), [id]);
   const pmap = useUnitMap();
-  const [mode, setMode] = useState<"view" | "return" | "void" | "receipt">("view");
+  const [mode, setMode] = useState<"view" | "return" | "exchange" | "void" | "receipt">("view");
   const d = o.data && pmap ? withShown(o.data, pmap) : o.data;
   return (
     <DetailPanel onClose={onClose} title={d ? `Đơn ${d.code}` : "Đơn hàng"}>
@@ -101,12 +102,15 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
         <div className="stack"><Receipt order={d} /><Button variant="ghost" onClick={() => setMode("view")}>← Quay lại</Button></div>
       ) : mode === "return" ? (
         <ReturnForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); o.reload(); setMode("view"); }} />
+      ) : mode === "exchange" ? (
+        <ExchangeForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); o.reload(); setMode("view"); }} />
       ) : mode === "void" ? (
         <VoidForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); onClose(); }} />
       ) : (
         <div className="stack">
           <div className="row wrap"><Badge tone={tone(d.status)}>{ORDER_STATUS[d.status] ?? d.status}</Badge><span className="muted small">{CHANNELS[d.channel] ?? d.channel} · {fmtTime(d.createdAt)}</span></div>
           {d.voidReason && <Banner tone="danger">Đã huỷ: {d.voidReason}</Banner>}
+          {d.exchange && <Banner tone="info">{d.exchange.role === "new_sale" ? "Đơn đổi hàng từ đơn" : "Phiếu trả của lần đổi hàng, đơn mới:"} <b>{d.exchange.linkedCode}</b></Banner>}
           <DataTable rows={d.lines ?? []} rowKey={(l: any) => l.id} cols={[
             { key: "n", label: "Hàng", title: true, render: (l: any) => lineName(l) },
             { key: "q", label: "SL", right: true, render: (l: any) => qtyText(l.qtyShown, l.unit) },
@@ -121,6 +125,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
           <div className="row wrap">
             <Button variant="soft" onClick={() => setMode("receipt")}>Xem / in hoá đơn</Button>
             {can("pos.return") && d.kind !== "return" && d.status !== "cancelled" && <Button variant="ghost" onClick={() => setMode("return")}>Trả hàng</Button>}
+            {can("pos.return") && can("pos.sell") && d.kind !== "return" && d.status === "completed" && d.channel === "pos" && <Button variant="ghost" onClick={() => setMode("exchange")}>Đổi hàng</Button>}
             {can("pos.void") && d.kind !== "return" && d.status !== "cancelled" && <Button variant="danger" onClick={() => setMode("void")}>Huỷ đơn</Button>}
           </div>
         </div>

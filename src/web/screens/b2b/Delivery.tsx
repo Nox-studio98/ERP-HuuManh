@@ -204,6 +204,7 @@ function DeliveryDetail({ id }: { id: number }) {
         <Sheet open onClose={() => setDone(null)} title="Đã giao hàng" footer={<Button block onClick={() => { setDone(null); navigate(`/b2b-orders/${del.orderId}`); }}>Xem đơn</Button>}>
           <div className="stack">
             <Banner tone="info">Đơn đã hoàn tất theo số thực giao.</Banner>
+            {done.backorder && <Banner tone="info">Đã tạo đơn bổ sung <b>{done.backorder.code}</b> cho phần giao thiếu (chờ xác nhận).</Banner>}
             {done.invoice ? (
               <div className="card flat stack" style={{ gap: 4 }} data-testid="invoice-result">
                 <div className="row between"><b>Hoá đơn {done.invoice.code}</b><Badge tone={einvTone(done.invoice.einvoiceStatus)}>HĐĐT: {EINVOICE[done.invoice.einvoiceStatus] ?? done.invoice.einvoiceStatus}</Badge></div>
@@ -226,11 +227,14 @@ function ShipSheet({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => 
 
 function ConfirmSheet({ del, toU, busy, onClose, onSubmit }: { del: any; toU: (l: any, m: number) => number; busy: boolean; onClose: () => void; onSubmit: (b: any) => void }) {
   const [name, setName] = useState("");
+  const [backorder, setBackorder] = useState<boolean>(!!del.backorderDefault); // A-27: mặc định theo Cài đặt b2b.backorder_on_short
   const [st, setSt] = useState<Record<number, { del: number; rej: number; reason: string }>>(() => Object.fromEntries(del.lines.map((l: any) => [l.orderLineId, { del: Math.min(toU(l, l.pickedMilli) || l.qty, l.qty), rej: 0, reason: "" }])));
   const set = (id: number, p: Partial<{ del: number; rej: number; reason: string }>) => setSt({ ...st, [id]: { ...st[id], ...p } });
+  // Phần thiếu = đặt − giao − từ chối (hàng bị từ chối không tính vào đơn bổ sung)
+  const shortLines = del.lines.filter((l: any) => { const s = st[l.orderLineId]; return l.qty - s.del - s.rej > 1e-9; });
   const invalid = del.lines.some((l: any) => { const s = st[l.orderLineId]; return s.del + s.rej > l.qty + 1e-9 || (s.rej > 0 && !s.reason); });
   return (
-    <Sheet open wide onClose={onClose} title="Xác nhận giao hàng" footer={<Button block size="lg" loading={busy} disabled={!name.trim() || invalid} onClick={() => onSubmit({ receiverName: name.trim(), lines: del.lines.map((l: any) => { const s = st[l.orderLineId]; return { orderLineId: l.orderLineId, deliveredQty: s.del, ...(s.rej > 0 ? { rejectedQty: s.rej, rejectReason: s.reason } : {}) }; }) })}>Xác nhận & lập hoá đơn</Button>}>
+    <Sheet open wide onClose={onClose} title="Xác nhận giao hàng" footer={<Button block size="lg" loading={busy} disabled={!name.trim() || invalid} onClick={() => onSubmit({ receiverName: name.trim(), ...(shortLines.length ? { backorder } : {}), lines: del.lines.map((l: any) => { const s = st[l.orderLineId]; return { orderLineId: l.orderLineId, deliveredQty: s.del, ...(s.rej > 0 ? { rejectedQty: s.rej, rejectReason: s.reason } : {}) }; }) })}>Xác nhận & lập hoá đơn</Button>}>
       <div className="stack">
         <Input label="Người nhận hàng" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         <div className="hint">Hoá đơn lập theo <b>số thực giao</b>. Hàng bị từ chối không xuất kho.</div>
@@ -254,6 +258,12 @@ function ConfirmSheet({ del, toU, busy, onClose, onSubmit }: { del: any; toU: (l
             </div>
           );
         })}
+        {shortLines.length > 0 && (
+          <label className="backorder-check" data-testid="backorder-check">
+            <input type="checkbox" checked={backorder} onChange={(e) => setBackorder(e.target.checked)} />
+            <span><b>Tạo đơn bổ sung cho phần thiếu</b><span className="small muted" style={{ display: "block" }}>{shortLines.map((l: any) => `${l.productName} thiếu ${q3(round3(l.qty - st[l.orderLineId].del - st[l.orderLineId].rej))} ${unitLabel(l.unit)}`).join("; ")}. Đơn bổ sung chờ xác nhận như đơn thường; hàng từ chối không tính.</span></span>
+          </label>
+        )}
       </div>
     </Sheet>
   );
