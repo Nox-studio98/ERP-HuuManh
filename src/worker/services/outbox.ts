@@ -8,7 +8,7 @@ import type { Env } from "../env";
  * Không bao giờ gọi API ngoài trong request của nhân viên quầy.
  */
 export type JobType = "einvoice.issue" | "einvoice.adjust" | "einvoice.cancel" | "debt.remind" | "fresco.ack"
-  | "notify.order_status" | "notify.staff_new_order" | "notify.email" | "notify.managers";
+  | "notify.order_status" | "notify.staff_new_order" | "notify.email" | "notify.managers" | "notify.approval";
 
 export function enqueueJobStmt(db: D1Database, type: JobType, refType: string, refId: number, payload: unknown = {}) {
   return db

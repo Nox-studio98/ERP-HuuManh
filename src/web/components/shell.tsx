@@ -48,10 +48,10 @@ export function ShiftIndicator({ path }: { path: string }) {
 }
 
 /* ---------------- Chuông thông báo ---------------- */
-type Notif = { id: number; kind: string; title: string; body?: string; refType?: string; refId?: number | string; createdAt: string; readAt?: string | null };
+type Notif = { id: number; kind: string; title: string; body?: string; url?: string | null; refType?: string; refId?: number | string; createdAt: string; readAt?: string | null };
 export function NotificationBell({ path }: { path: string }) {
   const can = useCan();
-  const on = can("inventory.view");
+  const on = can("inventory.view") || can("hr.self"); // mọi vai trò đều nhận được thông báo gửi riêng (duyệt/từ chối)
   const [list, setList] = useState<Notif[]>([]);
   const [unread, setUnread] = useState(0);
   const pop = usePopover();
@@ -63,7 +63,8 @@ export function NotificationBell({ path }: { path: string }) {
   const go = async (n: Notif) => {
     pop.setOpen(false);
     if (!n.readAt) { post(`/notifications/${n.id}/read`, {}, { silent: true }).then(load).catch(() => {}); }
-    if (n.refType === "order" && n.refId) navigate(`/orders?open=${n.refId}`);
+    if (n.url && n.url.startsWith("/") && !n.url.startsWith("//")) navigate(n.url);
+    else if (n.refType === "order" && n.refId) navigate(`/orders?open=${n.refId}`);
     else if (n.refType === "lot" || n.kind.startsWith("stock") || n.kind.includes("expir")) navigate("/inventory");
   };
   const readAll = async () => { await Promise.all(list.filter((n) => !n.readAt).map((n) => post(`/notifications/${n.id}/read`, {}, { silent: true }).catch(() => {}))); load(); };

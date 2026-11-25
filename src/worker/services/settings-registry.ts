@@ -122,6 +122,9 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "timezone", group: "Hệ thống", label: "Múi giờ", help: "Cố định theo giờ Việt Nam.", type: "enum", options: o(["Asia/Ho_Chi_Minh", "Giờ Việt Nam (UTC+7)"]) },
   { key: "backup.retention_days", group: "Hệ thống", label: "Số ngày giữ bản sao lưu", help: "Bản sao lưu R2 cũ hơn số ngày này sẽ bị xoá.", type: "int", unit: "ngày", min: 1, max: 3650 },
   { key: "notify.email_provider", group: "Hệ thống", label: "Nhà cung cấp email thông báo", help: "fake = chỉ ghi nhật ký; cloudflare = gửi thật.", type: "enum", options: o(["fake", "Chạy thử (fake)"], ["cloudflare", "Cloudflare Email"]) },
+  { key: "notify.approval.enabled", group: "Hệ thống", label: "Thông báo yêu cầu chờ duyệt", help: "Bật: người có quyền duyệt nhận thông báo (chuông + đẩy) khi có yêu cầu, người yêu cầu được báo lại khi được duyệt hoặc từ chối.", type: "bool" },
+  { key: "notify.approval.push", group: "Hệ thống", label: "Gửi thêm thông báo đẩy khi có yêu cầu duyệt", help: "Chỉ gửi cho người đã bật thông báo đẩy trên thiết bị. Tắt: chỉ hiện ở chuông trong ứng dụng.", type: "bool" },
+  { key: "notify.approval.groups", group: "Hệ thống", label: "Nhóm yêu cầu có thông báo", help: "Chọn nhóm cần thông báo: chi tiền/công nợ, bán hàng/giá, kho, nhân sự, khác.", type: "multi", options: o(["finance", "Chi tiền, công nợ"], ["sales", "Giảm giá, dưới giá vốn, hạn mức nợ, báo giá, giá"], ["stock", "Kiểm kê, trả hàng NCC"], ["hr", "Nghỉ phép, đổi ca, tăng ca, bổ sung công, chấm offline"], ["other", "Khác"]) },
 ];
 
 export const DEF_BY_KEY = new Map(SETTING_DEFS.map((d) => [d.key, d]));

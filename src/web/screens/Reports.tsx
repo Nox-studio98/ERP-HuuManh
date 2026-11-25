@@ -35,6 +35,7 @@ function Pnl() {
         <ExportButton filename={`lai-lo-${from}_${to}`} rows={rows} columns={[{ label: by === "day" ? "Ngày" : by === "channel" ? "Kênh" : "Nhóm", value: (x) => lab(x.label) }, { label: "Doanh thu", value: (x) => x.revenue }, { label: "Giá vốn", value: (x) => x.cogs }, { label: "Lãi gộp", value: (x) => x.gross }]} />
         <a className="btn ghost sm" href={downloadHref(`/reports/export/orders.csv?from=${from}&to=${to}`)} download="orders.csv">Xuất CSV đơn hàng</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/export/pnl.csv?from=${from}&to=${to}&groupBy=${by}`)} download="pnl.csv">Xuất CSV lãi lỗ</a>
+        <a className="btn ghost sm" href={downloadHref(`/reports/pnl.pdf?from=${from}&to=${to}&groupBy=${by}`)} download data-testid="pnl-pdf">Tải PDF lãi lỗ</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/export/daily.csv?day=${to}`)} download="daily.csv">Xuất CSV theo ngày ({to})</a></>} />
       <FilterBar>
         <DateRangeFilter value={range} onChange={setRange} />

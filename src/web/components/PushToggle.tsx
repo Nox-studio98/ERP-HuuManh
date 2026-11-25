@@ -26,7 +26,7 @@ export function PushToggle() {
         if ((await Notification.requestPermission()) !== "granted") { toast("Trình duyệt đã chặn thông báo", "error"); return; }
         const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) }));
         await post("/me/push-subscriptions", { endpoint: sub.endpoint, keys: { p256dh: bufToB64u(sub.getKey("p256dh")), auth: bufToB64u(sub.getKey("auth")) } });
-        setOn(true); toast("Đã bật thông báo đơn mới", "ok");
+        setOn(true); toast("Đã bật thông báo đẩy", "ok");
       } else {
         const sub = await reg.pushManager.getSubscription();
         if (sub) { await del("/me/push-subscriptions", { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
@@ -37,7 +37,7 @@ export function PushToggle() {
   return (
     <label className="row" style={{ minHeight: 44, gap: 8 }}>
       <input type="checkbox" style={{ width: 22, height: 22 }} checked={on} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
-      <span>Thông báo đơn online mới</span>
+      <span>Thông báo đẩy (đơn mới, yêu cầu duyệt)</span>
     </label>
   );
 }

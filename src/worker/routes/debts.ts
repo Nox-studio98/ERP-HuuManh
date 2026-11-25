@@ -4,7 +4,8 @@ import { z } from "zod";
 import type { AppBindings } from "../env";
 import { can, requirePerm } from "../lib/rbac";
 import { AppError, conflict, notFound } from "../lib/errors";
-import { auditStmt } from "../lib/audit";
+import { audit, auditStmt } from "../lib/audit";
+import { renderAgingPdf } from "../services/report-pdf";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDate } from "../lib/time";
 import { addDays, BILL_OUTSTANDING_SQL, customerCreditSql, customerInvoiceCredit, INVOICE_OUTSTANDING_SQL } from "../services/debt";
@@ -153,7 +154,7 @@ async function summarize(c: Ctx, side: "receivable" | "payable") {
 debtRoutes.get("/debts/receivables", requirePerm("debt.view"), async (c) => c.json(await summarize(c, "receivable")));
 debtRoutes.get("/debts/payables", requirePerm("debt.view"), async (c) => c.json(await summarize(c, "payable")));
 
-debtRoutes.get("/debts/aging", requirePerm("debt.view"), async (c) => {
+async function buildAging(c: Ctx) {
   const side = c.req.query("side") === "payable" ? "payable" : "receivable";
   const asOf = c.req.query("asOf") && /^\d{4}-\d{2}-\d{2}$/.test(c.req.query("asOf")!) ? c.req.query("asOf")! : vnDate();
   const db = c.env.DB;
@@ -171,7 +172,15 @@ debtRoutes.get("/debts/aging", requirePerm("debt.view"), async (c) => {
       totals[bucket] += d.os;
       return { docType: side === "receivable" ? "invoice" : "bill", docId: d.id, docCode: d.code, partnerId: d.pid, partnerName: names.get(d.pid) ?? "", issueDate: d.issue_date, dueDate: d.due_date, total: d.total, outstanding: d.os, overdueDays, bucket };
     });
-  return c.json({ side, asOf, items, nextCursor: null, totals, bounds });
+  return { side, asOf, items, nextCursor: null, totals, bounds };
+}
+debtRoutes.get("/debts/aging", requirePerm("debt.view"), async (c) => c.json(await buildAging(c)));
+// C-28: PDF tuổi nợ — cùng quyền debt.view và cùng số liệu với màn xem
+debtRoutes.get("/debts/aging.pdf", requirePerm("debt.view"), async (c) => {
+  const a = await buildAging(c);
+  const bytes = await renderAgingPdf(c.env, a);
+  await audit(c, { action: "export.aging.pdf", entity: "export", entityId: "aging", after: { side: a.side, asOf: a.asOf } });
+  return new Response(bytes as BodyInit, { status: 200, headers: { "content-type": "application/pdf", "content-disposition": `attachment; filename="tuoi-no-${a.side === "payable" ? "phai-tra" : "phai-thu"}_${a.asOf}.pdf"`, "cache-control": "no-store" } });
 });
 
 // ---------------------------------------------------------------- hoá đơn mua (phải trả)

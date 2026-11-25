@@ -1,9 +1,9 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import type { AppBindings, Role } from "../env";
 import { can, requirePerm, type Permission } from "../lib/rbac";
 import { auditStmt } from "../lib/audit";
-import { AppError, conflict, notFound } from "../lib/errors";
+import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { nextCode, PREFIX } from "../lib/codes";
 import { toMilli } from "../lib/money";
 import { addDays } from "../services/debt";
@@ -695,22 +695,32 @@ inventoryRoutes.post("/lots/:id/release-quarantine", requirePerm("inventory.appr
 });
 
 // ---------------------------------------------------------------- thông báo trong ứng dụng
-inventoryRoutes.get("/notifications", requirePerm("inventory.view"), async (c) => {
-  const role = c.get("user").role;
+/** Thông báo: mọi vai trò đăng nhập đều có hr.self hoặc inventory.view; từng thông báo còn lọc theo người nhận / quyền. */
+const requireNotifyAccess: MiddlewareHandler<AppBindings> = async (c, next) => {
+  const role = c.get("user")?.role;
+  if (!role || !(can(role, "inventory.view") || can(role, "hr.self"))) throw forbidden();
+  await next();
+};
+const visibleTo = (n: { target_user_id: number | null; audience_perm: string }, user: { id: number; role: Role }) =>
+  n.target_user_id != null ? n.target_user_id === user.id : can(user.role, n.audience_perm as Permission);
+
+inventoryRoutes.get("/notifications", requireNotifyAccess, async (c) => {
+  const user = c.get("user");
   const unread = c.req.query("unread") === "1";
   const { results } = await c.env.DB
-    .prepare(`SELECT id, kind, title, body, audience_perm, ref_type, ref_id, created_at, read_at FROM notifications ${unread ? "WHERE read_at IS NULL" : ""} ORDER BY id DESC LIMIT 100`)
+    .prepare(`SELECT id, kind, title, body, audience_perm, target_user_id, url, ref_type, ref_id, created_at, read_at FROM notifications WHERE (target_user_id IS NULL OR target_user_id = ?) ${unread ? "AND read_at IS NULL" : ""} ORDER BY id DESC LIMIT 100`)
+    .bind(user.id)
     .all<any>();
   const items = results
-    .filter((n) => can(role, n.audience_perm as Permission))
-    .map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, refType: n.ref_type, refId: n.ref_id, createdAt: n.created_at, readAt: n.read_at }));
+    .filter((n) => visibleTo(n, user))
+    .map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, url: n.url, refType: n.ref_type, refId: n.ref_id, createdAt: n.created_at, readAt: n.read_at }));
   return c.json({ items, unread: items.filter((n) => !n.readAt).length });
 });
 
-inventoryRoutes.post("/notifications/:id/read", requirePerm("inventory.view"), async (c) => {
+inventoryRoutes.post("/notifications/:id/read", requireNotifyAccess, async (c) => {
   const id = Number(c.req.param("id"));
-  const n = await c.env.DB.prepare(`SELECT audience_perm FROM notifications WHERE id = ?`).bind(id).first<{ audience_perm: string }>();
-  if (!n || !can(c.get("user").role, n.audience_perm as Permission)) throw notFound("not_found", "Không tìm thấy thông báo");
+  const n = await c.env.DB.prepare(`SELECT audience_perm, target_user_id FROM notifications WHERE id = ?`).bind(id).first<{ audience_perm: string; target_user_id: number | null }>();
+  if (!n || !visibleTo(n, c.get("user"))) throw notFound("not_found", "Không tìm thấy thông báo");
   await c.env.DB.prepare(`UPDATE notifications SET read_at = COALESCE(read_at, ?), read_by = COALESCE(read_by, ?) WHERE id = ?`).bind(new Date().toISOString(), c.get("user").id, id).run();
   return c.json({ ok: true });
 });
