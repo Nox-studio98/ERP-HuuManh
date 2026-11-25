@@ -27,6 +27,9 @@ export const q3 = (n: number | null | undefined) => (n == null ? "—" : new Int
 /** số lượng theo đơn vị của dòng (không phải milli) */
 export const qtyU = (n: number | null | undefined, unit: string) => (n == null ? "—" : `${q3(n)} ${unitLabel(unit)}`);
 export const round3 = (n: number) => Math.round(n * 1000) / 1000;
+/** Nhãn "Chờ hàng X" (đơn đang chờ hàng về theo PO): shortLines = [{ productName, qtyMilli, baseUnit }] */
+export const waitLabel = (lines?: { qtyMilli: number; baseUnit: string }[] | null) =>
+  !lines?.length ? "Chờ hàng" : lines.length === 1 ? `Chờ hàng ${q3(lines[0].qtyMilli / 1000)} ${unitLabel(lines[0].baseUnit)}` : `Chờ hàng · ${lines.length} mặt hàng`;
 
 export function Back({ to, label }: { to: string; label: string }) {
   return <a href={to} className="btn ghost sm" style={{ alignSelf: "flex-start" }} onClick={(e) => onLink(e, to)}>← {label}</a>;

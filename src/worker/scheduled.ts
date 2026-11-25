@@ -10,6 +10,7 @@ import { runRetention } from "./services/retention";
 import { cleanupGuardsStmt } from "./services/guard";
 import { sweepStaleDrafts } from "./services/online-ops";
 import { reconcileSepay } from "./services/sepay-reconcile";
+import { runPoCutoffIfDue } from "./services/po";
 import { cancelStaleCodOrders } from "../shop/worker/lib/cod-expiry";
 
 /** Chạy một bước cron độc lập: lỗi một bước không chặn bước khác. */
@@ -43,6 +44,7 @@ export async function runScheduled(event: ScheduledController, env: Env) {
   }
   if (event.cron === "*/5 * * * *") {
     await sweepJobs(env);
+    await step("po_cutoff", () => runPoCutoffIfDue(env.DB)); // PO tự động: sau giờ chốt (po.cutoff_time) gom phần thiếu thành PO nháp; idempotent theo ngày chốt
     try {
       await cancelExpiredAwaitingPayment(env); // EC-05: huỷ đơn online chờ chuyển khoản quá hạn
     } catch (e) {

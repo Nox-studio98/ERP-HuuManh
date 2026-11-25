@@ -9,6 +9,7 @@ import { useCan } from "../store";
 import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, rangeOf, usePagedList, type DateRange } from "../components/list";
 import { navigate } from "../router";
 import type { Product } from "./Pos";
+import ReceivePoSheet from "./d4/ReceivePo";
 
 const REASONS = [["dap", "Dập"], ["heo", "Héo"], ["het_han", "Hết hạn"], ["hao_can", "Hao cân"], ["khac", "Khác"]];
 const docTone = (s: string) => (s === "posted" ? "ok" : s === "pending_approval" ? "warn" : s === "cancelled" ? "danger" : "info") as any;
@@ -20,12 +21,14 @@ export default function Inventory() {
   const [tab, setTab] = useState<"alerts" | "docs" | "trace">("alerts");
   const [editor, setEditor] = useState<{ type?: string; id?: number } | null>(null);
   const [rev, setRev] = useState(0);
+  const [recvPo, setRecvPo] = useState(false);
   return (
     <div className="stack">
       <PageHeader compact subtitle="Tồn kho, chứng từ nhập – xuất – kiểm kê và truy vết lô"
         actions={can("inventory.write") && (
           <>
             <Button onClick={() => setEditor({ type: "receipt" })}>+ Nhập hàng</Button>
+            {can("purchasing.write") && <Button variant="soft" onClick={() => setRecvPo(true)}>Nhận hàng theo PO</Button>}
             <Button variant="soft" onClick={() => setEditor({ type: "waste" })}>Huỷ hàng</Button>
             <Button variant="soft" onClick={() => setEditor({ type: "count" })}>Kiểm kê</Button>
             <Button variant="soft" onClick={() => setEditor({ type: "transfer" })}>Chuyển kho</Button>
@@ -35,6 +38,7 @@ export default function Inventory() {
       {tab === "alerts" && <Alerts key={rev} onGoDocs={() => setTab("docs")} />}
       {tab === "docs" && <Docs key={rev} onOpen={(id) => setEditor({ id })} onCreate={() => setEditor({ type: "receipt" })} />}
       {tab === "trace" && <Trace />}
+      {recvPo && <ReceivePoSheet onClose={() => { setRecvPo(false); setRev((r) => r + 1); }} />}
       {editor && <DocEditor {...editor} onClose={() => { setEditor(null); setRev((r) => r + 1); }} />}
     </div>
   );

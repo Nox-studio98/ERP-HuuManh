@@ -48,6 +48,7 @@ const HrQrDisplay = lazy(() => import("./screens/hr/QrDisplay"));
 const HrStores = lazy(() => import("./screens/hr/Stores"));
 const Competitors = lazy(() => import("./screens/d4/Competitors"));
 const Purchasing = lazy(() => import("./screens/d4/Purchasing"));
+const PurchaseOrders = lazy(() => import("./screens/d4/PurchaseOrders"));
 const Promotions = lazy(() => import("./screens/d4/Promotions"));
 const Bundles = lazy(() => import("./screens/d4/Bundles"));
 const FinReports = lazy(() => import("./screens/d4/FinReports"));
@@ -86,6 +87,7 @@ const NAV: Nav[] = [
   { path: "/promotions", label: "Khuyến mãi", group: G.retail, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM8 8h.01M15 9l-6 6"), el: <Promotions /> },
   { path: "/bundles", label: "Giỏ quà & đặt trước", group: G.retail, perms: ["pos.sell"], icon: I("M4 10h16v10H4zM2 7h20v3H2zM12 7v13M12 7c-2-4-6-3-6-1s3 1 6 1c3 0 6 1 6-1s-4-3-6 1"), el: <Bundles /> },
   { path: "/purchasing", label: "Gợi ý đặt hàng", group: G.stock, perms: ["purchasing.view"], icon: I("M3 5h18M6 5v14h12V5M9 9h6M9 13h6"), el: <Purchasing /> },
+  { path: "/purchase-orders", label: "Đơn đặt NCC", group: G.stock, perms: ["purchasing.view"], icon: I("M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h4"), el: <PurchaseOrders /> },
   { path: "/competitors", label: "Giá đối thủ", group: G.stock, perms: ["competitors.view"], icon: I("M4 19h16M7 16V9M12 16V5M17 16v-4"), el: <Competitors /> },
   { path: "/fin-reports", label: "Báo cáo tài chính", group: G.fin, perms: ["reports.view"], icon: I("M4 4h16v16H4zM8 15v-3M12 15V9M16 15v-5"), el: <FinReports /> },
   { path: "/me", label: "Chấm công", group: G.hr, pri: 2, perms: ["hr.self"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrMe /> },

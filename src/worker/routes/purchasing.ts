@@ -7,6 +7,7 @@ import { nextCode, PREFIX } from "../lib/codes";
 import { AppError, notFound } from "../lib/errors";
 import { guarded, parseBody, unitFactor } from "../services/http";
 import { getSettingInt } from "../services/settings";
+import { roundOrderQty } from "../services/po";
 
 export const purchasingRoutes = new Hono<AppBindings>();
 
@@ -66,9 +67,8 @@ purchasingRoutes.get("/purchasing/suggestions", requirePerm("purchasing.view"), 
     const totalSold = Math.max(0, sold!.q);
     const avgDaily = Math.round(totalSold / lookback);
     const f = l.order_unit ? await unitFactor(db, l.product_id, l.order_unit).catch(() => 1000) : 1000;
-    let need = Math.max(0, Math.ceil((totalSold * (l.lead_time_days + cover)) / lookback - available));
-    if (need > 0 && l.min_order_milli > need) need = l.min_order_milli;
-    const suggested = need > 0 ? Math.ceil(need / f) * f : 0;
+    const need = Math.max(0, Math.ceil((totalSold * (l.lead_time_days + cover)) / lookback - available));
+    const suggested = roundOrderQty(need, f, l.min_order_milli); // dùng chung với job chốt đêm tạo PO (services/po.ts)
     if (onlyNeeded && suggested === 0) continue;
     items.push({
       productId: l.product_id, name: l.name, baseUnit: l.base_unit,

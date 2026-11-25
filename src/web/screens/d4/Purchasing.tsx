@@ -50,6 +50,16 @@ export default function Purchasing() {
     } catch (e) { if (e instanceof ApiError) toast(e.code === "missing_cost" ? "Có mặt hàng chưa có giá nhập — hãy nhập thủ công ở màn Kho." : e.message, "error"); } finally { setBusy(""); }
   };
 
+  const createPo = async (supplierId: number, rows: Sug[]) => {
+    const lines = rows.filter((r) => sel.has(r.productId) && qtyOf(r) > 0);
+    if (!lines.length) return toast("Chọn ít nhất một dòng có số lượng > 0", "error");
+    setBusy("po" + supplierId);
+    try {
+      const r = await post("/purchase-orders", { supplierId, lines: lines.map((l) => ({ productId: l.productId, qty: qtyOf(l), unit: l.orderUnit, ...(l.lastCost ? { unitCost: l.lastCost } : {}) })) }, { silent: true });
+      toast(`Đã tạo ${r.code} (nháp)`, "ok");
+      navigate(`/purchase-orders?open=${r.id}`);
+    } catch (e) { if (e instanceof ApiError) toast(e.message, "error"); } finally { setBusy(""); }
+  };
   const needCount = (sug.data ?? []).filter((r) => r.suggestedMilli > 0).length;
   const low = (sug.data ?? []).filter((r) => r.daysCover != null && r.daysCover < r.leadTimeDays).length;
   return (
@@ -93,7 +103,8 @@ export default function Purchasing() {
             <div className="row between" style={{ marginTop: 12 }}>
               <span className="small muted">{chosen.length ? `Đã chọn ${chosen.length} dòng` : "Tick các dòng cần đặt"}</span>
               <div className="row"><Button size="sm" variant="ghost" onClick={() => setSel((s) => { const n = new Set(s); g.rows.forEach((r) => (r.suggestedMilli > 0 ? n.add(r.productId) : 0)); return n; })}>Chọn dòng cần đặt</Button>
-                <Button loading={busy === String(id)} disabled={!canReceipt || !chosen.length} onClick={() => create(id, g.rows)}>Tạo phiếu nhập nháp</Button></div>
+                {can("purchasing.write") && <Button loading={busy === "po" + id} disabled={!chosen.length} onClick={() => createPo(id, g.rows)}>Tạo PO</Button>}
+                <Button variant="soft" loading={busy === String(id)} disabled={!canReceipt || !chosen.length} onClick={() => create(id, g.rows)}>Tạo phiếu nhập nháp</Button></div>
             </div>
           </Card>);
       })}

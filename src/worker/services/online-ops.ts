@@ -19,6 +19,7 @@ import { unitFactor } from "./http";
 import { repriceAfterPack } from "./pack-reprice";
 import { slotCapacityGuard, slotRuleProblem, slotUsed } from "./slots";
 import { earnFor, pointsStmts, reversalStatements } from "./loyalty-points";
+import { allowShortConfirm, closeOrderShortagesStmt, planPartialReservations, shortageUpsertStmts, type ShortLine } from "./shortages";
 
 type Ctx = Context<AppBindings>;
 
@@ -42,28 +43,59 @@ async function finish(c: Ctx, id: number) {
 export async function confirmOrder(c: Ctx, id: number) {
   const db = c.env.DB;
   const o = await loadOpsOrder(db, id);
-  const stmts: D1PreparedStatement[] = [];
-  const t = transitionStmts(db, id, o.status, "confirmed", staff(c), { note: "Đơn đã được xác nhận" });
   const pre = (await db.prepare(`SELECT id, product_id, preorder_milli FROM order_lines WHERE order_id=? AND preorder_milli > 0`).bind(id).all<any>()).results;
-  if (pre.length) {
-    // M8-08: đặt trước chỉ xác nhận khi đủ hàng cho phần chờ → giữ tồn phần đó
-    let plans;
+  // PO tự động (docs/PO-NCC.md 4.1): chỉ đơn ĐẶT TRƯỚC giao NGÀY SAU được chờ hàng (giữ phần có tồn, ghi phần thiếu); đơn giao trong ngày vẫn chặn như cũ
+  const canWait = pre.length > 0 && !!o.slot_date && o.slot_date > vnDate() && (await allowShortConfirm(db));
+  for (let attempt = 0; ; attempt++) {
+    const stmts: D1PreparedStatement[] = [];
+    const t = transitionStmts(db, id, o.status, "confirmed", staff(c), { note: "Đơn đã được xác nhận" });
+    let short: ShortLine[] = [];
+    if (pre.length) {
+      // M8-08: đặt trước chỉ xác nhận khi đủ hàng cho phần chờ → giữ tồn phần đó (thiếu: chờ hàng về nếu được phép)
+      let plans;
+      const lines = pre.map((l) => ({ orderLineId: l.id, productId: l.product_id, qtyMilli: l.preorder_milli }));
+      if (canWait) ({ plans, short } = await planPartialReservations(db, lines, o.store_id));
+      else {
+        try {
+          plans = await planReservations(db, lines, o.store_id);
+        } catch (e) {
+          if (e instanceof AppError && e.code === "insufficient_stock") throw conflict("preorder_not_ready", "Hàng đặt trước chưa về đủ, chưa thể xác nhận", e.details);
+          throw e;
+        }
+      }
+      stmts.push(
+        t[0], ...reserveStmts(db, id, plans), ...shortageUpsertStmts(db, id, o.slot_date ?? null, short),
+        db.prepare(`UPDATE order_lines SET preorder_milli = 0 WHERE order_id = ? AND preorder_milli > 0`).bind(id), ...t.slice(1),
+      );
+    } else stmts.push(...t);
+    stmts.push(
+      notifyJob(db, id, { status: "confirmed" }),
+      auditStmt(c, {
+        action: "online_order.confirm", entity: "order", entityId: id, before: { status: o.status },
+        after: { status: "confirmed", preorderFulfilled: pre.length > 0, ...(short.length ? { shortages: short.map((x) => ({ productId: x.productId, missingMilli: x.missingMilli })) } : {}) },
+      }),
+    );
     try {
-      plans = await planReservations(db, pre.map((l) => ({ orderLineId: l.id, productId: l.product_id, qtyMilli: l.preorder_milli })), o.store_id);
+      await runOrderBatch(db, id, o.status, stmts);
+      break;
     } catch (e) {
-      if (e instanceof AppError && e.code === "insufficient_stock") throw conflict("preorder_not_ready", "Hàng đặt trước chưa về đủ, chưa thể xác nhận", e.details);
+      if (canWait && attempt === 0 && e instanceof AppError && e.code === "insufficient_stock") continue; // tồn vừa đổi: tính lại một lần (EC-02)
       throw e;
     }
-    stmts.push(t[0], ...reserveStmts(db, id, plans), db.prepare(`UPDATE order_lines SET preorder_milli = 0 WHERE order_id = ? AND preorder_milli > 0`).bind(id), ...t.slice(1));
-  } else stmts.push(...t);
-  stmts.push(notifyJob(db, id, { status: "confirmed" }), auditStmt(c, { action: "online_order.confirm", entity: "order", entityId: id, before: { status: o.status }, after: { status: "confirmed", preorderFulfilled: pre.length > 0 } }));
-  await runOrderBatch(db, id, o.status, stmts);
+  }
   await finish(c, id);
+}
+
+/** PO: đơn còn phần chờ hàng về thì chưa soạn / giao được (không hứa giao hàng chưa có). */
+export async function assertNotAwaitingStock(db: D1Database, orderId: number) {
+  const r = await db.prepare(`SELECT COALESCE(SUM(qty_milli),0) AS q FROM so_shortages WHERE order_id = ? AND status = 'open'`).bind(orderId).first<{ q: number }>();
+  if ((r?.q ?? 0) > 0) throw conflict("awaiting_stock", "Đơn còn phần chờ hàng về (chưa đủ hàng), chưa thể soạn / giao", { awaitingMilli: r!.q });
 }
 
 export async function prepareOrder(c: Ctx, id: number) {
   const db = c.env.DB;
   const o = await loadOpsOrder(db, id);
+  await assertNotAwaitingStock(db, id);
   await runOrderBatch(db, id, o.status, [
     ...transitionStmts(db, id, o.status, "preparing", staff(c), { note: "Đang chuẩn bị hàng" }),
     notifyJob(db, id, { status: "preparing" }),
@@ -186,6 +218,7 @@ export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; t
   const user = c.get("user");
   const o = await loadOpsOrder(db, id);
   if (o.status !== "preparing") throw conflict("invalid_transition", "Chỉ giao khi đơn đang chuẩn bị", { from: o.status });
+  await assertNotAwaitingStock(db, id);
   if ((o.payment_method === "transfer" || o.payment_method === "gateway") && o.payment_status !== "paid") {
     throw conflict("payment_required", "Đơn chuyển khoản/cổng thanh toán chưa nhận được tiền, chưa thể giao", { paymentStatus: o.payment_status });
   }
@@ -655,6 +688,7 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
   const stmts = [
     t[0],
     ...release,
+    closeOrderShortagesStmt(db, id),
     ...restock,
     db.prepare(`UPDATE payment_intents SET status='cancelled' WHERE order_id=? AND status='pending'`).bind(id),
     ...t.slice(1),

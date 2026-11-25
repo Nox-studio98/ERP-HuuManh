@@ -38,6 +38,7 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "approval.writeoff_vnd", group: "Ngưỡng duyệt", label: "Xoá nợ / chiết khấu công nợ cần chủ duyệt khi vượt", help: "Đặt 0 = luôn phải duyệt.", type: "vnd", min: 0, max: 10_000_000_000 },
   { key: "approval.pos_return_vnd", group: "Ngưỡng duyệt", label: "Trả hàng tại quầy cần quản lý duyệt khi vượt", help: "Thu ngân chỉ tự trả hàng cho đơn của ca đang mở, giá trị không vượt mức này và hàng nhập lại kho; ngoài ra cần quản lý duyệt.", type: "vnd", min: 0, max: 10_000_000_000 },
   { key: "approval.quote_discount_bp", group: "Ngưỡng duyệt", label: "Báo giá thấp hơn bảng giá cần duyệt khi vượt", help: "Báo giá sỉ thấp hơn bảng giá quá % này cần duyệt.", type: "bp", min: 0, max: 10000 },
+  { key: "approval.po_vnd", group: "Ngưỡng duyệt", label: "Đơn đặt NCC cần chủ duyệt khi vượt", help: "Đơn đặt NCC có giá trị lớn hơn mức này phải chờ chủ cửa hàng duyệt (quản lý chỉ duyệt được đơn nhỏ hơn).", type: "vnd", min: 0, max: 10_000_000_000 },
   { key: "approval.purchase_return_vnd", group: "Ngưỡng duyệt", label: "Trả hàng nhà cung cấp cần chủ duyệt khi vượt", help: "Phiếu trả hàng NCC có giá trị lớn hơn mức này cần chủ duyệt (vì giảm công nợ phải trả). Người lập không có quyền duyệt kho thì luôn chờ duyệt. [Cần xác nhận]", type: "vnd", min: 0, max: 10_000_000_000 },
 
   // ===== Bán hàng & giá =====
@@ -49,6 +50,9 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "invoice.vat_rate_bp", group: "Bán hàng & giá", label: "Thuế suất GTGT mặc định", help: "Hộ kinh doanh thường để 0%.", type: "bp", min: 0, max: 3000 },
   { key: "recurring.auto_generate", group: "Bán hàng & giá", label: "Tự sinh đơn sỉ lặp lại", help: "Bật: hệ thống tự tạo đơn sỉ định kỳ cho ngày mai lúc 08:00.", type: "bool" },
   { key: "reorder.lookback_days", group: "Bán hàng & giá", label: "Gợi ý đặt hàng: số ngày tính tốc độ bán", help: "Tốc độ bán được tính trên số ngày gần nhất này.", type: "int", unit: "ngày", min: 1, max: 365 },
+  { key: "po.allow_short_confirm", group: "Bán hàng & giá", label: "Cho xác nhận đơn khi thiếu hàng (chờ hàng về)", help: "Bật: đơn sỉ / đơn online đặt trước giao ngày sau vẫn xác nhận được, giữ phần có tồn và ghi phần thiếu để đặt NCC. Tắt: thiếu hàng thì chặn như cũ.", type: "bool" },
+  { key: "po.cutoff_time", group: "Bán hàng & giá", label: "Giờ chốt đêm gom phần thiếu thành đơn đặt NCC", help: "Giờ Việt Nam, dạng HH:MM. Đơn nhập trước giờ này (kể cả sau nửa đêm) thuộc ngày chốt của buổi tối hôm trước. Có nút \"Chốt ngay\" nếu nhập đơn xong sớm.", type: "text", maxLen: 5 },
+  { key: "po.horizon_days", group: "Bán hàng & giá", label: "Đơn đặt NCC: gom phần thiếu của đơn giao trong N ngày tới", help: "Chỉ phần thiếu của đơn có ngày giao trong số ngày này (tính cả hôm nay) mới vào đơn đặt NCC.", type: "int", unit: "ngày", min: 0, max: 30 },
   { key: "reorder.cover_days", group: "Bán hàng & giá", label: "Gợi ý đặt hàng: số ngày tồn mục tiêu", help: "Số ngày bán đủ hàng mong muốn sau khi hàng về.", type: "int", unit: "ngày", min: 1, max: 90 },
 
   // ===== Công nợ =====
@@ -195,6 +199,7 @@ export function validateSetting(def: SettingDef, raw: unknown): { value: string 
       if (def.key === "payment.bank_bin" && s && !/^\d{6}$/.test(s)) return { error: "Mã BIN gồm đúng 6 chữ số" };
       if (def.key === "payment.bank_account" && s && !/^[0-9A-Za-z]{4,30}$/.test(s)) return { error: "Số tài khoản chỉ gồm chữ số/chữ cái (4–30 ký tự)" };
       if (def.key === "shop.name" && !s) return { error: "Không được để trống" };
+      if (def.key === "po.cutoff_time" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return { error: "Giờ chốt dạng HH:MM, ví dụ 03:00" };
       return { value: s };
     }
     case "pit": {
