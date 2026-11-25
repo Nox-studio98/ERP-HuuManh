@@ -237,16 +237,25 @@ async function savePage(env: Env, src: any, items: ParsedItem[], now: Date, band
     const unit = unitPriceOf(it.price, cp.pack_qty_milli);
     const refs = await referencePrices(db, cp.id, unit != null, 0, now);
     const basis = unit ?? it.price;
-    const med = refs.length >= 3 ? median(refs) : null;
-    const isOutlier = med != null && med > 0 && deviationBp(basis, med) > band;
     const match = await db.prepare(`SELECT m.product_id FROM product_matches m WHERE m.competitor_product_id = ? AND m.status = 'approved' LIMIT 1`).bind(cp.id).first<{ product_id: number }>();
+    let med = refs.length >= 3 ? median(refs) : null;
+    let refLabel = "trung vị";
+    // B-15: quan sát đầu tiên / ít dữ liệu (<3 giá tham chiếu) → so với GIÁ BÁN CỦA TA của mặt hàng đã ghép (cùng đơn vị), cùng ngưỡng lệch
+    if (med == null && match && unit != null) {
+      const p = await db.prepare(`SELECT base_unit FROM products WHERE id = ?`).bind(match.product_id).first<{ base_unit: string }>();
+      if (p && unitsCompatible(p.base_unit, cp.pack_unit)) {
+        const ours = await resolvePrice(db, match.product_id, { channel: "pos" }).then((r) => r.unitPrice, () => null);
+        if (ours != null && ours > 0) { med = ours; refLabel = "giá bán của cửa hàng"; }
+      }
+    }
+    const isOutlier = med != null && med > 0 && deviationBp(basis, med) > band;
     stmts.push(
       db
         .prepare(`INSERT INTO competitor_price_obs(competitor_product_id, observed_at, price, unit_price, in_stock, promo_text, source, status) VALUES (?,?,?,?,?,?, 'crawl', ?)`)
         .bind(cp.id, nowIso, it.price, unit, it.inStock == null ? null : it.inStock ? 1 : 0, it.promoText, isOutlier ? "outlier" : "ok"),
     );
     if (isOutlier) {
-      alerts.push({ kind: "outlier", productId: match?.product_id, competitorProductId: cp.id, sourceId: src.id, message: `Giá "${it.name}" ${it.price}đ lệch ${Math.round(deviationBp(basis, med!) / 100)}% so với trung vị ${med} — chờ duyệt (EC-36)` });
+      alerts.push({ kind: "outlier", productId: match?.product_id, competitorProductId: cp.id, sourceId: src.id, message: `Giá "${it.name}" ${it.price}đ lệch ${Math.round(deviationBp(basis, med!) / 100)}% so với ${refLabel} ${med} — chờ duyệt (EC-36)` });
       stmts.push(db.prepare(`UPDATE competitor_products SET last_in_stock = ? WHERE id = ?`).bind(it.inStock == null ? null : it.inStock ? 1 : 0, cp.id));
       continue;
     }

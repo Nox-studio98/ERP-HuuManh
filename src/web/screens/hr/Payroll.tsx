@@ -73,7 +73,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
   const can = useCan();
   const l = useAsync(() => get("/payroll/periods/" + period, undefined, { silent: true }), [period]);
   const [row, setRow] = useState<any>(null);
-  const [act, setAct] = useState<"approve" | "pay" | "recalc" | null>(null);
+  const [act, setAct] = useState<"approve" | "pay" | "recalc" | "reverse" | null>(null);
   const d = l.data;
   const st = d?.status;
   return (
@@ -84,6 +84,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
           {can("payroll.write") && (st === "calculated" || st === "draft") && <Button size="sm" variant="soft" onClick={() => setAct("recalc")}>Tính lại</Button>}
           {can("payroll.approve") && st === "calculated" && <Button size="sm" onClick={() => setAct("approve")} data-testid="approve">Duyệt bảng lương</Button>}
           {can("payroll.write") && st === "approved" && <Button size="sm" onClick={() => setAct("pay")} data-testid="pay">Chi lương</Button>}
+          {can("payroll.approve") && st === "paid" && <Button size="sm" variant="danger" onClick={() => setAct("reverse")}>Đảo chi lương</Button>}
           {can("payroll.write") && d && <a className="btn ghost sm" href={downloadHref(`/payroll/periods/${period}/export.xlsx`)} download>Xuất Excel</a>}
           {d && <ExportButton filename={`luong-${period}`} rows={d.items} columns={[{ label: "Mã", value: (r: any) => r.code }, { label: "Nhân viên", value: (r: any) => r.name }, { label: "Lương", value: (r: any) => r.basePay }, { label: "Phụ cấp", value: (r: any) => r.allowances }, { label: "Tăng ca", value: (r: any) => r.overtimePay }, { label: "Tổng thu nhập", value: (r: any) => r.gross }, { label: "BH + thuế", value: (r: any) => r.insuranceEmployee + r.pit }, { label: "Tạm ứng", value: (r: any) => r.advances }, { label: "Thực lĩnh", value: (r: any) => r.net }]} />}
         </div>
@@ -119,6 +120,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
       )}
       {act === "recalc" && <Confirm title="Tính lại bảng lương" confirmLabel="Tính lại" onClose={() => setAct(null)} onConfirm={async () => { try { await post(`/payroll/periods/${period}/calculate`, {}); toast("Đã tính lại", "ok"); setAct(null); l.reload(); } catch { setAct(null); } }}>Tính lại sẽ thay thế toàn bộ bảng lương nháp bằng dữ liệu mới nhất (công, thưởng/phạt, tạm ứng).</Confirm>}
       {act === "approve" && <Confirm title="Duyệt bảng lương" confirmLabel="Duyệt & khoá kỳ" onClose={() => setAct(null)} onConfirm={async () => { try { await post(`/payroll/periods/${period}/approve`, {}); toast("Đã duyệt bảng lương", "ok"); setAct(null); l.reload(); } catch { setAct(null); } }}>Sau khi duyệt, bảng lương bị khoá và nhân viên xem được phiếu lương. Tổng thực lĩnh: <b>{money(d?.totals.net)}</b>.</Confirm>}
+      {act === "reverse" && <ReversePay period={period} onClose={() => setAct(null)} onDone={() => { setAct(null); l.reload(); }} />}
       {act === "pay" && <PayForm period={period} total={d?.totals.net ?? 0} onClose={() => setAct(null)} onDone={() => { setAct(null); l.reload(); }} />}
     </div>
   );
@@ -270,5 +272,21 @@ function Cost() {
         ]} />
       </Card>
     </div>
+  );
+}
+
+/** C-23: đảo toàn bộ chi lương của kỳ (chọn nhầm quỹ): lập phiếu thu đảo, kỳ về "đã duyệt" để chi lại. */
+function ReversePay({ period, onClose, onDone }: { period: string; onClose: () => void; onDone: () => void }) {
+  const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  return (
+    <Sheet open onClose={onClose} title={`Đảo chi lương ${periodLabel(period)}`} footer={<Button block variant="danger" loading={busy} disabled={reason.trim().length < 5} onClick={async () => {
+      setBusy(true);
+      try { await post(`/payroll/periods/${period}/reverse-pay`, { reason: reason.trim() }); toast("Đã đảo chi lương, có thể chi lại", "ok"); onDone(); } catch {} finally { setBusy(false); }
+    }}>Đảo chi lương</Button>}>
+      <div className="stack">
+        <Banner>Hệ thống lập phiếu thu đảo cho từng phiếu chi lương (ghi ở kỳ hiện tại), đưa bảng lương về &quot;đã duyệt&quot; và hoàn lại các khoản tạm ứng đã khấu trừ. Sau đó chi lại với quỹ đúng.</Banner>
+        <Input label="Lý do đảo (ít nhất 5 ký tự)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="vd: chọn nhầm quỹ ngân hàng" />
+      </div>
+    </Sheet>
   );
 }

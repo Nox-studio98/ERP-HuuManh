@@ -1,3 +1,4 @@
+import { valueSql } from "../lib/sqlmoney";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppBindings } from "../env";
@@ -167,7 +168,7 @@ const builders: Record<string, Builder> = {
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS asm,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adj,
            COALESCE(SUM(m.qty_delta_milli),0) AS closing,
-           COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS value
+           COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS value
            FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
           WHERE p.merged_into IS NULL GROUP BY p.id ORDER BY p.name`,
       )

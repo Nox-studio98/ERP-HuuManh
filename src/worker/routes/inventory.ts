@@ -74,7 +74,7 @@ async function requireDraft(db: D1Database, id: number) {
   return d;
 }
 
-async function loadLot(db: D1Database, id: number) {
+export async function loadLot(db: D1Database, id: number) {
   const lot = await db.prepare(`SELECT * FROM lots WHERE id = ?`).bind(id).first<any>();
   if (!lot) throw new AppError(422, "unknown_lot", "Không tìm thấy lô hàng");
   return lot;
@@ -320,13 +320,15 @@ interface Plan {
   variances: { lineId: number; productId: number; docQtyMilli: number; qtyMilli: number }[];
   /** Cảnh báo không chặn (vd. kiểm kê: lô có biến động giữa lúc đếm và lúc ghi sổ). */
   warnings: { code: string; lotId: number; lotCode: string; snapshotMilli: number; currentMilli: number; deltaMilli: number }[];
+  /** B-18: phiếu nhập — giá trị lô (đơn giá/đv chính làm tròn × SL) trừ tổng hoá đơn mua; ≠ 0 khi quy đổi thùng→kg làm tròn. Ghi vào nhật ký để đối chiếu. */
+  roundingDiff: number;
 }
 
 /**
  * B-03: bảo đảm lô còn đủ `out` khả dụng (tồn − đã giữ). Nếu chỉ thiếu vì phần giữ cho đơn → chuyển phần giữ sang lô khác (FEFO);
  * không chuyển được → 409 kèm reservedQty và gợi ý cách ly lô.
  */
-async function ensureAvailable(db: D1Database, lotId: number, out: number) {
+export async function ensureAvailable(db: D1Database, lotId: number, out: number) {
   let lot = await loadLot(db, lotId);
   const detail = (l: any) => ({ lotId, requestedMilli: out, availableMilli: l.qty_on_hand_milli - l.qty_reserved_milli, onHandMilli: l.qty_on_hand_milli, reservedQty: l.qty_reserved_milli });
   if (out > lot.qty_on_hand_milli) throw conflict("insufficient_stock", "Không đủ tồn khả dụng của lô", detail(lot));
@@ -352,6 +354,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
   let approvalReason: string | null = null;
   const variances: Plan["variances"] = [];
   const warnings: Plan["warnings"] = [];
+  let lotValue = 0;
   const creator = await db.prepare(`SELECT role FROM users WHERE id = ?`).bind(doc.created_by).first<{ role: Role }>();
   const creatorCanApprove = !!creator && can(creator.role, "inventory.approve");
   const val = (cost: number, qty: number) => Math.round((cost * Math.abs(qty)) / 1000);
@@ -366,6 +369,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
       const prod = await db.prepare(`SELECT shelf_life_days FROM products WHERE id = ?`).bind(l.product_id).first<any>();
       const expires = l.expires_at ?? (prod?.shelf_life_days ? new Date(Date.now() + prod.shelf_life_days * 86400_000).toISOString() : null);
       const tmp = `TMP-${crypto.randomUUID()}`;
+      lotValue += val(l.unit_cost, l.qty_milli);
       total += l.amount ?? val(l.unit_cost, l.qty_milli); // thành tiền theo đơn giá chứng từ, làm tròn một lần (audit #13)
       if (l.doc_qty_milli != null && l.doc_qty_milli !== l.qty_milli) variances.push({ lineId: l.id, productId: l.product_id, docQtyMilli: l.doc_qty_milli, qtyMilli: l.qty_milli });
       stmts.push(
@@ -482,7 +486,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
   }
   void u;
   void approvedBy;
-  return { stmts, total, approvalReason, variances, warnings };
+  return { stmts, total, approvalReason, variances, warnings, roundingDiff: type === "receipt" ? lotValue - total : 0 };
 }
 
 function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
@@ -496,7 +500,7 @@ function postedStmts(c: Ctx, doc: any, plan: Plan, approvedBy: number | null) {
       .prepare(`UPDATE stock_docs SET status='posted', posted_at=?, total_amount=?, approved_by=?, version=version+1 WHERE id=? AND status IN ('draft','pending_approval')`)
       .bind(new Date().toISOString(), plan.total, approvedBy, doc.id),
     ...plan.stmts,
-    auditStmt(c, { action: `stock_doc.post.${doc.type}`, entity: "stock_doc", entityId: doc.id, before: { status: doc.status }, after: { status: "posted", total: plan.total, variances: plan.variances, ...(plan.warnings.length ? { warnings: plan.warnings } : {}) } }),
+    auditStmt(c, { action: `stock_doc.post.${doc.type}`, entity: "stock_doc", entityId: doc.id, before: { status: doc.status }, after: { status: "posted", total: plan.total, variances: plan.variances, ...(plan.roundingDiff ? { roundingDiff: plan.roundingDiff } : {}), ...(plan.warnings.length ? { warnings: plan.warnings } : {}) } }),
   ];
 }
 
@@ -523,7 +527,7 @@ inventoryRoutes.post("/stock-docs/:id/post", requirePerm("inventory.write"), asy
   }
   await guarded(() => db.batch(postedStmts(c, doc, plan, doc.created_by === u.id ? null : u.id)));
   const d = await loadDoc(db, id);
-  return c.json({ ...docShape(d), variances: plan.variances, warnings: plan.warnings, lines: await loadLines(db, id, u.role) });
+  return c.json({ ...docShape(d), variances: plan.variances, warnings: plan.warnings, roundingDiff: plan.roundingDiff, lines: await loadLines(db, id, u.role) });
 });
 
 /**

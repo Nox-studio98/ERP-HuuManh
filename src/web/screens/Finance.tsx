@@ -122,7 +122,7 @@ function Vouchers({ funds, cats, fundId, setFundId, reloadKey, onAdd }: { funds:
           { key: "f", label: "Quỹ", hideBelow: 1440, sort: (x) => x.fundName, render: (x) => x.fundName },
           { key: "s", label: "TT", render: (x) => <Badge tone={vTone(x.status)}>{vLabel(x.status)}</Badge> },
           { key: "a", label: "Số tiền", num: true, sort: sgn, render: (x) => <b className="money" style={{ color: x.direction === "in" ? "var(--accent)" : undefined }}>{x.direction === "in" ? "+" : "−"}{money(x.amount)}</b> },
-          { key: "r", label: "", render: (x) => (can("finance.write") && x.status === "posted" && !x.reversesId ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>Đảo phiếu</Button> : x.reversesId ? <Badge>Phiếu đảo</Badge> : null) },
+          { key: "r", label: "", render: (x) => (can("finance.write") && x.status === "posted" && !x.reversesId ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>Đảo phiếu</Button> : x.reversesId ? <Badge>Phiếu đảo</Badge> : x.status === "pending_approval" && x.refType !== "salary_advance" && (can("finance.approve") || can("finance.write")) ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>{can("finance.approve") ? "Từ chối" : "Huỷ phiếu"}</Button> : null) },
         ]} />}
       {rev && <ReverseSheet v={rev} onClose={() => setRev(null)} onDone={() => { setRev(null); list.reload(); }} />}
     </div>
@@ -151,6 +151,15 @@ function VoucherForm({ dir, funds, cats, onClose, onSaved }: { dir: "in" | "out"
 }
 function ReverseSheet({ v, onClose, onDone }: { v: any; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const can = useCan();
+  if (v.status === "pending_approval") {
+    const reject = can("finance.approve");
+    return (
+      <Sheet open onClose={onClose} title={`${reject ? "Từ chối" : "Huỷ"} phiếu ${v.code}`} footer={<Button block variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={async () => { setBusy(true); try { await post(`/vouchers/${v.id}/${reject ? "reject" : "cancel"}`, { reason }); toast(reject ? "Đã từ chối phiếu" : "Đã huỷ phiếu", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>{reject ? "Từ chối phiếu" : "Huỷ phiếu"} {money(v.amount)}</Button>}>
+        <div className="stack"><Banner>Phiếu chờ duyệt chưa tác động quỹ. Phiếu thuộc kỳ đã khoá sổ không duyệt được — hãy từ chối rồi lập phiếu mới ở kỳ hiện tại.</Banner><TextArea label="Lý do" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+      </Sheet>
+    );
+  }
   return (
     <Sheet open onClose={onClose} title={`Đảo phiếu ${v.code}`} footer={<Button block variant="danger" loading={busy} disabled={!reason.trim()} onClick={async () => { setBusy(true); try { await post(`/vouchers/${v.id}/reverse`, { reason }); toast("Đã tạo phiếu đảo", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>Tạo phiếu đảo {money(v.amount)}</Button>}>
       <div className="stack"><Banner>Phiếu cũ không bị sửa; hệ thống tạo phiếu đảo ở kỳ hiện tại.</Banner><TextArea label="Lý do đảo" value={reason} onChange={(e) => setReason(e.target.value)} /></div>

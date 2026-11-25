@@ -38,6 +38,7 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "approval.writeoff_vnd", group: "Ngưỡng duyệt", label: "Xoá nợ / chiết khấu công nợ cần chủ duyệt khi vượt", help: "Đặt 0 = luôn phải duyệt.", type: "vnd", min: 0, max: 10_000_000_000 },
   { key: "approval.pos_return_vnd", group: "Ngưỡng duyệt", label: "Trả hàng tại quầy cần quản lý duyệt khi vượt", help: "Thu ngân chỉ tự trả hàng cho đơn của ca đang mở, giá trị không vượt mức này và hàng nhập lại kho; ngoài ra cần quản lý duyệt.", type: "vnd", min: 0, max: 10_000_000_000 },
   { key: "approval.quote_discount_bp", group: "Ngưỡng duyệt", label: "Báo giá thấp hơn bảng giá cần duyệt khi vượt", help: "Báo giá sỉ thấp hơn bảng giá quá % này cần duyệt.", type: "bp", min: 0, max: 10000 },
+  { key: "approval.purchase_return_vnd", group: "Ngưỡng duyệt", label: "Trả hàng nhà cung cấp cần chủ duyệt khi vượt", help: "Phiếu trả hàng NCC có giá trị lớn hơn mức này cần chủ duyệt (vì giảm công nợ phải trả). Người lập không có quyền duyệt kho thì luôn chờ duyệt. [Cần xác nhận]", type: "vnd", min: 0, max: 10_000_000_000 },
 
   // ===== Bán hàng & giá =====
   { key: "costing.method", group: "Bán hàng & giá", label: "Phương pháp tính giá vốn", help: "Theo lô nhập (lot) hoặc bình quân gia quyền (average).", type: "enum", options: o(["lot", "Theo lô nhập"], ["average", "Bình quân"]) },

@@ -1,3 +1,4 @@
+import { valueSql } from "../lib/sqlmoney";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppBindings } from "../env";
@@ -67,7 +68,7 @@ async function pnl(c: Ctx) {
   ).results;
   const waste = await db
     .prepare(
-      `SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`,
+      `SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`,
     )
     .bind(...p)
     .first<{ v: number }>();
@@ -153,8 +154,8 @@ async function inventoryReport(c: Ctx) {
          -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt + Lắp ráp + Điều chỉnh = Tồn cuối
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
-         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli * m.unit_cost / 1000 END),0) AS wasteValue,
-         COALESCE(SUM(m.qty_delta_milli * m.unit_cost / 1000),0) AS stockValue
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -${valueSql('m.qty_delta_milli','m.unit_cost')} END),0) AS wasteValue,
+         COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS stockValue
          FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
         WHERE p.merged_into IS NULL
         GROUP BY p.id ORDER BY p.name`,

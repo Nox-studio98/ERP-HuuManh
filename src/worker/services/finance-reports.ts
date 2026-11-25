@@ -1,3 +1,4 @@
+import { valueSql } from "../lib/sqlmoney";
 import { allocate } from "./promotions";
 
 /** Báo cáo tài chính bổ sung (M6-06/07/08/10). Dùng cùng điều kiện với /reports/pnl để số liệu đối chiếu được. */
@@ -24,7 +25,7 @@ export async function voucherCosts(db: D1Database, fromIso: string, toIso: strin
 /** Hao hụt = xuất hao hụt theo giá vốn + hàng trả không nhập lại kho (khớp /reports/pnl). */
 export async function shrinkage(db: D1Database, fromIso: string, toIso: string) {
   const waste = await db
-    .prepare(`SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`)
+    .prepare(`SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='waste' AND at >= ? AND at < ?`)
     .bind(fromIso, toIso)
     .first<{ v: number }>();
   const disc = await db
@@ -65,7 +66,7 @@ export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: str
     .bind(fromIso, toIso)
     .first<{ s: number }>();
   const stock = await db
-    .prepare(`SELECT COALESCE(SUM(-qty_delta_milli * unit_cost / 1000.0),0) AS v FROM stock_moves WHERE move_type='adjust' AND at >= ? AND at < ?`)
+    .prepare(`SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='adjust' AND at >= ? AND at < ?`)
     .bind(fromIso, toIso)
     .first<{ v: number }>();
   // B-11: phiếu thu của khoản mục có dòng P&L (other_income, other...) là thu nhập; phiếu đảo (cùng khoản mục, ngược chiều) trừ lại đúng dòng của phiếu gốc
