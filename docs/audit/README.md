@@ -78,4 +78,30 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - A-20: `POST /online-orders/:id/weight-override` (nhân viên ghi nhận khách đồng ý qua điện thoại, bắt buộc lý do, audit).
   - A-24: khách vãng lai dùng lại hồ sơ khách bán lẻ cùng SĐT.
   - A-27: giao thiếu đơn sỉ → tạo đơn bổ sung `new` (tham số `backorder` khi xác nhận giao hoặc Cài đặt `b2b.backorder_on_short`, mặc định tắt).
-- **Còn tồn sau đợt 4**: 44 lỗi trung bình/thấp còn lại trong danh sách — xử lý theo phát sinh trong tuần chạy song song.
+- **Đợt sửa 5a (bán hàng & giá, migration 0021) — đã sửa** (`test/fix5a-sales.test.ts`):
+  - A-09: đơn offline gửi `soldAt`/`shiftId`/giá đã hiển thị; ghi nhận theo giờ bán gốc (≤ `pos.offline_max_age_hours`), giữ giá snapshot nếu lệch ≤ `pos.offline_price_tolerance_bp`; chặn chốt ca khi còn đơn chờ đồng bộ. Ca gốc đã chốt thì đơn vào ca đang mở (audit ghi ca gốc).
+  - A-10: đổi hạn mức/hạn thanh toán bắt buộc lý do; quản lý vượt `b2b.new_credit_limit_max_vnd` / `b2b.new_payment_terms_max_days` → yêu cầu chủ duyệt (`customer.credit_change`).
+  - A-21: voucher không giới hạn lượt cần chọn khách ở POS (voucher có `max_uses` vẫn dùng ẩn danh — [Cần xác nhận]).
+  - A-22 (tối thiểu): bảng giá riêng theo khách kênh pos/all; POS truyền khách khi bán.
+  - A-23 / B-24: đổi giá hàng loạt / duyệt giá đóng các dòng giá hẹn tương lai cùng bảng giá + sản phẩm.
+  - A-29: tự duyệt bán dưới giá vốn / giảm quá ngưỡng bắt buộc lý do, ghi audit.
+  - C-30: bảng giá có `version`, sửa đồng thời → 409.
+- **Đợt sửa 5c (kho, mua, tài chính, migration 0023) — đã sửa** (`test/fix5c-*.test.ts`):
+  - B-12: trả hàng NCC theo lô của phiếu nhập (`/purchase-returns`), giảm công nợ phải trả (`return_credit`), huỷ hoá đơn mua khi trả hết và chưa thanh toán; duyệt theo `approval.purchase_return_vnd`.
+  - B-15: giá đối thủ hết hàng không tính vào min/TB/gợi ý; ít dữ liệu thì so với giá bán của cửa hàng.
+  - B-18 (một phần): báo cáo SQL làm tròn từng dòng như `money.ts`; lệch làm tròn thùng→kg giữa hoá đơn mua và giá trị lô được ghi nhận (`roundingDiff`), chưa đổi đơn giá lô sang milli-đồng.
+  - B-21: số dư đầu kỳ (`is_opening`) không vào cơ sở tính VAT.
+  - B-22: từ chối/huỷ phiếu chi chờ duyệt (kể cả kỳ đã khoá); duyệt phiếu kỳ khoá trả 423 rõ ràng.
+  - C-23: đảo chi lương (`reverse-pay`) và huỷ tạm ứng chưa khấu trừ, có lý do + audit + kiểm khoá sổ.
+- **Đợt sửa 5d (nhân sự, migration 0024) — đã sửa** (`test/fix5d-hr.test.ts`):
+  - C-10: chốt bảng công chỉ kỳ đã kết thúc và theo thứ tự (hoặc `force` + lý do); chấm vào kỳ đã chốt → 409.
+  - C-11: danh sách cảnh báo chấm công (`/attendance/alerts`, tab "Cảnh báo"), đánh dấu đã xem.
+  - C-12: tạm ứng giới hạn luỹ kế `hr.advance_max_bp` (mặc định 50% lương), cấm tự tạm ứng (trừ chủ).
+  - C-18: lịch sử lương theo ngày hiệu lực (`employee_salary_history`, chỉ `hr.sensitive` xem); tính lương theo mức đúng từng ngày.
+  - C-19: phụ trội giờ làm trong ca ngày lễ/cuối tuần (`hr.holiday_premium_bp`, `hr.weekend_premium_bp`, mặc định 0).
+  - C-20: chấm offline vẫn kiểm GPS/QR khi có; thiếu thì chờ duyệt + cảnh báo.
+  - C-24: phụ cấp cố định/bảo hiểm theo tỉ lệ ngày làm khi vào/nghỉ giữa tháng (`hr.prorate_fixed_pay`, mặc định bật); `adjustMinutes.work` áp cho lương ca.
+  - C-25: punch chờ duyệt của kỳ đã chốt từ chối được (có lý do).
+  - C-26: cho nghỉ việc/khoá tài khoản chặn khi còn ca POS mở, cảnh báo/chặn khi còn yêu cầu chờ.
+  - C-31: duyệt đổi ca kiểm ca đã bắt đầu, nghỉ phép đã duyệt, trùng ca.
+- **Còn tồn sau đợt 5** (cần quyết định nghiệp vụ hoặc là tính năng mới): A-13 (tách đơn/đổi hàng), A-25 (cơ sở VAT cho hạn mức), A-26 (cổng thanh toán), A-28 (phí giao khi huỷ), C-21 (quyền `hr.manage` của kế toán), C-27 (thông báo người duyệt), C-28 (PDF báo cáo/phiếu lương), C-29 (chính sách lưu giữ dữ liệu). Phần còn lại nhỏ: B-18 (đơn giá lô milli-đồng), phép có lương cho NV giờ/ca (C-24), đơn nháp khi cho nghỉ việc (C-26), giao diện chọn đơn bổ sung khi giao thiếu (A-27).
