@@ -1284,7 +1284,7 @@ hrRoutes.get("/timesheets/:period", requirePerm("hr.view"), async (c) => {
   return c.json(await computeTimesheet(c.env.DB, period, emp));
 });
 
-hrRoutes.post("/timesheets/:period/close", requirePerm("hr.manage"), async (c) => {
+hrRoutes.post("/timesheets/:period/close", requirePerm("timesheet.close"), async (c) => {
   const period = c.req.param("period");
   if (!isPeriod(period)) throw new AppError(422, "validation_error", "Kỳ công phải có dạng YYYY-MM");
   const b = await parseBody(c, z.object({ force: z.boolean().optional(), reason: z.string().trim().min(1).max(500).optional() }).default({}));
@@ -1322,7 +1322,7 @@ hrRoutes.post("/timesheets/:period/close", requirePerm("hr.manage"), async (c) =
   return c.json({ period, status: "closed", closedAt: at, rows: snap.length, forced: bad });
 });
 
-hrRoutes.post("/timesheets/adjustments", requirePerm("hr.manage"), async (c) => {
+hrRoutes.post("/timesheets/adjustments", requirePerm("timesheet.close"), async (c) => {
   const b = await parseBody(c, z.object({
     employeeId: z.number().int().positive(), sourcePeriod: z.string().refine(isPeriod), targetPeriod: z.string().refine(isPeriod).optional(),
     minutes: z.number().int().min(-100000).max(100000).refine((n) => n !== 0, "Số phút phải khác 0"), kind: z.enum(["work", "overtime"]), reason: z.string().trim().min(1).max(500),

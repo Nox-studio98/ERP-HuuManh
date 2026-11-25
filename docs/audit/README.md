@@ -105,3 +105,5 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - C-26: cho nghỉ việc/khoá tài khoản chặn khi còn ca POS mở, cảnh báo/chặn khi còn yêu cầu chờ.
   - C-31: duyệt đổi ca kiểm ca đã bắt đầu, nghỉ phép đã duyệt, trùng ca.
 - **Còn tồn sau đợt 5** (cần quyết định nghiệp vụ hoặc là tính năng mới): A-13 (tách đơn/đổi hàng), A-25 (cơ sở VAT cho hạn mức), A-26 (cổng thanh toán), A-28 (phí giao khi huỷ), C-21 (quyền `hr.manage` của kế toán), C-27 (thông báo người duyệt), C-28 (PDF báo cáo/phiếu lương), C-29 (chính sách lưu giữ dữ liệu). Phần còn lại nhỏ: B-18 (đơn giá lô milli-đồng), phép có lương cho NV giờ/ca (C-24), đơn nháp khi cho nghỉ việc (C-26), giao diện chọn đơn bổ sung khi giao thiếu (A-27).
+
+- **Đợt 6b** (migration 0026): C-21 chủ đã chốt thu hẹp quyền kế toán (bỏ `hr.manage`; thêm `timesheet.close` cho chốt/điều chỉnh công); C-26 nghỉ việc/khoá tài khoản kiểm cả chứng từ nháp; C-29 chính sách lưu giữ (GPS 12 tháng, PII nhân viên nghỉ 24 tháng, sao lưu R2 90 ngày, audit 10 năm không xoá) — xem `docs/SECOPS.md` mục 11. Tồn: màn "chuyển việc đang làm cho người khác" (EC-39).

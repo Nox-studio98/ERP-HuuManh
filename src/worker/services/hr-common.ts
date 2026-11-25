@@ -121,7 +121,7 @@ export const isPeriodClosed = async (db: D1Database, period: string) =>
 /**
  * C-26: những việc còn dang dở của một nhân viên/tài khoản trước khi cho nghỉ việc hoặc khoá tài khoản.
  *  - openShifts: ca POS đang mở của tài khoản (tiền mặt chưa đối soát) → luôn chặn;
- *  - pending: yêu cầu duyệt/đơn từ đang chờ do người đó gửi (hoặc đang chờ người đó nhận) → cảnh báo, cần xác nhận bằng force + lý do.
+ *  - pending: yêu cầu duyệt/đơn từ đang chờ do người đó gửi (hoặc đang chờ người đó nhận) và chứng từ nháp/chờ duyệt do người đó lập → cảnh báo, cần xác nhận bằng force + lý do.
  */
 export async function offboardingBlockers(db: D1Database, userId: number | null, employeeId: number | null) {
   const n = async (sql: string, ...b: unknown[]) => (await db.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
@@ -133,6 +133,13 @@ export async function offboardingBlockers(db: D1Database, userId: number | null,
     corrections: employeeId ? await n(`SELECT COUNT(*) n FROM attendance_corrections WHERE employee_id = ? AND status = 'pending'`, employeeId) : 0,
     swaps: userId || employeeId ? await n(`SELECT COUNT(*) n FROM shift_swap_requests WHERE status IN ('pending','accepted') AND (requested_by = ?1 OR to_employee_id = ?2)`, userId ?? -1, employeeId ?? -1) : 0,
     devices: userId ? await n(`SELECT COUNT(*) n FROM devices_registry_requests WHERE user_id = ? AND status = 'pending'`, userId) : 0,
+    // C-26: chứng từ nháp / chờ duyệt do chính người này lập (đơn nháp, phiếu kho, báo giá, khuyến mãi, trả hàng NCC, đối soát)
+    draftOrders: userId ? await n(`SELECT COUNT(*) n FROM orders WHERE created_by = ? AND status = 'draft'`, userId) : 0,
+    draftStockDocs: userId ? await n(`SELECT COUNT(*) n FROM stock_docs WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    draftQuotes: userId ? await n(`SELECT COUNT(*) n FROM quotes WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    draftPromotions: userId ? await n(`SELECT COUNT(*) n FROM promotions WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    draftPurchaseReturns: userId ? await n(`SELECT COUNT(*) n FROM purchase_returns WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    draftSettlements: userId ? await n(`SELECT COUNT(*) n FROM settlements WHERE created_by = ? AND status = 'draft'`, userId) : 0,
   };
   const pendingTotal = Object.values(pending).reduce((a, b) => a + b, 0);
   return { openShifts, pending, pendingTotal };

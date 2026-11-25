@@ -23,6 +23,8 @@ export const PERMISSIONS = [
   "invoices.issue", "integrations.manage",
   // M9 Nhân sự – chấm công – lương (Đợt 4)
   "hr.self", "hr.view", "hr.schedule", "hr.manage", "hr.sensitive", "payroll.write", "payroll.approve",
+  // C-21: chốt công + điều chỉnh công kỳ đã chốt (tách khỏi hr.manage: kế toán cần để tính lương)
+  "timesheet.close",
   // M7 giá đối thủ, M2-11 gợi ý đặt hàng, khuyến mãi / tích điểm (Đợt 4)
   "competitors.view", "competitors.write", "purchasing.view", "promotions.write", "promotions.approve", "loyalty.adjust",
   // Chung
@@ -54,8 +56,9 @@ export const ROLE_PERMS: Record<Role, ReadonlySet<Permission>> = {
     "orders.view", "inventory.view", "prices.view_sell", "prices.view_cost",
     "finance.view", "finance.write", "reports.view", "customers.view_pii",
     "b2b.view", "debt.view", "debt.write", "invoices.issue",
-    // M9: kế toán xem chấm công, quản lý hồ sơ, tạo bảng lương (chủ duyệt)
-    "hr.self", "hr.view", "hr.manage", "hr.sensitive", "payroll.write",
+    // M9 (C-21, chủ đã chốt): kế toán chỉ XEM hồ sơ nhân viên (kể cả dữ liệu nhạy cảm cần cho lương), chốt công và làm bảng lương
+    // (chủ duyệt). KHÔNG có hr.manage: không tạo/sửa hồ sơ, hợp đồng, phụ cấp, không cho nghỉ việc/khoá tài khoản.
+    "hr.self", "hr.view", "hr.sensitive", "payroll.write", "timesheet.close",
   ]),
   online_staff: new Set<Permission>(["orders.view", "orders.online.manage", "inventory.view", "prices.view_sell", "customers.view_pii", "b2b.view", "hr.self"]),
   // Nhân viên chỉ chấm công, xem lịch ca và phiếu lương của chính mình

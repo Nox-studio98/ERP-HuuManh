@@ -58,24 +58,24 @@ describe("/leave-types", () => {
     expect(r.body.items.map((x: any) => x.code)).toEqual(expect.arrayContaining(["annual", "sick", "unpaid"]));
     expect(r.body.items.find((x: any) => x.code === "annual")).toMatchObject({ paid: true, usesBalance: true, active: true });
   });
-  it("accountant (hr.manage) tạo/sửa; trùng mã 409; staff không ghi được; audit", async () => {
-    const c = await api("accountant", "POST", `${V}/leave-types`, { code: "wedding", name: "Nghỉ cưới", paid: true, usesBalance: false });
+  it("owner (hr.manage) tạo/sửa; kế toán không ghi được (C-21); trùng mã 409; staff không ghi được; audit", async () => {
+    const c = await api("owner", "POST", `${V}/leave-types`, { code: "wedding", name: "Nghỉ cưới", paid: true, usesBalance: false });
     expect(c.status).toBe(201);
     expect(c.body).toMatchObject({ code: "wedding", active: true });
-    expect((await api("accountant", "POST", `${V}/leave-types`, { code: "wedding", name: "Trùng", paid: true, usesBalance: false })).status).toBe(409);
-    expect((await api("accountant", "POST", `${V}/leave-types`, { code: "Bad Code", name: "x", paid: true, usesBalance: false })).status).toBe(422);
+    expect((await api("owner", "POST", `${V}/leave-types`, { code: "wedding", name: "Trùng", paid: true, usesBalance: false })).status).toBe(409);
+    expect((await api("owner", "POST", `${V}/leave-types`, { code: "Bad Code", name: "x", paid: true, usesBalance: false })).status).toBe(422);
     expect((await call("nv_g2", "POST", `${V}/leave-types`, { code: "zzz", name: "x", paid: true, usesBalance: false })).status).toBe(403);
     expect((await call("nv_g2", "PUT", `${V}/leave-types/${c.body.id}`, { name: "x" })).status).toBe(403);
-    const u = await api("accountant", "PUT", `${V}/leave-types/${c.body.id}`, { name: "Cưới", paid: false });
+    const u = await api("owner", "PUT", `${V}/leave-types/${c.body.id}`, { name: "Cưới", paid: false });
     expect(u.body).toMatchObject({ name: "Cưới", paid: false, code: "wedding" });
-    expect((await api("accountant", "PUT", `${V}/leave-types/99999`, { name: "x" })).status).toBe(404);
+    expect((await api("owner", "PUT", `${V}/leave-types/99999`, { name: "x" })).status).toBe(404);
     const a = await db().prepare(`SELECT COUNT(*) n FROM audit_log WHERE action LIKE 'hr.leave_type.%'`).first<{ n: number }>();
     expect(a!.n).toBe(2);
   });
   it("loại đã tắt: ẩn khỏi danh sách mặc định, không xin nghỉ được; vẫn thấy với all=1", async () => {
     const list = await api("accountant", "GET", `${V}/leave-types`);
     const w = list.body.items.find((x: any) => x.code === "wedding");
-    expect((await api("accountant", "PUT", `${V}/leave-types/${w.id}`, { active: false })).body.active).toBe(false);
+    expect((await api("owner", "PUT", `${V}/leave-types/${w.id}`, { active: false })).body.active).toBe(false);
     expect((await call("nv_g2", "GET", `${V}/leave-types`)).body.items.map((x: any) => x.code)).not.toContain("wedding");
     expect((await api("accountant", "GET", `${V}/leave-types?all=1`)).body.items.map((x: any) => x.code)).toContain("wedding");
     const req = await call("nv_g2", "POST", `${V}/me/leave-requests`, { leaveTypeCode: "wedding", fromDate: "2099-02-02", toDate: "2099-02-02" });
