@@ -1,5 +1,6 @@
 import { normalizeVi } from "../../../worker/services/online-orders";
 import { vnDate } from "../../../worker/lib/time";
+import { isoWeekday, slotRuleProblem, slotUsed } from "../../../worker/services/slots";
 
 export interface Zone {
   id: number;
@@ -31,8 +32,7 @@ export const shippingFee = (z: Zone, subtotal: number) => (z.freeOver != null &&
 
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Thứ trong tuần 1..7 (Thứ Hai = 1) của ngày YYYY-MM-DD. */
-export const isoWeekday = (day: string) => ((new Date(day + "T00:00:00Z").getUTCDay() + 6) % 7) + 1;
+export { isoWeekday };
 
 export const addDaysStr = (day: string, n: number) => new Date(Date.parse(day + "T00:00:00Z") + n * 86400_000).toISOString().slice(0, 10);
 
@@ -50,15 +50,9 @@ export type SlotReason = "closed" | "past" | "cutoff" | "full";
 
 /** Kiểm tra một khung giờ của một ngày: trả lý do không đặt được hoặc null nếu còn đặt được. */
 export async function slotProblem(db: D1Database, slot: SlotRow, date: string, now = new Date()): Promise<SlotReason | null> {
-  if (!slot.weekdays.split(",").map((x) => x.trim()).includes(String(isoWeekday(date)))) return "closed";
-  if (date < vnDate(now)) return "past";
-  const start = Date.parse(`${date}T${slot.start_time}:00+07:00`);
-  if (now.getTime() > start - slot.cutoff_minutes * 60_000) return "cutoff";
-  const n = await db
-    .prepare(`SELECT COUNT(*) AS n FROM orders WHERE slot_date = ? AND slot_id = ? AND status <> 'cancelled'`)
-    .bind(date, slot.id)
-    .first<{ n: number }>();
-  if ((n?.n ?? 0) >= slot.capacity) return "full";
+  const rule = slotRuleProblem(slot, date, now);
+  if (rule) return rule;
+  if ((await slotUsed(db, date, slot.id)) >= slot.capacity) return "full"; // A-18: cùng cách đếm với ERP
   return null;
 }
 

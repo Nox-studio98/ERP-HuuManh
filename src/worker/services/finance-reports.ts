@@ -1,3 +1,4 @@
+import { FUND_ORDER_OK } from "./fund-sql";
 import { allocate } from "./promotions";
 
 /** Báo cáo tài chính bổ sung (M6-06/07/08/10). Dùng cùng điều kiện với /reports/pnl để số liệu đối chiếu được. */
@@ -199,7 +200,7 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
     return { opening: 0, inflows: [], outflows: [], totalInflow: 0, totalOutflow: 0, closing: 0, byFund: allFunds.map((f) => ({ fundId: f.id, code: f.code, name: f.name, type: f.type, opening: 0, inflow: 0, outflow: 0, closing: 0, counted: false })) };
   }
   const inList = fundIds.map(() => "?").join(",");
-  const PAY = `p.status='confirmed' AND o.status='completed' AND p.fund_id IN (${inList})`;
+  const PAY = `p.status='confirmed' AND ${FUND_ORDER_OK} AND p.fund_id IN (${inList})`;
 
   const open = new Map<number, number>(fundIds.map((i) => [i, 0]));
   const addOpen = (rows: { fund_id: number; s: number }[]) => rows.forEach((r) => open.set(r.fund_id, (open.get(r.fund_id) ?? 0) + (r.s ?? 0)));

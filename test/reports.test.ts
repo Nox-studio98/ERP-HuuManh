@@ -58,7 +58,7 @@ describe("reports", () => {
       totalExpenses: 50000,
       netProfit: -30000,
     });
-    expect(r.body.breakdown).toEqual([{ key: "pos", revenue: 50000, cogs: 30000, grossProfit: 20000 }]);
+    expect(r.body.breakdown).toEqual([{ key: "pos", revenue: 50000, cogs: 30000, grossProfit: 20000, shipping: 0 }]);
   });
 
   it("builds the daily report and inventory report", async () => {

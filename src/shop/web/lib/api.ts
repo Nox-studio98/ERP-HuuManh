@@ -24,7 +24,7 @@ export interface Quote { lines: QuoteLine[]; subtotal: number; discount: number;
 export interface Slot { date: string; id: number; label: string; startTime: string; endTime: string; available: boolean; reason?: string }
 export interface Zone { id: number; name: string; fee: number; freeOver: number | null; minOrder: number }
 export interface Transfer { bankBin: string; accountNo: string; accountName: string; amount: number; content: string; qrPayload: string; expiresAt: string | null }
-export interface OrderLine { productId: number; name: string; imageUrl: string | null; unit: string; orderedQty: number; qty: number; unitPrice: number; lineTotal: number; preorderMilli: number }
+export interface OrderLine { productId: number; name: string; imageUrl: string | null; unit: string; orderedQty: number; qty: number; unitPrice: number; lineTotal: number; lineDiscount?: number; preorderMilli: number }
 export interface OrderView {
   code: string; trackingToken: string | null; status: string; statusLabel: string; createdAt: string; slotDate: string | null; slotLabel: string | null;
   receiverName: string | null; receiverPhoneMasked: string; shipAddress: string | null; paymentMethod: string | null; paymentStatus: string;

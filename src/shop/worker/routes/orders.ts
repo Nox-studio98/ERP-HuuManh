@@ -118,7 +118,7 @@ orderRoutes.post("/me/orders/:code/reorder", requireAccount, async (c) => {
       .all<any>()
   ).results;
   const ids = [...new Set(lines.map((l) => l.product_id))];
-  const live = ids.length ? await cards(db, { channel: "online", where: [`p.id IN (${ids.map((_, i) => `?${5 + i}`).join(",")})`], binds: ids }) : [];
+  const live = ids.length ? await cards(db, { channel: "online", groupId: c.get("account")!.customerGroupId, customerId: c.get("account")!.customerId, where: [`p.id IN (${ids.map((_, i) => `?${5 + i}`).join(",")})`], binds: ids }) : [];
   const byId = new Map(live.map((p) => [p.id, p]));
   const items: unknown[] = [];
   const unavailable: unknown[] = [];

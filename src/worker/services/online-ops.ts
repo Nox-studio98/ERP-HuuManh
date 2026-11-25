@@ -16,6 +16,8 @@ import { assertStmt } from "./guard";
 import { guardStmts, notifyJob, paidNet, refundObligation, refundPlan, runOrderBatch } from "./online-payments";
 import { assertPeriodOpen } from "./period";
 import { unitFactor } from "./http";
+import { repriceAfterPack } from "./pack-reprice";
+import { slotCapacityGuard, slotRuleProblem, slotUsed } from "./slots";
 import { earnFor, pointsStmts, reversalStatements } from "./loyalty-points";
 
 type Ctx = Context<AppBindings>;
@@ -93,17 +95,23 @@ export async function packOrder(c: Ctx, id: number, input: { lines: { orderLineI
   const stmts: D1PreparedStatement[] = [];
   const [g1, g2] = guardStmts(db, id, "preparing");
   stmts.push(g1);
-  for (const l of lines) {
-    const ordered = l.ordered_qty_milli ?? l.qty_milli;
+  const priced = lines.map((l) => {
     const qty = actual.get(l.id) ?? l.qty_milli;
-    baseline += lineAmount(l.unit_price, ordered);
     const gross = lineAmount(l.unit_price, qty);
+    baseline += lineAmount(l.unit_price, l.ordered_qty_milli ?? l.qty_milli);
     subtotal += gross;
+    return { l, qty, gross };
+  });
+  // A-19: tính lại khuyến mãi %/voucher + ngưỡng miễn phí giao theo tiền hàng thực (A-08: giảm giá ghi theo dòng)
+  const rp = await repriceAfterPack(db, o, priced.map((x) => ({ id: x.l.id, productId: x.l.product_id, qtyMilli: x.qty, unitPrice: x.l.unit_price, gross: x.gross })), subtotal);
+  for (const x of priced) {
+    const disc = rp.info.promoRecalc ? rp.lineDiscounts.get(x.l.id) ?? 0 : x.l.discount;
     stmts.push(
-      db.prepare(`UPDATE order_lines SET qty_milli=?, line_total=?, ordered_qty_milli=COALESCE(ordered_qty_milli, ?) WHERE id=?`).bind(qty, Math.max(0, gross - l.discount), l.qty_milli, l.id),
+      db.prepare(`UPDATE order_lines SET qty_milli=?, discount=?, line_total=?, ordered_qty_milli=COALESCE(ordered_qty_milli, ?) WHERE id=?`).bind(x.qty, disc, Math.max(0, x.gross - disc), x.l.qty_milli, x.l.id),
     );
   }
-  const total = Math.max(0, subtotal - o.discount) + o.shipping_fee;
+  stmts.push(...rp.stmts);
+  const total = Math.max(0, subtotal - rp.discount) + rp.shippingFee;
   const devBp = baseline > 0 ? Math.round((Math.abs(subtotal - baseline) * 10000) / baseline) : 0;
   const weightStatus = devBp <= (Number.isFinite(tolBp) ? tolBp : 1000) ? "auto_accepted" : "pending_customer";
   const pending = weightStatus === "pending_customer";
@@ -113,8 +121,8 @@ export async function packOrder(c: Ctx, id: number, input: { lines: { orderLineI
   const diff = prepaidPaid ? total - (o.paid_total ?? 0) : 0;
   stmts.push(
     db
-      .prepare(`UPDATE orders SET subtotal=?, total=?, weight_adjust_status=?, diff_amount=?, diff_status=?, diff_note=NULL, diff_waived_by=NULL WHERE id=? AND status='preparing'`)
-      .bind(subtotal, total, weightStatus, diff, diff !== 0 ? "pending" : "none", id),
+      .prepare(`UPDATE orders SET subtotal=?, discount=?, shipping_fee=?, total=?, weight_adjust_status=?, diff_amount=?, diff_status=?, diff_note=NULL, diff_waived_by=NULL WHERE id=? AND status='preparing'`)
+      .bind(subtotal, rp.discount, rp.shippingFee, total, weightStatus, diff, diff !== 0 ? "pending" : "none", id),
     db
       .prepare(`INSERT INTO order_events(order_id, status, note, internal_note, actor_type, actor_id) VALUES (?,?,?,?, 'staff', ?)`)
       .bind(id, "preparing", pending ? "Khối lượng thực tế chênh lệch, vui lòng xác nhận lại" : "Đã cân hàng, tổng tiền được cập nhật", input.note ?? null, c.get("user").id),
@@ -122,13 +130,35 @@ export async function packOrder(c: Ctx, id: number, input: { lines: { orderLineI
     notifyJob(db, id, { status: "preparing", ...(pending ? { event: "weight_pending" } : {}) }),
     auditStmt(c, {
       action: "online_order.pack", entity: "order", entityId: id,
-      before: { subtotal: o.subtotal, total: o.total, weightAdjustStatus: o.weight_adjust_status },
-      after: { subtotal, total, baseline, deviationBp: devBp, toleranceBp: tolBp, weightAdjustStatus: weightStatus, paidTotal: o.paid_total, diff },
+      before: { subtotal: o.subtotal, total: o.total, discount: o.discount, shippingFee: o.shipping_fee, weightAdjustStatus: o.weight_adjust_status },
+      after: { subtotal, total, discount: rp.discount, shippingFee: rp.shippingFee, voucherDropped: rp.info.voucherDropped, baseline, deviationBp: devBp, toleranceBp: tolBp, weightAdjustStatus: weightStatus, paidTotal: o.paid_total, diff },
     }),
   );
   await runOrderBatch(db, id, "preparing", stmts);
   await finish(c, id);
   return { weightAdjustStatus: weightStatus, deviationBp: devBp, baseline, subtotal, total, diffAmount: diff };
+}
+
+/**
+ * A-20: khách không phản hồi trên web nhưng đã đồng ý lệch cân qua điện thoại → nhân viên ghi nhận thay (bắt buộc lý do, lưu người ghi, audit).
+ * Chỉ khi đơn đang chuẩn bị và chờ khách xác nhận khối lượng; kết quả giống khách bấm đồng ý (`accepted`).
+ */
+export async function overrideWeight(c: Ctx, id: number, reason: string) {
+  const db = c.env.DB;
+  const o = await loadOpsOrder(db, id);
+  if (o.status !== "preparing") throw conflict("invalid_transition", "Chỉ ghi nhận khi đơn đang chuẩn bị", { from: o.status });
+  if (o.weight_adjust_status !== "pending_customer") throw conflict("no_pending_decision", "Đơn không có yêu cầu xác nhận khối lượng");
+  const uid = c.get("user").id;
+  const [g1, g2] = guardStmts(db, id, "preparing");
+  await runOrderBatch(db, id, "preparing", [
+    g1,
+    assertStmt(db, "order.weight_override", `SELECT weight_adjust_status = 'pending_customer' FROM orders WHERE id = ?`, [id]),
+    db.prepare(`UPDATE orders SET weight_adjust_status='accepted', weight_override_by=?, weight_override_reason=? WHERE id=? AND weight_adjust_status='pending_customer'`).bind(uid, reason, id),
+    db.prepare(`INSERT INTO order_events(order_id, status, note, internal_note, actor_type, actor_id) VALUES (?,?,?,?, 'staff', ?)`).bind(id, "preparing", "Khách đồng ý giá theo khối lượng thực tế (qua điện thoại)", `Nhân viên ghi nhận thay khách: ${reason}`, uid),
+    g2,
+    auditStmt(c, { action: "online_order.weight_override", entity: "order", entityId: id, before: { weightAdjustStatus: "pending_customer" }, after: { weightAdjustStatus: "accepted", total: o.total }, reason }),
+  ]);
+  return { weightAdjustStatus: "accepted" };
 }
 
 // ---------------------------------------------------------------- ship (EC-05)
@@ -263,10 +293,16 @@ export async function failOrder(c: Ctx, id: number, reason: string) {
 export async function redeliverOrder(c: Ctx, id: number, input: { slotDate: string; slotId: number }) {
   const db = c.env.DB;
   const o = await loadOpsOrder(db, id);
-  const slot = await db.prepare(`SELECT id, label FROM delivery_slots WHERE id=? AND active=1`).bind(input.slotId).first<{ id: number; label: string }>();
+  const slot = await db.prepare(`SELECT id, label, start_time, cutoff_minutes, weekdays, capacity FROM delivery_slots WHERE id=? AND active=1`).bind(input.slotId).first<any>();
   if (!slot) throw new AppError(422, "slot_not_found", "Khung giờ giao không tồn tại");
   if (input.slotDate < vnDate()) throw new AppError(422, "slot_in_past", "Ngày giao lại không được ở quá khứ");
+  // A-18: giao lại phải qua cùng kiểm tra như đặt mới — khung có giao hôm đó, chưa quá giờ chốt, còn sức chứa (bỏ qua chính đơn này)
+  const rule = slotRuleProblem(slot, input.slotDate);
+  if (rule === "closed") throw new AppError(422, "slot_closed", "Khung giờ không giao vào ngày này");
+  if (rule === "cutoff" || rule === "past") throw conflict("slot_cutoff", "Đã quá giờ chốt của khung giờ này");
+  if ((await slotUsed(db, input.slotDate, input.slotId, id)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   await runOrderBatch(db, id, o.status, [
+    slotCapacityGuard(db, "redeliver.slot_capacity", input.slotDate, input.slotId, slot.capacity, id),
     ...transitionStmts(db, id, o.status, "confirmed", staff(c), {
       note: `Giao lại ngày ${input.slotDate}, khung ${slot.label}`,
       internalNote: "Giao lại: hàng vẫn ở shipper/kho, không xuất kho lần nữa",
@@ -716,11 +752,12 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     if (subtotal < zone.min_order) throw new AppError(422, "min_order", "Chưa đạt giá trị đơn tối thiểu của khu vực", { minOrder: zone.min_order });
     shippingFee = zone.free_over != null && subtotal >= zone.free_over ? 0 : zone.fee;
   }
+  let slotCapacity = 0;
   if (b.slotDate && b.slotId) {
     const slot = await db.prepare(`SELECT capacity FROM delivery_slots WHERE id=? AND active=1`).bind(b.slotId).first<{ capacity: number }>();
     if (!slot) throw new AppError(422, "slot_not_found", "Khung giờ giao không tồn tại");
-    const used = await db.prepare(`SELECT COUNT(*) n FROM orders WHERE slot_date=? AND slot_id=? AND status NOT IN ('cancelled','returned','draft')`).bind(b.slotDate, b.slotId).first<{ n: number }>();
-    if ((used?.n ?? 0) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
+    slotCapacity = slot.capacity;
+    if ((await slotUsed(db, b.slotDate, b.slotId)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   }
   const total = subtotal + shippingFee;
   const code = await nextCode(db, "DH");
@@ -761,9 +798,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
       const plans = await planReservations(db, toReserve, storeId);
       const stmts: D1PreparedStatement[] = [
         // Chốt chặn sức chứa khung giờ (audit #17): hai đơn đồng thời không được cùng chiếm chỗ cuối
-        ...(b.slotDate && b.slotId
-          ? [assertStmt(db, "slot.capacity", `SELECT (SELECT COUNT(*) FROM orders WHERE slot_date = ? AND slot_id = ? AND status NOT IN ('cancelled','returned','draft')) < (SELECT capacity FROM delivery_slots WHERE id = ?)`, [b.slotDate, b.slotId, b.slotId])]
-          : []),
+        ...(b.slotDate && b.slotId ? [slotCapacityGuard(db, "slot.capacity", b.slotDate, b.slotId, slotCapacity)] : []),
         ...reserveStmts(db, orderId, plans),
         db.prepare(`UPDATE orders SET status=? WHERE id=? AND status='draft'`).bind(status, orderId),
         db.prepare(`INSERT INTO order_events(order_id, status, note, actor_type, actor_id) VALUES (?,?,?, 'staff', ?)`).bind(orderId, status, "Đơn được tạo bởi cửa hàng (mạng xã hội)", user.id),

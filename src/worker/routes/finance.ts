@@ -10,6 +10,7 @@ import { vnDayRangeUtc, vnPeriod, parseDayRange } from "../lib/time";
 import { getSettingInt } from "../services/settings";
 import { approveVoucher } from "../services/vouchers";
 import { assertStmt } from "../services/guard";
+import { FUND_ORDER_OK } from "../services/fund-sql";
 
 export const financeRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -23,7 +24,7 @@ financeRoutes.get("/funds", requirePerm("finance.view"), async (c) => {
     .prepare(
       `SELECT f.id, f.store_id, f.code, f.name, f.type, f.active,
               COALESCE((SELECT SUM(p.amount) FROM payments p JOIN orders o ON o.id = p.order_id
-                         WHERE p.fund_id = f.id AND p.status='confirmed' AND o.status='completed'),0) AS payments_total,
+                         WHERE p.fund_id = f.id AND p.status='confirmed' AND ${FUND_ORDER_OK}),0) AS payments_total,
               COALESCE((SELECT SUM(CASE WHEN v.direction='in' THEN v.amount ELSE -v.amount END) FROM cash_vouchers v
                          WHERE v.fund_id = f.id AND v.status='posted'),0) AS vouchers_net
          FROM funds f ORDER BY f.id`,

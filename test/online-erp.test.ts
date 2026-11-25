@@ -198,7 +198,7 @@ describe("xuất kho theo số thực cân + giao hàng", () => {
     const pnl = await api("owner", "GET", `/api/v1/reports/pnl?from=${today}&to=${today}&groupBy=channel`);
     expect(pnl.status).toBe(200);
     const row = pnl.body.breakdown.find((b: any) => b.key === "online");
-    const expected = (await db().prepare(`SELECT COALESCE(SUM(ol.line_total),0) s, COALESCE(SUM(ol.cost_amount),0) c FROM order_lines ol JOIN orders o ON o.id=ol.order_id WHERE o.channel='online' AND o.status='completed'`).first<any>())!;
+    const expected = (await db().prepare(`SELECT COALESCE(SUM(ol.line_total),0) + (SELECT COALESCE(SUM(shipping_fee),0) FROM orders WHERE channel='online' AND kind='sale' AND status='completed') s, COALESCE(SUM(ol.cost_amount),0) c FROM order_lines ol JOIN orders o ON o.id=ol.order_id WHERE o.channel='online' AND o.status='completed'`).first<any>())!;
     expect(row.revenue).toBe(expected.s);
     expect(row.cogs).toBe(expected.c);
     expect(row.revenue).toBeGreaterThanOrEqual(100000);
@@ -214,10 +214,10 @@ describe("xuất kho theo số thực cân + giao hàng", () => {
     await post("online_staff", o.id, "ship");
     expect((await lot(610)).h).toBe(8000);
     expect((await post("online_staff", o.id, "fail", { reason: "Khách không nghe máy" })).body.status).toBe("delivery_failed");
-    const rd = await post("online_staff", o.id, "redeliver", { slotDate: vnDate(), slotId: 2 });
+    const rd = await post("online_staff", o.id, "redeliver", { slotDate: new Date(Date.now() + 86400_000 + 7 * 3600_000).toISOString().slice(0, 10), slotId: 2 });
     expect(rd.status).toBe(200);
     expect(rd.body).toMatchObject({ status: "confirmed", slot: { id: 2 } });
-    expect((await post("online_staff", o.id, "redeliver", { slotDate: vnDate(), slotId: 2 })).status).toBe(409);
+    expect((await post("online_staff", o.id, "redeliver", { slotDate: new Date(Date.now() + 86400_000 + 7 * 3600_000).toISOString().slice(0, 10), slotId: 2 })).status).toBe(409);
     await post("online_staff", o.id, "prepare");
     expect((await post("online_staff", o.id, "pack", { lines: [{ orderLineId: o.lineIds[0], actualQty: 2 }] })).status).toBe(409); // đã xuất kho
     expect((await post("online_staff", o.id, "ship")).status).toBe(200);

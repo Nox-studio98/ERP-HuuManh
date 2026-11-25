@@ -67,4 +67,15 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - C-16, C-17: màn **Cài đặt** (tham số theo nhóm, nhãn "Cần xác nhận", khoá/mở khoá sổ có lý do, nhật ký thay đổi).
   - Thêm khoản mục **Số dư quỹ đầu kỳ** (không tính vào lãi lỗ) để nhập số dư khi go-live.
 - **Sửa thêm (PR giao diện PC 2B+2C, 25/11/2026)**: B-17 — lọc `from`/`to` của `/debts/payments` theo ngày VN (test `test/fix-debts-payments-vn-day.test.ts`).
+- **Đợt sửa 5b (online & sỉ, migration 0022) — đã sửa** (`test/fix5b-*.test.ts`):
+  - A-08: dòng đơn online mang giảm giá/voucher/điểm đã phân bổ; P&L theo kênh/ngày/nhóm có phí giao báo riêng (`shipping`) nên tổng breakdown = doanh thu.
+  - A-11: số dư quỹ gồm tiền đơn online trả trước chưa hoàn tất và đơn huỷ/trả chờ hoàn (doanh thu vẫn ghi khi hoàn tất).
+  - A-12: trả một phần theo dòng/số lượng đã có từ A-05 (phiếu `kind='return'`); thêm test hồi quy.
+  - A-15: website dùng giá nhóm khách/bảng giá riêng của tài khoản đăng nhập (catalog, giỏ, checkout, mua lại).
+  - A-17: cron 00:00 đổi lô giữ tồn xấu ngay sau khi đánh dấu hết hạn (giao đã kiểm hạn từ B-04).
+  - A-18: một hàm đếm sức chứa khung giờ (`services/slots.ts`) cho web và ERP; giao lại kiểm ngày giao/giờ chốt/sức chứa.
+  - A-19: sau cân tính lại khuyến mãi/voucher bằng engine và ngưỡng miễn phí giao (Cài đặt `online.pack_recalc_promo`, `online.pack_recalc_shipping`, [Cần xác nhận]).
+  - A-20: `POST /online-orders/:id/weight-override` (nhân viên ghi nhận khách đồng ý qua điện thoại, bắt buộc lý do, audit).
+  - A-24: khách vãng lai dùng lại hồ sơ khách bán lẻ cùng SĐT.
+  - A-27: giao thiếu đơn sỉ → tạo đơn bổ sung `new` (tham số `backorder` khi xác nhận giao hoặc Cài đặt `b2b.backorder_on_short`, mặc định tắt).
 - **Còn tồn sau đợt 4**: 44 lỗi trung bình/thấp còn lại trong danh sách — xử lý theo phát sinh trong tuần chạy song song.

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AppError } from "../../../worker/lib/errors";
 import { vnDate } from "../../../worker/lib/time";
 import type { ShopBindings } from "../env";
-import { applyStock, computeTotals, priceCart, promoForCart, redeemCustomerId, type CartIssue } from "../lib/cart";
+import { applyStock, computeTotals, priceCart, priceCtxOf, promoForCart, redeemCustomerId, type CartIssue } from "../lib/cart";
 import { DATE_RE, activeSlots, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { optionalAuth } from "../lib/session";
 import { onlineStoreId, parseBody } from "../lib/util";
@@ -44,7 +44,7 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
     if (!ad) throw new AppError(404, "address_not_found", "Không tìm thấy địa chỉ");
     district = ad.district;
   }
-  const { lines, issues } = await priceCart(db, b.items);
+  const { lines, issues } = await priceCart(db, b.items, priceCtxOf(c.get("account")));
   const short = await applyStock(db, await onlineStoreId(db), lines);
   for (const s of short)
     issues.push({

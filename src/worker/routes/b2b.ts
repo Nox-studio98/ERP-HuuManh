@@ -370,6 +370,8 @@ b2bRoutes.post("/deliveries/:id/ship", requirePerm("b2b.deliver"), async (c) => 
 
 const confirmSchema = z.object({
   receiverName: z.string().trim().min(1).max(100),
+  /** A-27: tạo đơn bổ sung cho phần giao thiếu (không gồm hàng bị từ chối). Bỏ trống → theo Cài đặt b2b.backorder_on_short. */
+  backorder: z.boolean().optional(),
   lines: z.array(z.object({
     orderLineId: z.number().int().positive(),
     deliveredQty: z.number().min(0).max(1_000_000),
@@ -454,6 +456,22 @@ b2bRoutes.post("/deliveries/:id/confirm", requirePerm("b2b.deliver"), async (c) 
     if (x.delivered > 0)
       invLines.push({ orderLineId: l.id, productId: l.product_id, description: l.product_name, unit: l.base_unit, qtyMilli: x.delivered, unitPrice: l.unit_price, amount });
   }
+  // A-27: giao thiếu → đơn bổ sung (trạng thái new, chưa giữ tồn/kiểm hạn mức — xác nhận như đơn thường), cùng giá đã chốt
+  const shortLines = per.filter((x) => x.line.qty_milli - x.delivered - x.rejected > 0);
+  const wantBackorder = b.backorder ?? (await getSettingInt(db, "b2b.backorder_on_short", 0)) === 1;
+  let backorderCode: string | null = null;
+  if (wantBackorder && shortLines.length) {
+    backorderCode = await nextCode(db, "DS");
+    const bl = shortLines.map((x) => ({ productId: x.line.product_id, unit: x.line.unit, qtyMilli: x.line.qty_milli - x.delivered - x.rejected, unitPrice: x.line.unit_price, priceListId: x.line.price_list_id ?? null }));
+    const bTotal = bl.reduce((s, l) => s + lineAmount(l.unitPrice, l.qtyMilli), 0);
+    const when = order.delivery_date && order.delivery_date >= vnDate() ? order.delivery_date : vnDate();
+    stmts.push(
+      db
+        .prepare(`INSERT INTO orders(code, channel, kind, store_id, customer_id, status, subtotal, total, note, created_by, quote_id, address_id, delivery_date, backorder_of_order_id) VALUES (?,'b2b','sale',?,?,'new',?,?,?,?,?,?,?,?)`)
+        .bind(backorderCode, order.store_id, order.customer_id, bTotal, bTotal, `Giao bổ sung phần còn thiếu của ${order.code}`, user.id, order.quote_id ?? null, order.address_id, when, order.id),
+      ...bl.map((l) => orderLineInsert(db, backorderCode!, { ...l, lineTotal: lineAmount(l.unitPrice, l.qtyMilli) })),
+    );
+  }
   stmts.push(
     db.prepare(`UPDATE deliveries SET status='delivered', delivered_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), receiver_name=? WHERE id=? AND status IN ('ready','shipping')`).bind(b.receiverName, did),
     db.prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`).bind(subtotal, subtotal, costTotal, order.id),
@@ -465,7 +483,7 @@ b2bRoutes.post("/deliveries/:id/confirm", requirePerm("b2b.deliver"), async (c) 
   }
   stmts.push(auditStmt(c, {
     action: "delivery.confirm", entity: "delivery", entityId: d.code,
-    after: { receiverName: b.receiverName, subtotal, rejected: per.filter((x) => x.rejected > 0).map((x) => ({ orderLineId: x.line.id, rejectedMilli: x.rejected, reason: x.reason })), invoice: inv?.code ?? null },
+    after: { receiverName: b.receiverName, subtotal, rejected: per.filter((x) => x.rejected > 0).map((x) => ({ orderLineId: x.line.id, rejectedMilli: x.rejected, reason: x.reason })), invoice: inv?.code ?? null, backorder: backorderCode },
   }));
   try {
     await db.batch(stmts);
@@ -479,7 +497,7 @@ b2bRoutes.post("/deliveries/:id/confirm", requirePerm("b2b.deliver"), async (c) 
     try { await kickJobs(c.env, "invoice", invoice.id); } catch { /* cron sẽ quét lại */ }
   }
   return c.json({
-    deliveryId: did, status: "delivered", orderStatus: "completed",
+    deliveryId: did, status: "delivered", orderStatus: "completed", backorder: backorderCode ? { code: backorderCode } : null,
     invoice: invoice && { id: invoice.id, code: invoice.code, issueDate: invoice.issue_date, dueDate: invoice.due_date, subtotal: invoice.subtotal, total: invoice.total, einvoiceStatus: invoice.einvoice_status },
   });
 });

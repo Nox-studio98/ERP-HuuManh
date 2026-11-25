@@ -102,7 +102,7 @@ async function pnl(c: Ctx) {
       : groupBy === "group" ? `COALESCE(pg.name,'Khác')`
       : null;
     if (!keyExpr) throw new AppError(422, "validation_error", "groupBy phải là day, channel hoặc group");
-    breakdown = (
+    const rows = (
       await db
         .prepare(
           `SELECT ${keyExpr} AS key,
@@ -114,7 +114,22 @@ async function pnl(c: Ctx) {
         )
         .bind(...p)
         .all<{ key: string; revenue: number; cogs: number }>()
-    ).results.map((r) => ({ ...r, grossProfit: r.revenue - r.cogs }));
+    ).results.map((r) => ({ ...r, shipping: 0 }));
+    // A-08: dòng đơn online mang giảm giá đã phân bổ; phí giao hàng (doanh thu cấp đơn) báo riêng để tổng breakdown = doanh thu tổng
+    const SHIP = `CASE WHEN o.kind='sale' THEN o.shipping_fee WHEN o.channel IN ('online','social') THEN o.total - o.subtotal ELSE 0 END`;
+    if (groupBy === "group") {
+      const sh = (await db.prepare(`SELECT COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
+      if (sh) rows.push({ key: "Phí giao hàng", revenue: sh, cogs: 0, shipping: sh });
+    } else {
+      const ship = (await db.prepare(`SELECT ${keyExpr} AS key, COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W} GROUP BY key`).bind(...p).all<{ key: string; s: number }>()).results;
+      for (const x of ship) {
+        const r = rows.find((y) => y.key === x.key);
+        if (!r || !x.s) continue;
+        r.shipping = x.s;
+        r.revenue += x.s;
+      }
+    }
+    breakdown = rows.map((r) => ({ ...r, grossProfit: r.revenue - r.cogs }));
   }
   return {
     from, to,

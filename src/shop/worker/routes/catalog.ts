@@ -2,15 +2,22 @@ import { Hono } from "hono";
 import { notFound } from "../../../worker/lib/errors";
 import type { ShopBindings } from "../env";
 import { cards, queryCards } from "../lib/catalog";
+import { optionalAuth } from "../lib/session";
 import { escapeLike, escapeXml, baseUrl, imageUrl, parseImages, safeLink } from "../lib/util";
 import { normalizeVi } from "../../../worker/services/online-orders";
 
 export const catalogRoutes = new Hono<ShopBindings>();
 
 const PAGE = 24;
+/** A-15: giá hiển thị theo nhóm khách / bảng giá riêng của tài khoản đăng nhập (khách vãng lai: giá chung). */
+const priceOf = (c: { get(k: "account"): { customerId: number; customerGroupId: number | null } | null }) => {
+  const a = c.get("account");
+  return a ? { groupId: a.customerGroupId, customerId: a.customerId } : {};
+};
 
-catalogRoutes.get("/home", async (c) => {
+catalogRoutes.get("/home", optionalAuth, async (c) => {
   const db = c.env.DB;
+  const pc = priceOf(c);
   const now = new Date().toISOString();
   const [banners, featured, all, posts] = await Promise.all([
     db
@@ -19,8 +26,8 @@ catalogRoutes.get("/home", async (c) => {
       )
       .bind(now)
       .all<any>(),
-    cards(db, { channel: "online", where: ["p.featured = 1"], limit: 8 }),
-    queryCards(db, { channel: "online", limit: 500 }),
+    cards(db, { channel: "online", ...pc, where: ["p.featured = 1"], limit: 8 }),
+    queryCards(db, { channel: "online", ...pc, limit: 500 }),
     db
       .prepare(`SELECT slug, title, excerpt, cover_key, published_at FROM cms_posts WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 4`)
       .all<any>(),
@@ -37,7 +44,7 @@ catalogRoutes.get("/home", async (c) => {
   });
 });
 
-catalogRoutes.get("/products", async (c) => {
+catalogRoutes.get("/products", optionalAuth, async (c) => {
   const db = c.env.DB;
   const q = c.req.query();
   const where: string[] = [];
@@ -51,17 +58,18 @@ catalogRoutes.get("/products", async (c) => {
   const order =
     q.sort === "price_asc" ? "p.price ASC, p.id" : q.sort === "price_desc" ? "p.price DESC, p.id" : q.sort === "new" ? "p.id DESC" : "p.featured DESC, p.online_sort ASC, p.id ASC";
   const offset = q.cursor && /^\d+$/.test(q.cursor) ? Number(q.cursor) : 0;
-  const rows = await cards(db, { channel: "online", where, binds, order, limit: PAGE + 1, offset });
+  const rows = await cards(db, { channel: "online", ...priceOf(c), where, binds, order, limit: PAGE + 1, offset });
   return c.json({ items: rows.slice(0, PAGE), nextCursor: rows.length > PAGE ? String(offset + PAGE) : null });
 });
 
-catalogRoutes.get("/products/:slug", async (c) => {
+catalogRoutes.get("/products/:slug", optionalAuth, async (c) => {
   const db = c.env.DB;
+  const pc = priceOf(c);
   const slug = c.req.param("slug").slice(0, 200);
-  const [hit] = await queryCards(db, { channel: "online", where: ["p.slug = ?5"], binds: [slug], limit: 1 });
+  const [hit] = await queryCards(db, { channel: "online", ...pc, where: ["p.slug = ?5"], binds: [slug], limit: 1 });
   if (!hit) throw notFound("product_not_found", "Không tìm thấy sản phẩm");
   const related = hit.row.group_id
-    ? await cards(db, { channel: "online", where: ["p.group_id = ?5", "p.id <> ?6"], binds: [hit.row.group_id, hit.row.id], limit: 4 })
+    ? await cards(db, { channel: "online", ...pc, where: ["p.group_id = ?5", "p.id <> ?6"], binds: [hit.row.group_id, hit.row.id], limit: 4 })
     : [];
   return c.json({
     ...hit.card,

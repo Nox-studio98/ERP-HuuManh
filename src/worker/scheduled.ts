@@ -21,7 +21,7 @@ async function step(name: string, fn: () => Promise<unknown>) {
 
 /**
  * Cron Triggers (wrangler.jsonc → triggers.crons):
- *  - "0 17 * * *"  (00:00 giờ VN): đánh dấu lô hết hạn, sao lưu logic ra R2.
+ *  - "0 17 * * *"  (00:00 giờ VN): đánh dấu lô hết hạn, đổi lô giữ tồn xấu (A-17), sao lưu logic ra R2.
  *  - "*\/30 * * * *": dọn phiên hết hạn.
  *  - "*\/5 * * * *": quét job tích hợp đến hạn (sweepJobs).
  *  - "0 1 * * *" (08:00 VN): đổi lô giữ tồn xấu (EC-15), sinh đơn lặp, nhắc nợ.
@@ -57,6 +57,8 @@ export async function runScheduled(event: ScheduledController, env: Env) {
   )
     .bind(now)
     .run();
+  // A-17: lô vừa hết hạn đang giữ cho đơn → đổi sang lô tốt NGAY (không đợi 08:00 — giao buổi sáng sớm không xuất lô quá hạn)
+  await step("swap_expired_reservations", () => swapBadReservationsAllStores(env.DB));
   await step("backup", () => backupToR2(env)); // C-06: lỗi sao lưu được ghi log, không chặn bước khác
 }
 

@@ -11,7 +11,7 @@ import { CUSTOMER_LABEL, type OnlineStatus } from "../services/online-orders";
 import { bankFundId, markOrderPaid } from "../services/online-payments";
 import {
   cancelOrder, canCost, confirmOrder, createSocialOrder, deliverOrder, failOrder, loadOpsOrder, packOrder, prepareOrder,
-  redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
+  overrideWeight, redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
 } from "../services/online-ops";
 import { b64uDecode, pushConfigured } from "../services/webpush";
 
@@ -174,6 +174,8 @@ async function orderDetail(c: Ctx, oid: number) {
     refundDue: o.refund_due,
     estimatedTotal: o.estimated_total,
     weightAdjustStatus: o.weight_adjust_status,
+    weightOverrideBy: o.weight_override_by,
+    weightOverrideReason: o.weight_override_reason,
     // A-02: chênh lệch cân đơn trả trước — dương "Thu thêm" (thu khi giao), âm "Hoàn lại" (phải hoàn / miễn mới hoàn tất được)
     diffAmount: o.diff_amount,
     diffStatus: o.diff_status,
@@ -264,6 +266,7 @@ act("pack", "orders.online.manage", async (c, oid) =>
     lines: z.array(z.object({ orderLineId: z.number().int().positive(), actualQty: z.number().min(0).max(100000), unit: z.string().min(1).max(20).optional() })).min(1).max(200),
     note: z.string().trim().max(300).optional(),
   }))));
+act("weight-override", "orders.online.manage", async (c, oid) => overrideWeight(c, oid, (await parseBody(c, z.object({ reason: z.string().trim().min(5).max(300) }))).reason));
 act("ship", "orders.online.manage", async (c, oid) =>
   shipOrder(c, oid, await body0(c, z.object({ carrier: z.string().trim().max(60).optional(), trackingNo: z.string().trim().max(60).optional() }))));
 act("deliver", "orders.online.manage", (c, oid) => deliverOrder(c, oid));
