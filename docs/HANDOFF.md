@@ -12,7 +12,7 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 | Bổ sung sau Đợt 4 (website tích điểm, màn hình ERP còn thiếu, thuế TNCN 2026) | ✅ Xong, đã merge (PR #4) |
 | **Audit nghiệp vụ & đồng bộ luồng** | ⚠️ Xong audit (PR #5, `docs/audit/`) — đánh giá **~7/10, chưa sẵn sàng chạy thật**; ~81 phát hiện (1 nghiêm trọng, ~15 cao); **cả 3 nhóm lỗi nghiêm trọng/cao + 9 lỗi tiền/lương đã sửa**, có màn Cài đặt; còn 45 lỗi trung bình/thấp (mục 3.0) |
 | **Bản demo trên tên miền riêng** | ✅ ERP `https://huumanh.noxelis.co`, website `https://huumanhfruit.noxelis.co` (deploy bằng tag `demo-*` tạo trên GitHub); tài khoản `chu`, `admin` (mật khẩu giao riêng) |
-| **Giao diện PC** | ⏸ **Đang dở** — bước 1 (khung, Tổng quan, bộ kit danh sách, Đơn hàng) đã gộp; bước 2 (≈35 màn còn lại) ở nhánh `ux-2b`, `ux-2c` chưa kiểm thử — xem `docs/WIP-UX-PC.md` |
+| **Giao diện PC** | ✅ Bước 1 đã gộp; bước 2B + 2C (≈46 màn) xong, đã rà ảnh 1920/1440/390, 10/10 E2E đạt — xem `docs/WIP-UX-PC.md` |
 | Kiểm thử | ✅ 642 unit/integration test (workerd + D1 thật), 10 kịch bản E2E Playwright đạt trên DB mới |
 | CI (GitHub Actions) | ✅ typecheck, test, `npm audit`, gitleaks; job deploy demo/staging/production |
 | D1 `huu-manh-erp` | ✅ Đã tạo (APAC), áp migration 0001–0004 + dữ liệu demo. Migration 0001–0020 đã áp trên D1 demo — job deploy sẽ tự áp |
@@ -72,8 +72,8 @@ Audit 24/11/2026 (3 mảng, có probe test tái hiện). Lõi bán hàng/B2B/ph�
 
 Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạng thái sửa) xử lý trong tuần chạy song song. Script khôi phục từ R2 (`scripts/restore-from-r2.mjs`) **phải chạy thử một lần trên D1 staging** trước go-live.
 
-### 3.0b Việc đang dở — giao diện PC
-Xem **`docs/WIP-UX-PC.md`**: bước 1 xong; nhánh `ux-2b` (bán hàng/kho/sỉ/online) và `ux-2c` (tài chính/nhân sự/quản trị) đã có code, tsc sạch, nhưng **chưa chạy vitest/e2e/rà ảnh** — người tiếp nhận rebase lên `main`, hoàn tất checklist rồi mở PR.
+### 3.0b Giao diện PC
+Đã xong (xem **`docs/WIP-UX-PC.md`**). Quyết định 25/11/2026: quản lý được xem **tổng** chi lương trong báo cáo lãi lỗ/dòng tiền; lương từng người chỉ chủ + kế toán.
 
 ### 3.1 Hạ tầng / deploy (việc cần làm ngay)
 1. **Deploy production** 2 Worker (`huu-manh-erp`, `huu-manh-shop`) với D1/R2 production mới — GitHub Secrets đã có token; làm theo `docs/GO-LIVE.md` bước 1–2.

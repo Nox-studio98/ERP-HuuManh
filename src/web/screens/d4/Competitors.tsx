@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Field, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, when } from "../../components/ui";
 import { toast } from "../../components/toast";
+import { ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { fmtDate, fmtDateTime, money, todayVN } from "../../format";
 import { useCan } from "../../store";
 import { Group, ProductPicker, Tile, diffText, downloadCsv, useCatalog, type Prod } from "./shared";
@@ -15,7 +16,8 @@ export default function Competitors() {
   const alerts = useAsync(() => get("/price-alerts", { acked: 0 }, { silent: true }).then((r) => items<any>(r).length).catch(() => 0), [tab]);
   return (
     <div className="stack d4">
-      <Segmented wrap value={tab} onChange={setTab} options={[
+      <PageHeader subtitle="Theo dõi giá đối thủ, ghép sản phẩm và gợi ý điều chỉnh giá bán" />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[
         { v: "cmp", label: "So sánh giá" }, { v: "match", label: "Ghép sản phẩm" }, { v: "src", label: "Nguồn & thu thập" }, { v: "manual", label: "Nhập giá" },
         { v: "alert", label: `Cảnh báo${alerts.data ? ` (${alerts.data})` : ""}` }, { v: "sug", label: "Gợi ý giá" }]} />
       {tab === "cmp" && <Comparison />}
@@ -44,19 +46,27 @@ function Comparison() {
   const cheaperN = rows.filter((r) => (r.diffAvgBp ?? 0) < -300).length;
   return (
     <div className="stack">
-      <div className="tiles"><Tile label="Mặt hàng có dữ liệu" value={rows.length} /><Tile label="Ta đắt hơn TB thị trường" value={dearer} tone={dearer ? "danger" : undefined} /><Tile label="Ta rẻ hơn TB" value={cheaperN} tone="ok" /><Tile label="Rẻ hơn mức thấp nhất" value={rows.filter((r) => (r.diffMinBp ?? 0) < 0).length} /></div>
-      <div className="grid2">
-        <Select label="Nhóm hàng" value={groupId} onChange={(e) => setGroupId(e.target.value)}><option value="">Tất cả nhóm</option>{cat.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
-        <Input label="Tìm sản phẩm" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-      <label className="row"><input type="checkbox" checked={cheaper} onChange={(e) => setCheaper(e.target.checked)} />Chỉ hiện hàng đối thủ đang bán rẻ hơn ta</label>
+      <KpiRow items={[
+        { label: "Mặt hàng có dữ liệu", value: rows.length }, { label: "Ta đắt hơn TB thị trường", value: dearer, tone: dearer ? "danger" : undefined },
+        { label: "Ta rẻ hơn TB", value: cheaperN, tone: "ok" }, { label: "Rẻ hơn mức thấp nhất", value: rows.filter((r) => (r.diffMinBp ?? 0) < 0).length },
+      ]} />
+      <FilterBar dirty={!!(groupId || q || cheaper)} onReset={() => { setGroupId(""); setQ(""); setCheaper(false); }} activeCount={groupId ? 1 : 0}
+        advanced={<FilterSelect label="Nhóm hàng" value={groupId} onChange={setGroupId} allLabel="Tất cả nhóm" options={cat.groups.map((g) => ({ v: String(g.id), label: g.name }))} />}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên sản phẩm…" label="Tìm sản phẩm" />
+        <label className="row" style={{ minHeight: 40 }}><input type="checkbox" checked={cheaper} onChange={(e) => setCheaper(e.target.checked)} />Chỉ hiện hàng đối thủ đang bán rẻ hơn ta</label>
+        <ExportButton className="fb-end" filename="so-sanh-gia" rows={rows} columns={[
+          { label: "Sản phẩm", value: (r) => r.name }, { label: "Giá ta", value: (r) => r.ourPrice }, { label: "Thấp nhất thị trường", value: (r) => r.marketMin }, { label: "Trung bình thị trường", value: (r) => r.marketAvg },
+          { label: "Chênh so TB (%)", value: (r) => (r.diffAvgBp == null ? "" : r.diffAvgBp / 100) }, { label: "Cập nhật", value: (r) => fmtDateTime(r.latestObservedAt) },
+        ]} />
+      </FilterBar>
       {cmp.loading ? <Spinner /> : (
-        <DataTable rows={rows} rowKey={(r) => r.productId} onRowClick={setOpen} empty="Chưa có giá đối thủ đã ghép sản phẩm (dữ liệu trong 7 ngày gần đây)" cols={[
-          { key: "n", label: "Sản phẩm", title: true, render: (r) => <b>{r.name}</b> },
-          { key: "o", label: "Giá ta", right: true, render: (r) => money(r.ourPrice) },
-          { key: "mn", label: "Thấp nhất", right: true, render: (r) => <span>{money(r.marketMin)} <span className={"diff " + diffTone(r.diffMinBp)}>{diffText(r.diffMinBp)}</span></span> },
-          { key: "av", label: "Trung bình", right: true, render: (r) => <span>{money(r.marketAvg)} <span className={"diff " + diffTone(r.diffAvgBp)}>{diffText(r.diffAvgBp)}</span></span> },
-          { key: "d", label: "Cập nhật", render: (r) => <span className={ageDays(r.latestObservedAt) >= 3 ? "diff up" : ""}>{fmtDateTime(r.latestObservedAt)}</span> },
+        <DataTable rows={rows} rowKey={(r) => r.productId} onRowClick={setOpen}
+          emptyState={<EmptyState title="Chưa có giá đối thủ đã ghép sản phẩm" hint="Dữ liệu trong 7 ngày gần đây. Thêm nguồn thu thập, nhập giá thủ công và duyệt ghép sản phẩm để so sánh." />} cols={[
+          { key: "n", label: "Sản phẩm", title: true, sort: (r) => r.name, render: (r) => <b>{r.name}</b> },
+          { key: "o", label: "Giá ta", num: true, sort: (r) => r.ourPrice, render: (r) => money(r.ourPrice) },
+          { key: "mn", label: "Thấp nhất", num: true, sort: (r) => r.marketMin, render: (r) => <span>{money(r.marketMin)} <span className={"diff " + diffTone(r.diffMinBp)}>{diffText(r.diffMinBp)}</span></span> },
+          { key: "av", label: "Trung bình", num: true, sort: (r) => r.marketAvg, render: (r) => <span>{money(r.marketAvg)} <span className={"diff " + diffTone(r.diffAvgBp)}>{diffText(r.diffAvgBp)}</span></span> },
+          { key: "d", label: "Cập nhật", sort: (r) => r.latestObservedAt, render: (r) => <span className={ageDays(r.latestObservedAt) >= 3 ? "diff up" : ""}>{fmtDateTime(r.latestObservedAt)}</span> },
         ]} />
       )}
       <div className="hint">Đỏ = giá ta cao hơn thị trường quá 3%, xanh = thấp hơn quá 3%. Chỉ tính quan sát trong 7 ngày và đã duyệt ghép sản phẩm; giá đã quy về đơn vị chính (₫/kg hoặc ₫/trái).</div>

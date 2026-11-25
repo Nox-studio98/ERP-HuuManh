@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, get, items, post, put } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { toast } from "../../components/toast";
+import { ExportButton, FilterBar, KpiRow, PageHeader, SearchInput } from "../../components/list";
 import { METHODS, fmtDate, money, qtyText, todayVN, unitLabel } from "../../format";
 import { useCan } from "../../store";
 import { ProductPicker, Tile, useCatalog, type Prod } from "./shared";
@@ -11,7 +12,8 @@ export default function Bundles() {
   const [tab, setTab] = useState<"basket" | "assemble" | "pre">("basket");
   return (
     <div className="stack d4">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "basket", label: "Thành phần" }, { v: "assemble", label: "Đóng giỏ" }, { v: "pre", label: "Đặt trước" }]} />
+      <PageHeader subtitle="Giỏ quà: khai báo thành phần, đóng giỏ từ kho và đơn đặt trước có tiền cọc" />
+      <Segmented className="tabs-d" value={tab} onChange={setTab} options={[{ v: "basket", label: "Thành phần" }, { v: "assemble", label: "Đóng giỏ" }, { v: "pre", label: "Đặt trước" }]} />
       {tab === "basket" && <Components canWrite={can("products.write")} />}
       {tab === "assemble" && <Assembly canWrite={can("inventory.write")} />}
       {tab === "pre" && <Preorders />}
@@ -54,8 +56,19 @@ function Components({ canWrite }: { canWrite: boolean }) {
     try { await put(`/bundles/${pid}/components`, { components: cmps.map((c) => ({ productId: c.productId, qty: c.qty })) }); toast("Đã lưu thành phần giỏ quà", "ok"); setDirty(false); } catch {} finally { setBusy(false); }
   };
   return (
-    <div className="stack">
+    <div className="two-col">
+      <div className="stack">
       <BasketSelect value={pid} onChange={setPid} />
+      <Card title="Giá vốn & biên lợi nhuận">
+        <div className="totals">
+          <div><span className="muted">Giá vốn thành phần / giỏ</span><span className="money">{money(cost)}</span></div>
+          {basket?.price ? <div><span className="muted">Giá bán giỏ</span><span className="money">{money(basket.price)}</span></div> : null}
+          {basket?.price && cost > 0 ? <div><span className="muted">Biên gộp ước tính (chưa tính bao bì)</span><span>{Math.round(((basket.price - cost) * 100) / basket.price)}%</span></div> : null}
+        </div>
+        {canWrite && <div style={{ marginTop: 12 }}><Button block loading={busy} disabled={!dirty || cmps.some((c) => c.qty <= 0)} onClick={save}>Lưu thành phần</Button></div>}
+        {!canWrite && <div className="hint">Cần quyền sửa hàng hoá để đổi thành phần.</div>}
+      </Card>
+      </div>
       <Card title="Thành phần cho 1 giỏ" actions={canWrite && <Button size="sm" variant="soft" onClick={() => setPick(true)}>+ Thêm</Button>}>
         {load.loading ? <Spinner /> : cmps.length === 0 ? <EmptyState title="Chưa khai báo thành phần" hint="Thêm các loại trái cây/hàng đóng gói cấu thành giỏ quà." /> : (
           <div>
@@ -63,7 +76,7 @@ function Components({ canWrite }: { canWrite: boolean }) {
               const p = cat.byId.get(c.productId);
               return (
                 <div className="li" key={c.productId}>
-                  <div className="t"><b>{p?.name ?? "SP #" + c.productId}</b><span className="small muted">Tồn {qtyText(p?.availableMilli, p?.baseUnit)} · vốn ~{money(p?.avgCost)}/{p ? unitLabel(p.baseUnit) : ""}</span></div>
+                  <div className="t"><b>{p?.name ?? "SP #" + c.productId}</b><span className="small muted">Tồn {qtyText(p?.availableMilli, p?.baseUnit)}{p?.avgCost ? <> · vốn ~{money(p.avgCost)}/{unitLabel(p.baseUnit)}</> : " · chưa có giá vốn"}</span></div>
                   {canWrite ? <input className="input num" style={{ width: 80 }} aria-label={`Số lượng ${p?.name}`} inputMode="decimal" value={c.qty} onChange={(e) => { setDirty(true); setCmps((x) => x.map((y, j) => (j === i ? { ...y, qty: Number(e.target.value.replace(",", ".")) || 0 } : y))); }} /> : <b>{c.qty}</b>}
                   <span className="muted">{p ? unitLabel(p.baseUnit) : ""}</span>
                   {canWrite && <Button size="sm" variant="ghost" aria-label={`Bỏ ${p?.name}`} onClick={() => { setDirty(true); setCmps((x) => x.filter((_, j) => j !== i)); }}>✕</Button>}
@@ -72,13 +85,6 @@ function Components({ canWrite }: { canWrite: boolean }) {
             })}
           </div>
         )}
-        <div className="totals" style={{ marginTop: 8 }}>
-          <div><span className="muted">Giá vốn thành phần / giỏ</span><span className="money">{money(cost)}</span></div>
-          {basket?.price ? <div><span className="muted">Giá bán giỏ</span><span className="money">{money(basket.price)}</span></div> : null}
-          {basket?.price && cost > 0 ? <div><span className="muted">Biên gộp ước tính (chưa tính bao bì)</span><span>{Math.round(((basket.price - cost) * 100) / basket.price)}%</span></div> : null}
-        </div>
-        {canWrite && <div style={{ marginTop: 12 }}><Button block loading={busy} disabled={!dirty || cmps.some((c) => c.qty <= 0)} onClick={save}>Lưu thành phần</Button></div>}
-        {!canWrite && <div className="hint">Cần quyền sửa hàng hoá để đổi thành phần.</div>}
       </Card>
       <ProductPicker open={pick} onClose={() => setPick(false)} onPick={(p) => { if (p.id !== pid && !cmps.some((c) => c.productId === p.id)) { setCmps((x) => [...x, { productId: p.id, qty: 1 }]); setDirty(true); } }} />
     </div>
@@ -112,7 +118,8 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
     } catch (e) { if (e instanceof ApiError) setErr(e.code === "insufficient_stock" ? "Không đủ tồn thành phần để đóng giỏ." : e.message); } finally { setBusy(false); }
   };
   return (
-    <div className="stack">
+    <div className="two-col">
+      <div className="stack">
       <BasketSelect value={pid} onChange={(v) => { setPid(v); setDone(null); }} />
       <Card title="Lệnh đóng giỏ">
         <div className="stack">
@@ -133,6 +140,8 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
           {!canWrite && <div className="hint">Cần quyền ghi kho để đóng giỏ.</div>}
         </div>
       </Card>
+      </div>
+      <div className="stack">
       {done && (
         <Banner tone="info">Đã đóng giỏ <b>{done.code}</b>: {qtyText(done.qtyMilli)} × {done.productName}, giá vốn {money(done.unitCost)}/giỏ{done.expiresAt ? `, hạn ${fmtDate(done.expiresAt)}` : ""}. Tồn giỏ quà đã tăng.</Banner>
       )}
@@ -144,6 +153,7 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
           { key: "s", label: "Trạng thái", render: (a) => <Badge tone={a.status === "posted" ? "ok" : "danger"}>{a.status === "posted" ? "Đã ghi sổ" : "Không ghi được"}</Badge> },
         ]} />}
       </Card>
+      </div>
     </div>
   );
 }
@@ -153,21 +163,31 @@ const PRE_STATUS: Record<string, { l: string; t?: "ok" | "warn" | "danger" }> = 
 const DEP: Record<string, string> = { held: "Đang giữ cọc", applied: "Đã trừ vào đơn", refunded: "Đã hoàn cọc", forfeited: "Mất cọc" };
 
 function Preorders() {
-  const [st, setSt] = useState("confirmed");
+  const [st, setSt] = useState("confirmed"), [q, setQ] = useState("");
   const list = useAsync(() => get("/pos/preorders", { status: st }).then((r) => items<any>(r)), [st]);
   const [create, setCreate] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const all = list.data ?? [];
+  const rows = all.filter((o) => !q.trim() || `${o.code} ${o.customerName ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const held = rows.reduce((a, o) => a + (o.depositStatus === "held" ? o.depositAmount ?? 0 : 0), 0);
   return (
     <div className="stack">
-      <div className="row between wrap">
+      <FilterBar dirty={!!q} onReset={() => setQ("")}>
         <div className="chips" role="group" aria-label="Trạng thái">{[["confirmed", "Chờ giao"], ["completed", "Đã giao"], ["cancelled", "Đã huỷ"]].map(([v, l]) => <button key={v} className="chip" aria-pressed={st === v} onClick={() => setSt(v)}>{l}</button>)}</div>
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã đơn, tên khách…" label="Tìm đơn đặt trước" />
+        <ExportButton className="fb-end" filename="don-dat-truoc" rows={rows} columns={[{ label: "Đơn", value: (o) => o.code }, { label: "Khách", value: (o) => o.customerName }, { label: "Ngày lấy", value: (o) => fmtDate(o.pickupDate) }, { label: "Tổng", value: (o) => o.total }, { label: "Tiền cọc", value: (o) => o.depositAmount }, { label: "Trạng thái", value: (o) => PRE_STATUS[o.status]?.l ?? o.status }]} />
         <Button onClick={() => setCreate(true)}>+ Đơn đặt trước</Button>
-      </div>
-      {list.loading ? <Spinner /> : <DataTable rows={list.data ?? []} rowKey={(o) => o.id} onRowClick={(o) => setOpen(o.id)} empty="Chưa có đơn đặt trước" cols={[
-        { key: "c", label: "Đơn", title: true, render: (o) => <span><b>{o.code}</b><div className="small muted">{o.customerName ?? "Khách lẻ"}</div></span> },
-        { key: "d", label: "Ngày lấy", render: (o) => fmtDate(o.pickupDate) },
-        { key: "t", label: "Tổng", right: true, render: (o) => money(o.total) },
-        { key: "dp", label: "Tiền cọc", right: true, render: (o) => (o.depositAmount != null ? `${money(o.depositAmount)} · ${DEP[o.depositStatus] ?? o.depositStatus}` : "—") },
+      </FilterBar>
+      <KpiRow cols={3} items={[
+        { label: "Số đơn", value: rows.length }, { label: "Tổng giá trị", value: money(rows.reduce((a, o) => a + (o.total ?? 0), 0)) },
+        { label: "Cọc đang giữ", value: money(held), tone: held ? "warn" : undefined },
+      ]} />
+      {list.loading ? <Spinner /> : <DataTable rows={rows} rowKey={(o) => o.id} onRowClick={(o) => setOpen(o.id)}
+        emptyState={<EmptyState title="Chưa có đơn đặt trước" hint="Đơn đặt trước (kèm tiền cọc) cho giỏ quà, hàng Tết…" action={<div className="row wrap" style={{ justifyContent: "center" }}>{q && <Button variant="soft" onClick={() => setQ("")}>Xoá lọc</Button>}<Button onClick={() => setCreate(true)}>+ Đơn đặt trước</Button></div>} />} cols={[
+        { key: "c", label: "Đơn", title: true, sort: (o) => o.code, render: (o) => <span><b>{o.code}</b><div className="small muted">{o.customerName ?? "Khách lẻ"}</div></span> },
+        { key: "d", label: "Ngày lấy", sort: (o) => o.pickupDate ?? "", render: (o) => fmtDate(o.pickupDate) },
+        { key: "t", label: "Tổng", num: true, sort: (o) => o.total, render: (o) => money(o.total) },
+        { key: "dp", label: "Tiền cọc", num: true, sort: (o) => o.depositAmount ?? 0, render: (o) => (o.depositAmount != null ? `${money(o.depositAmount)} · ${DEP[o.depositStatus] ?? o.depositStatus}` : "—") },
         { key: "s", label: "Trạng thái", render: (o) => <Badge tone={PRE_STATUS[o.status]?.t}>{PRE_STATUS[o.status]?.l ?? o.status}</Badge> },
       ]} />}
       {create && <PreorderForm onClose={() => setCreate(false)} onSaved={(id) => { setCreate(false); setSt("confirmed"); list.reload(); setOpen(id); }} />}

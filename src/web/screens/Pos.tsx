@@ -4,10 +4,10 @@ import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, MoneyInput, N
 import { Scanner } from "../components/Scanner";
 import { Receipt } from "../components/Receipt";
 import { toast } from "../components/toast";
-import { METHODS, money, qtyText, unitLabel, uuid, withShown } from "../format";
+import { METHODS, fmtDate, fmtDateTime, fmtTime, money, qtyText, unitLabel, uuid, withShown } from "../format";
 import { enqueue, useQueue, syncQueue } from "../offline";
 import { navigate } from "../router";
-import { useCan } from "../store";
+import { useAuth, useCan } from "../store";
 import { reasonText } from "./d4/voucher-text";
 
 export type Unit = { unit: string; factorMilli: number; barcode?: string };
@@ -35,16 +35,44 @@ export default function Pos() {
 
 function OpenShift({ onOpened, allowed }: { onOpened: () => void; allowed: boolean }) {
   const [cash, setCash] = useState(0), [busy, setBusy] = useState(false);
+  const auth = useAuth();
+  const last = useAsync(async () => { try { return (await get("/shifts/last", undefined, { silent: true }))?.shift ?? null; } catch { return null; } }, []);
+  const l = last.data;
+  const open = async () => { setBusy(true); try { await post("/shifts/open", { openingCash: cash }); toast("Đã mở ca", "ok"); window.dispatchEvent(new Event("hm:shift")); onOpened(); } catch {} finally { setBusy(false); } };
   return (
-    <div style={{ maxWidth: 440, margin: "0 auto" }}>
-      <Card title="Mở ca bán hàng">
+    <div className="hero-panel">
+      <div className="hero-grid">
+        <Card className="hero-main">
+          <div className="stack">
+            <div>
+              <h2 style={{ margin: 0, fontSize: "1.35rem" }}>Mở ca bán hàng</h2>
+              <div className="muted">{auth.user?.storeName ? `${auth.user.storeName} · ` : ""}{auth.user?.fullName ?? ""} · {fmtDate(new Date().toISOString())}</div>
+            </div>
+            <div className="muted">Chưa có ca đang mở. Đếm tiền mặt đầu ca trong két và nhập vào để bắt đầu bán hàng.</div>
+            <MoneyInput label="Tiền đầu ca (₫)" value={cash} onChange={setCash} hint={l ? `Gợi ý: ca trước kiểm đếm ${money(l.countedCash)}` : undefined} />
+            {l && l.countedCash > 0 && cash !== l.countedCash && <div><Button size="sm" variant="soft" onClick={() => setCash(l.countedCash)}>Dùng số tiền ca trước ({money(l.countedCash)})</Button></div>}
+            <Button size="lg" block loading={busy} disabled={!allowed} onClick={open}>Mở ca</Button>
+            {!allowed && <div className="err">Bạn không có quyền mở ca.</div>}
+          </div>
+        </Card>
         <div className="stack">
-          <div className="muted">Chưa có ca đang mở. Nhập tiền mặt đầu ca trong két để bắt đầu bán hàng.</div>
-          <MoneyInput label="Tiền đầu ca (₫)" value={cash} onChange={setCash} />
-          <Button size="lg" block loading={busy} disabled={!allowed} onClick={async () => { setBusy(true); try { await post("/shifts/open", { openingCash: cash }); toast("Đã mở ca", "ok"); onOpened(); } catch {} finally { setBusy(false); } }}>Mở ca</Button>
-          {!allowed && <div className="err">Bạn không có quyền mở ca.</div>}
+          <Card title="Ca gần nhất của bạn">
+            {last.loading ? <Spinner /> : !l ? <div className="muted">Chưa có ca nào đã chốt. Ca đầu tiên sẽ hiện tổng kết ở đây.</div> : (
+              <div className="stack">
+                <div className="muted small">Ca #{l.id} · {fmtDateTime(l.openedAt)} → {fmtTime(l.closedAt)}</div>
+                <div className="grid2">
+                  <div className="kpi"><div className="l">Doanh thu</div><div className="v">{money(l.revenue)}</div><div className="s small muted">{l.orderCount} đơn</div></div>
+                  <div className="kpi"><div className="l">Tiền kiểm đếm</div><div className="v">{money(l.countedCash)}</div><div className="s small muted">đầu ca {money(l.openingCash)}</div></div>
+                </div>
+                <div className={"banner " + (l.diffCash ? "" : "info")}>{l.diffCash ? `Chênh lệch ${l.diffCash > 0 ? "thừa" : "thiếu"} ${money(Math.abs(l.diffCash))}` : "Khớp tiền, không chênh lệch."}</div>
+              </div>
+            )}
+          </Card>
+          <Card title="Phím tắt khi bán hàng">
+            <div className="kbd-list"><span><kbd>F2</kbd> Tìm sản phẩm</span><span><kbd>F4</kbd> Quét mã</span><span><kbd>F9</kbd> Thanh toán</span><span><kbd>Esc</kbd> Đóng hộp thoại</span></div>
+          </Card>
         </div>
-      </Card>
+      </div>
     </div>
   );
 }
@@ -66,9 +94,22 @@ function Sell({ shift }: { shift: any }) {
   const [checkout, setCheckout] = useState(false);
   const [receipt, setReceipt] = useState<{ order: any; names: Record<number, string> } | null>(null);
   const queue = useQueue();
+  const totalRef = useRef(0);
+
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (document.querySelector(".sheet-back")) return;
+      if (e.key === "F2") { e.preventDefault(); (document.querySelector("[data-pos-search]") as HTMLInputElement | null)?.focus(); }
+      else if (e.key === "F4") { e.preventDefault(); setScan(true); }
+      else if (e.key === "F9" && totalRef.current > 0) { e.preventDefault(); setCheckout(true); }
+    };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, []);
 
   const subtotal = useMemo(() => lines.reduce((s, l) => s + Math.round(l.qty * unitPrice(l.product, l.unit)) - l.discount, 0), [lines]);
   const total = Math.max(0, subtotal - discount);
+  totalRef.current = total;
   const count = lines.length;
 
   const add = (p: Product, unit?: string, qty?: number) => {
@@ -104,8 +145,8 @@ function Sell({ shift }: { shift: any }) {
     <div className={"pos" + (view === "cart" ? " show-cart" : "")}>
       <div className="pos-products stack">
         <div className="row">
-          <div className="grow"><Input label="Tìm sản phẩm" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hoặc mã…" /></div>
-          <Button variant="soft" style={{ alignSelf: "flex-end" }} onClick={() => setScan(true)}>Quét mã</Button>
+          <div className="grow"><Input label="Tìm sản phẩm" type="search" data-pos-search value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hoặc mã…  (F2)" /></div>
+          <Button variant="soft" style={{ alignSelf: "flex-end" }} onClick={() => setScan(true)}>Quét mã<span className="kbd-hint"> F4</span></Button>
         </div>
         {queue.length > 0 && <div className="banner">Có {queue.length} đơn chờ đồng bộ. <Button size="sm" variant="ghost" onClick={() => syncQueue(true)}>Đồng bộ ngay</Button></div>}
         {prods.loading ? <Spinner /> : !prods.data?.length ? <EmptyState title="Không có sản phẩm" hint="Thử từ khoá khác hoặc quét mã." /> : (
@@ -161,7 +202,7 @@ function Sell({ shift }: { shift: any }) {
                   {discount > 0 && <div><span className="muted">Giảm giá</span><span className="money">-{money(discount)}</span></div>}
                   <div className="grand"><span>Tổng</span><span className="money">{money(total)}</span></div>
                 </div>
-                <Button size="lg" block disabled={total <= 0} onClick={() => setCheckout(true)}>Thanh toán {money(total)}</Button>
+                <Button size="lg" block disabled={total <= 0} onClick={() => setCheckout(true)}>Thanh toán {money(total)}<span className="kbd-hint"> F9</span></Button>
               </div>
             </>
           )}

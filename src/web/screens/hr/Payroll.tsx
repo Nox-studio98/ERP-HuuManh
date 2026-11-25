@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ApiError, get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, useAsync } from "../../components/ui";
 import { BarChart } from "../../components/charts";
+import { DetailPanel, ExportButton, FilterBar, KpiRow, PageHeader, SearchInput, SplitLayout, useWide } from "../../components/list";
 import { toast } from "../../components/toast";
 import { downloadHref, money } from "../../format";
 import { navigate } from "../../router";
@@ -19,7 +20,8 @@ function Inner() {
   const [period, setPeriod] = useState<string | null>(null);
   return (
     <div className="stack">
-      <Segmented value={tab} onChange={setTab} options={[{ v: "periods", label: "Kỳ lương" }, { v: "entries", label: "Thưởng / phạt" }, { v: "advances", label: "Tạm ứng" }, { v: "cost", label: "Chi phí nhân sự" }]} />
+      <PageHeader subtitle={tab === "periods" ? (period ? "Chi tiết kỳ lương — bấm một nhân viên để xem phiếu lương" : "Các kỳ lương đã tính — bấm một kỳ để xem phiếu lương") : tab === "entries" ? "Thưởng, phạt, điều chỉnh theo kỳ" : tab === "advances" ? "Tạm ứng lương đã chi" : "Chi phí nhân sự theo tháng và vị trí"} />
+      <Segmented fit value={tab} onChange={setTab} options={[{ v: "periods", label: "Kỳ lương" }, { v: "entries", label: "Thưởng / phạt" }, { v: "advances", label: "Tạm ứng" }, { v: "cost", label: "Chi phí nhân sự" }]} />
       {tab === "periods" && (period ? <Detail period={period} onBack={() => setPeriod(null)} /> : <Periods onOpen={setPeriod} />)}
       {tab === "entries" && <Entries />}
       {tab === "advances" && <Advances />}
@@ -46,18 +48,18 @@ function Periods({ onOpen }: { onOpen: (p: string) => void }) {
       {can("payroll.write") && (
         <Card title="Tính lương kỳ mới">
           <div className="row wrap" style={{ alignItems: "flex-end" }}>
-            <div className="grow"><Input label="Kỳ lương" type="month" value={np} onChange={(e) => setNp(e.target.value)} /></div>
+            <div className="grow" style={{ maxWidth: 320 }}><Input label="Kỳ lương" type="month" value={np} onChange={(e) => setNp(e.target.value)} /></div>
             <Button loading={busy} disabled={!np} onClick={() => calc(np)} data-testid="calc-new">Tính lương</Button>
           </div>
           {open409 && <div style={{ marginTop: 8 }}><Banner>Bảng công {periodLabel(open409)} chưa chốt nên chưa tính lương được. <a href={`/hr/timesheets?period=${open409}`} onClick={(e) => { e.preventDefault(); navigate(`/hr/timesheets?period=${open409}`); }}>Mở bảng công để chốt</a></Banner></div>}
         </Card>
       )}
-      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có kỳ lương nào" hint="Chốt bảng công của một tháng rồi bấm Tính lương." /> : (
-        <div className="stack" data-testid="period-list">
+      {l.loading ? <Spinner /> : !(l.data ?? []).length ? <EmptyState title="Chưa có kỳ lương nào" hint="Chốt bảng công của một tháng rồi bấm Tính lương." action={<Button variant="soft" onClick={() => navigate("/hr/timesheets")}>Mở bảng công</Button>} /> : (
+        <div className="card-grid" data-testid="period-list">
           {l.data!.map((p) => (
             <button key={p.period} className="dt-card" onClick={() => onOpen(p.period)}>
               <div className="row between"><b>{periodLabel(p.period)}</b><Badge tone={periodTone(p.status)}>{PERIOD_STATUS[p.status] ?? p.status}</Badge></div>
-              <div className="row between small"><span className="muted">{p.employeeCount} nhân viên</span><span className="num">Thực lĩnh {money(p.totalNet)} · Chi phí {money(p.totalCost)}</span></div>
+              <div className="row between small wrap"><span className="muted nw">{p.employeeCount} nhân viên</span><span className="num">Thực lĩnh {money(p.totalNet)} · Chi phí {money(p.totalCost)}</span></div>
             </button>
           ))}
         </div>
@@ -83,6 +85,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
           {can("payroll.approve") && st === "calculated" && <Button size="sm" onClick={() => setAct("approve")} data-testid="approve">Duyệt bảng lương</Button>}
           {can("payroll.write") && st === "approved" && <Button size="sm" onClick={() => setAct("pay")} data-testid="pay">Chi lương</Button>}
           {can("payroll.write") && d && <a className="btn ghost sm" href={downloadHref(`/payroll/periods/${period}/export.xlsx`)} download>Xuất Excel</a>}
+          {d && <ExportButton filename={`luong-${period}`} rows={d.items} columns={[{ label: "Mã", value: (r: any) => r.code }, { label: "Nhân viên", value: (r: any) => r.name }, { label: "Lương", value: (r: any) => r.basePay }, { label: "Phụ cấp", value: (r: any) => r.allowances }, { label: "Tăng ca", value: (r: any) => r.overtimePay }, { label: "Tổng thu nhập", value: (r: any) => r.gross }, { label: "BH + thuế", value: (r: any) => r.insuranceEmployee + r.pit }, { label: "Tạm ứng", value: (r: any) => r.advances }, { label: "Thực lĩnh", value: (r: any) => r.net }]} />}
         </div>
       </div>
       <div className="row"><h2 style={{ margin: 0 }}>{periodLabel(period)}</h2>{st && <Badge tone={periodTone(st)}>{PERIOD_STATUS[st]}</Badge>}</div>
@@ -90,29 +93,30 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
       {d && d.items.some((x: any) => x.advancesCarried > 0) && <Banner>Có nhân viên không đủ thực lĩnh để trừ hết tạm ứng: phần còn lại tự chuyển sang kỳ lương kế tiếp khi chi lương (xem dòng "Tạm ứng chuyển kỳ sau" trên phiếu lương).</Banner>}
       {l.err && !d ? <EmptyState title="Chưa có bảng lương kỳ này" hint="Hãy tính lương cho kỳ này sau khi chốt bảng công." /> : l.loading ? <Spinner /> : d && (
         <>
-          <div className="kpis">
-            <div className="kpi"><div className="l">Tổng thu nhập</div><div className="v">{money(d.totals.gross)}</div></div>
-            <div className="kpi"><div className="l">Thực lĩnh</div><div className="v" data-testid="total-net">{money(d.totals.net)}</div></div>
-            <div className="kpi"><div className="l">BH + TNCN (NLĐ)</div><div className="v">{money(d.totals.insuranceEmployee + d.totals.pit)}</div></div>
-            <div className="kpi"><div className="l">Chi phí DN</div><div className="v">{money(d.totals.cost)}</div></div>
-          </div>
-          <DataTable<any> rows={d.items} rowKey={(r) => r.employeeId} onRowClick={setRow} empty="Kỳ này chưa có nhân viên"
+          <KpiRow items={[
+            { label: "Tổng thu nhập", value: money(d.totals.gross) },
+            { label: "Thực lĩnh", value: <span data-testid="total-net">{money(d.totals.net)}</span>, tone: "ok", sub: `${d.items.length} nhân viên` },
+            { label: "BH + TNCN (NLĐ)", value: money(d.totals.insuranceEmployee + d.totals.pit) },
+            { label: "Chi phí DN", value: money(d.totals.cost) },
+          ]} />
+          <SplitLayout open={!!row} panel={row ? <RowDetail r={row} onClose={() => setRow(null)} /> : null}>
+          <DataTable<any> rows={d.items} rowKey={(r) => r.employeeId} onRowClick={setRow} selectedKey={row?.employeeId} emptyState={<EmptyState title="Kỳ này chưa có nhân viên" />}
             cols={[
-              { key: "n", label: "Nhân viên (số tiền: ₫)", title: true, render: (r) => <b>{r.name} <span className="muted small">{r.code}</span></b> },
-              { key: "w", label: "Công", right: true, render: (r) => (r.payType === "shift" ? `${r.shifts} ca` : r.payType === "hourly" ? hm(r.workedMinutes) : `${days10(r.paidDaysX10)} ngày`) },
-              { key: "b", label: "Lương", right: true, hideMobile: true, render: (r) => M(r.basePay) },
-              { key: "a", label: "Phụ cấp", right: true, hideMobile: true, render: (r) => M(r.allowances) },
-              { key: "o", label: "Tăng ca", right: true, hideMobile: true, render: (r) => M(r.overtimePay) },
-              { key: "bn", label: "Thưởng/phạt", right: true, hideMobile: true, render: (r) => M(r.bonus + r.salesBonus - r.penalties + r.adjustments) },
-              { key: "g", label: "Tổng thu nhập", right: true, render: (r) => M(r.gross) },
-              { key: "i", label: "BH + thuế", right: true, hideMobile: true, render: (r) => M(r.insuranceEmployee + r.pit) },
-              { key: "ad", label: "Tạm ứng", right: true, hideMobile: true, render: (r) => M(r.advances) },
-              { key: "net", label: "Thực lĩnh", right: true, render: (r) => <b>{M(r.net)}</b> },
+              { key: "n", label: "Nhân viên (số tiền: ₫)", title: true, sort: (r) => r.name, render: (r) => <b>{r.name} <span className="muted small nw">{r.code}</span></b> },
+              { key: "w", label: "Công", num: true, render: (r) => (r.payType === "shift" ? `${r.shifts} ca` : r.payType === "hourly" ? hm(r.workedMinutes) : `${days10(r.paidDaysX10)} ngày`) },
+              { key: "b", label: "Lương", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => r.basePay, render: (r) => M(r.basePay) },
+              { key: "a", label: "Phụ cấp", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => r.allowances, render: (r) => M(r.allowances) },
+              { key: "o", label: "Tăng ca", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => r.overtimePay, render: (r) => M(r.overtimePay) },
+              { key: "bn", label: "Thưởng/phạt", num: true, hideMobile: true, hideBelow: 1440, sort: (r) => (r.bonus + r.salesBonus - r.penalties + r.adjustments), render: (r) => M(r.bonus + r.salesBonus - r.penalties + r.adjustments) },
+              { key: "g", label: "Tổng thu nhập", num: true, sort: (r) => r.gross, render: (r) => M(r.gross) },
+              { key: "i", label: "BH + thuế", num: true, hideMobile: true, hideBelow: 1280, sort: (r) => (r.insuranceEmployee + r.pit), render: (r) => M(r.insuranceEmployee + r.pit) },
+              { key: "ad", label: "Tạm ứng", num: true, hideMobile: true, hideBelow: 1280, sort: (r) => r.advances, render: (r) => M(r.advances) },
+              { key: "net", label: "Thực lĩnh", num: true, sort: (r) => r.net, render: (r) => <b>{M(r.net)}</b> },
             ]} />
+          </SplitLayout>
           <div className="hint">Công thức, mức bảo hiểm và biểu thuế là tham số cần chủ cửa hàng xác nhận.</div>
         </>
       )}
-      {row && <RowDetail r={row} onClose={() => setRow(null)} />}
       {act === "recalc" && <Confirm title="Tính lại bảng lương" confirmLabel="Tính lại" onClose={() => setAct(null)} onConfirm={async () => { try { await post(`/payroll/periods/${period}/calculate`, {}); toast("Đã tính lại", "ok"); setAct(null); l.reload(); } catch { setAct(null); } }}>Tính lại sẽ thay thế toàn bộ bảng lương nháp bằng dữ liệu mới nhất (công, thưởng/phạt, tạm ứng).</Confirm>}
       {act === "approve" && <Confirm title="Duyệt bảng lương" confirmLabel="Duyệt & khoá kỳ" onClose={() => setAct(null)} onConfirm={async () => { try { await post(`/payroll/periods/${period}/approve`, {}); toast("Đã duyệt bảng lương", "ok"); setAct(null); l.reload(); } catch { setAct(null); } }}>Sau khi duyệt, bảng lương bị khoá và nhân viên xem được phiếu lương. Tổng thực lĩnh: <b>{money(d?.totals.net)}</b>.</Confirm>}
       {act === "pay" && <PayForm period={period} total={d?.totals.net ?? 0} onClose={() => setAct(null)} onDone={() => { setAct(null); l.reload(); }} />}
@@ -122,7 +126,7 @@ function Detail({ period, onBack }: { period: string; onBack: () => void }) {
 const M = (n: number) => <span style={{ whiteSpace: "nowrap" }}>{moneyFmt(n)}</span>;
 function RowDetail({ r, onClose }: { r: any; onClose: () => void }) {
   return (
-    <Sheet open onClose={onClose} title={`${r.name} · ${PAY_TYPE[r.payType]}`}>
+    <DetailPanel onClose={onClose} title={`${r.name} · ${PAY_TYPE[r.payType]}`}>
       <div className="stack" data-testid="payroll-row">
         {(r.lines ?? []).map((x: any, i: number) => (
           <div key={i} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
@@ -132,7 +136,7 @@ function RowDetail({ r, onClose }: { r: any; onClose: () => void }) {
         ))}
         <div className="row between"><b>Thực lĩnh</b><b className="num">{money(r.net)}</b></div>
       </div>
-    </Sheet>
+    </DetailPanel>
   );
 }
 function PayForm({ period, total, onClose, onDone }: { period: string; total: number; onClose: () => void; onDone: () => void }) {
@@ -151,19 +155,27 @@ function PayForm({ period, total, onClose, onDone }: { period: string; total: nu
 
 /* ---------- thưởng / phạt ---------- */
 function Entries() {
-  const [period, setPeriod] = useState(thisPeriod());
+  const [period, setPeriod] = useState(thisPeriod()), [q, setQ] = useState("");
   const l = useAsync(() => get("/payroll/entries", { period }).then((r) => items<any>(r)), [period]);
   const emps = useAsync(() => get("/employees", { status: "active", limit: 200 }).then((r) => items<any>(r)), []);
   const [add, setAdd] = useState(false);
+  const all = l.data ?? [];
+  const rows = all.filter((r) => !q.trim() || String(r.employeeName).toLowerCase().includes(q.trim().toLowerCase()) || String(r.reason ?? "").toLowerCase().includes(q.trim().toLowerCase()));
+  const tot = (kinds: string[]) => all.filter((r) => kinds.includes(r.kind)).reduce((a, r) => a + r.amount, 0);
   return (
     <div className="stack">
-      <div className="row wrap between"><div style={{ maxWidth: 200 }}><Input label="Kỳ" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} /></div><Button onClick={() => setAdd(true)}>+ Thêm khoản</Button></div>
+      <FilterBar>
+        <Input label="Kỳ" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Nhân viên, lý do…" label="Tìm khoản" />
+        <span style={{ marginLeft: "auto" }} className="row"><ExportButton filename={`thuong-phat-${period}`} rows={rows} columns={[{ label: "Nhân viên", value: (r: any) => r.employeeName }, { label: "Loại", value: (r: any) => ENTRY_KIND[r.kind] }, { label: "Số tiền", value: (r: any) => r.amount }, { label: "Lý do", value: (r: any) => r.reason }]} /><Button size="sm" onClick={() => setAdd(true)}>+ Thêm khoản</Button></span>
+      </FilterBar>
+      {!l.loading && <KpiRow items={[{ label: "Số khoản", value: all.length }, { label: "Thưởng & phụ cấp", value: money(tot(["bonus", "allowance"])), tone: "ok" }, { label: "Phạt", value: money(tot(["penalty"])), tone: tot(["penalty"]) ? "danger" : undefined }, { label: "Điều chỉnh", value: money(tot(["adjustment"])) }]} />}
       {l.loading ? <Spinner /> : (
-        <DataTable<any> rows={l.data ?? []} rowKey={(r) => r.id} empty="Chưa có khoản thưởng/phạt nào trong kỳ"
+        <DataTable<any> rows={rows} rowKey={(r) => r.id} pageSize={50} emptyState={<EmptyState title="Chưa có khoản thưởng/phạt nào trong kỳ" action={<Button onClick={() => setAdd(true)}>+ Thêm khoản</Button>} />}
           cols={[
-            { key: "e", label: "Nhân viên", title: true, render: (r) => <b>{r.employeeName}</b> },
-            { key: "k", label: "Loại", render: (r) => <Badge tone={r.kind === "penalty" ? "danger" : r.kind === "adjustment" ? "info" : "ok"}>{ENTRY_KIND[r.kind]}</Badge> },
-            { key: "a", label: "Số tiền", right: true, render: (r) => money(r.amount) },
+            { key: "e", label: "Nhân viên", title: true, sort: (r) => r.employeeName, render: (r) => <b>{r.employeeName}</b> },
+            { key: "k", label: "Loại", sort: (r) => r.kind, render: (r) => <Badge tone={r.kind === "penalty" ? "danger" : r.kind === "adjustment" ? "info" : "ok"}>{ENTRY_KIND[r.kind]}</Badge> },
+            { key: "a", label: "Số tiền", num: true, sort: (r) => r.amount, render: (r) => money(r.amount) },
             { key: "r", label: "Lý do", render: (r) => r.reason },
           ]} />
       )}
@@ -201,12 +213,12 @@ function Advances() {
   const [add, setAdd] = useState(false);
   return (
     <div className="stack">
-      <div className="row"><Button onClick={() => setAdd(true)}>+ Tạm ứng lương</Button></div>
+      <div className="row between wrap"><span className="muted">{(l.data ?? []).length} khoản · chưa khấu trừ {money((l.data ?? []).filter((r: any) => r.status === "paid").reduce((a: number, r: any) => a + r.amount, 0))}</span><span className="row"><ExportButton filename="tam-ung-luong" rows={l.data ?? []} columns={[{ label: "Nhân viên", value: (r: any) => r.employeeName }, { label: "Số tiền", value: (r: any) => r.amount }, { label: "Ngày ứng", value: (r: any) => r.advanceDate }, { label: "Khấu trừ kỳ", value: (r: any) => r.deductPeriod }, { label: "Trạng thái", value: (r: any) => ADV_STATUS[r.status] ?? r.status }]} /><Button size="sm" onClick={() => setAdd(true)}>+ Tạm ứng lương</Button></span></div>
       {l.loading ? <Spinner /> : (
-        <DataTable<any> rows={l.data ?? []} rowKey={(r) => r.id} empty="Chưa có khoản tạm ứng"
+        <DataTable<any> rows={l.data ?? []} rowKey={(r) => r.id} pageSize={50} emptyState={<EmptyState title="Chưa có khoản tạm ứng" action={<Button onClick={() => setAdd(true)}>+ Tạm ứng lương</Button>} />}
           cols={[
-            { key: "e", label: "Nhân viên", title: true, render: (r) => <b>{r.employeeName}</b> },
-            { key: "a", label: "Số tiền", right: true, render: (r) => money(r.amount) },
+            { key: "e", label: "Nhân viên", title: true, sort: (r) => r.employeeName, render: (r) => <b>{r.employeeName}</b> },
+            { key: "a", label: "Số tiền", num: true, sort: (r) => r.amount, render: (r) => money(r.amount) },
             { key: "d", label: "Ngày ứng", render: (r) => dmy(r.advanceDate) },
             { key: "p", label: "Khấu trừ kỳ", render: (r) => r.deductPeriod },
             { key: "v", label: "Phiếu chi", hideMobile: true, render: (r) => r.voucherCode },
@@ -238,22 +250,23 @@ function AdvForm({ emps, funds, onClose, onSaved }: { emps: any[]; funds: any[];
 
 /* ---------- chi phí ---------- */
 function Cost() {
+  const wide = useWide();
   const l = useAsync(() => get("/payroll/reports/cost"), []);
   if (l.loading) return <Spinner />;
   const d = l.data;
-  if (!d || !d.byMonth.length) return <EmptyState title="Chưa có dữ liệu chi phí" hint="Chi phí chỉ tính từ các kỳ lương đã duyệt hoặc đã chi." />;
+  if (!d || !d.byMonth.length) return <EmptyState title="Chưa có dữ liệu chi phí" hint="Chi phí chỉ tính từ các kỳ lương đã duyệt hoặc đã chi." action={<Button variant="soft" onClick={() => navigate("/hr/timesheets")}>Mở bảng công</Button>} />;
   return (
-    <div className="stack">
+    <div className="two-col wide-left">
       <Card title={`Chi phí nhân sự ${d.from} → ${d.to}`}>
-        <BarChart data={d.byMonth.map((m: any) => ({ label: m.period, value: m.cost }))} />
+        <BarChart width={wide ? 800 : 560} height={wide ? 240 : 180} maxBar={wide ? 56 : 44} data={d.byMonth.map((m: any) => ({ label: m.period, value: m.cost }))} />
         <div className="row between" style={{ marginTop: 8 }}><span className="muted">Tổng chi phí (gồm BH doanh nghiệp)</span><b className="num">{money(d.totals.cost)}</b></div>
       </Card>
       <Card title="Theo vị trí">
         <DataTable<any> rows={d.byPosition} rowKey={(r) => r.position} cols={[
           { key: "p", label: "Vị trí", title: true, render: (r) => <b>{r.position}</b> },
-          { key: "n", label: "Số NV", right: true, render: (r) => r.employees },
-          { key: "g", label: "Thu nhập", right: true, render: (r) => money(r.gross) },
-          { key: "c", label: "Chi phí", right: true, render: (r) => money(r.cost) },
+          { key: "n", label: "Số NV", num: true, render: (r) => r.employees },
+          { key: "g", label: "Thu nhập", num: true, render: (r) => money(r.gross) },
+          { key: "c", label: "Chi phí", num: true, render: (r) => money(r.cost) },
         ]} />
       </Card>
     </div>

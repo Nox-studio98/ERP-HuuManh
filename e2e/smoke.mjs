@@ -286,7 +286,7 @@ try {
   await go(o.page, "/finance");
   await o.page.getByRole("tab", { name: "Phiếu thu chi" }).click();
   const mkVoucher = async (cat, amount, who, note) => {
-    await o.page.getByRole("button", { name: "+ Lập phiếu" }).click();
+    await o.page.getByRole("button", { name: "+ Lập phiếu" }).first().click();
     const d = o.page.getByRole("dialog");
     await d.getByLabel("Hạng mục").selectOption({ label: cat });
     await d.getByLabel("Số tiền (₫)").fill(String(amount));
@@ -322,7 +322,7 @@ try {
   await o.page.locator(".card", { hasText: "Chi phí" }).first().waitFor();
   await shot(o.page, "bao-cao-m.png");
   for (const by of ["channel", "group"]) {
-    await o.page.getByLabel("Nhóm theo").selectOption(by);
+    await o.page.getByRole("tab", { name: by === "channel" ? "Theo kênh" : "Theo nhóm hàng" }).click();
     await o.page.locator(".dt-card").first().waitFor();
   }
   ok("nhóm theo ngày / kênh / nhóm hàng đều có dòng");

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { get, items, post, put } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout } from "../../components/list";
 import { toast } from "../../components/toast";
 import { money, ROLES, todayVN } from "../../format";
 import { useAuth, useCan } from "../../store";
@@ -12,36 +13,53 @@ export default function Employees() {
   const can = useCan();
   const sens = can("hr.sensitive"), manage = can("hr.manage");
   const [status, setStatus] = useState("active");
-  const [q, setQ] = useState("");
-  const dq = useDebounced(q, 250);
-  const l = useAsync(() => get("/employees", { status: status === "all" ? undefined : status, q: dq, limit: 200 }).then((r) => items<any>(r)), [status, dq]);
+  const [q, setQ] = useState(""), [pos, setPos] = useState(""), [pay, setPay] = useState("");
+  const l = useAsync(() => get("/employees", { status: status === "all" ? undefined : status, q, limit: 200 }).then((r) => items<any>(r)), [status, q]);
   const [sel, setSel] = useState<number | null>(null);
   const [lt, setLt] = useState(false);
   const [form, setForm] = useState<any>(null);
   const [temp, setTemp] = useState<{ username: string; password: string; name: string } | null>(null);
-  const rows = l.data ?? [];
+  const all = l.data ?? [];
+  const positions = [...new Set(all.map((r) => r.position).filter(Boolean))] as string[];
+  const rows = all.filter((r) => (!pos || r.position === pos) && (!pay || r.payType === pay));
+  const dirty = !!(q || pos || pay);
+  const reset = () => { setQ(""); setPos(""); setPay(""); };
+  const salary = (r: any) => (r.payType === "monthly" ? r.baseSalary : r.payType === "hourly" ? r.hourlyRate : r.shiftRate);
   return (
     <div className="stack">
-      <div className="row wrap between">
-        <Segmented value={status} onChange={setStatus} options={[{ v: "active", label: "Đang làm" }, { v: "terminated", label: "Đã nghỉ" }, { v: "all", label: "Tất cả" }]} />
-        <div className="row">{manage && <Button variant="soft" onClick={() => setLt(true)}>Loại nghỉ phép</Button>}{manage && <Button onClick={() => setForm({})}>+ Thêm nhân viên</Button>}</div>
-      </div>
-      <Input label="Tìm theo tên hoặc mã" value={q} onChange={(e) => setQ(e.target.value)} />
+      <PageHeader subtitle={l.loading ? "Đang tải…" : `${rows.length}/${all.length} nhân viên`} actions={<>
+        <ExportButton filename="nhan-vien" rows={rows} columns={[{ label: "Mã", value: (r: any) => r.code }, { label: "Họ tên", value: (r: any) => r.fullName }, { label: "Vị trí", value: (r: any) => r.position }, { label: "Hình thức", value: (r: any) => PAY_TYPE[r.payType] ?? r.payType }, ...(sens ? [{ label: "Lương", value: salary }] : []), { label: "Tài khoản", value: (r: any) => r.username }, { label: "Trạng thái", value: (r: any) => EMP_STATUS[r.status] ?? r.status }]} />
+        {manage && <Button size="sm" variant="soft" onClick={() => setLt(true)}>Loại nghỉ phép</Button>}{manage && <Button size="sm" onClick={() => setForm({})}>+ Thêm nhân viên</Button>}</>} />
+      <Segmented fit value={status} onChange={setStatus} options={[{ v: "active", label: "Đang làm" }, { v: "terminated", label: "Đã nghỉ" }, { v: "all", label: "Tất cả" }]} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[pos, pay].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Vị trí" value={pos} onChange={setPos} options={positions.map((v) => ({ v, label: v }))} />
+        <FilterSelect label="Hình thức lương" value={pay} onChange={setPay} options={Object.entries(PAY_TYPE).map(([v, label]) => ({ v, label }))} />
+      </>}>
+        <SearchInput value={q} onSearch={setQ} placeholder="Tên hoặc mã nhân viên…" label="Tìm theo tên hoặc mã" />
+      </FilterBar>
+      {!l.loading && <KpiRow items={[
+        { label: "Nhân viên", value: all.length },
+        { label: "Có tài khoản đăng nhập", value: all.filter((r) => r.username).length, tone: "ok" },
+        { label: "Chưa có tài khoản", value: all.filter((r) => !r.username).length },
+        { label: "Vị trí", value: positions.length, sub: positions.slice(0, 2).join(" · ") },
+      ]} />}
       {!sens && <Banner tone="info">Bạn không có quyền xem lương và thông tin cá nhân nhạy cảm.</Banner>}
       {l.loading ? <Spinner /> : (
-        <DataTable<any> rows={rows} rowKey={(r) => r.id} onRowClick={(r) => setSel(r.id)} empty="Chưa có nhân viên"
-          cols={[
-            { key: "code", label: "Mã", render: (r) => <span className="num">{r.code}</span> },
-            { key: "name", label: "Họ tên", title: true, render: (r) => <b>{r.fullName}</b> },
-            { key: "pos", label: "Vị trí", render: (r) => r.position },
-            { key: "pay", label: "Hình thức", render: (r) => PAY_TYPE[r.payType] ?? r.payType },
-            ...(sens ? [{ key: "sal", label: "Lương", right: true, render: (r: any) => <span className="num">{r.payType === "monthly" ? money(r.baseSalary) : r.payType === "hourly" ? money(r.hourlyRate) + "/giờ" : money(r.shiftRate) + "/ca"}</span> }] : []),
-            { key: "acc", label: "Tài khoản", render: (r) => r.username ?? <span className="muted">—</span> },
-            { key: "st", label: "Trạng thái", render: (r) => <Badge tone={r.status === "active" ? "ok" : undefined}>{EMP_STATUS[r.status] ?? r.status}</Badge> },
-          ]} />
+        <SplitLayout open={sel != null} panel={sel != null ? <Detail key={sel} id={sel} sens={sens} manage={manage} onClose={() => setSel(null)} onChanged={l.reload} onEdit={(e) => { setSel(null); setForm(e); }} /> : null}>
+          <DataTable<any> rows={rows} rowKey={(r) => r.id} onRowClick={(r) => setSel(r.id)} selectedKey={sel} pageSize={50}
+            emptyState={<EmptyState title={dirty ? "Không có nhân viên nào khớp bộ lọc" : status === "terminated" ? "Chưa có nhân viên nào đã nghỉ" : "Chưa có nhân viên"} action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{manage && <Button onClick={() => setForm({})}>+ Thêm nhân viên</Button>}</div>} />}
+            cols={[
+              { key: "code", label: "Mã", sort: (r) => r.code, render: (r) => <span className="num">{r.code}</span> },
+              { key: "name", label: "Họ tên", title: true, sort: (r) => r.fullName, render: (r) => <b>{r.fullName}</b> },
+              { key: "pos", label: "Vị trí", sort: (r) => r.position, render: (r) => r.position },
+              { key: "pay", label: "Hình thức", hideBelow: 1440, render: (r) => PAY_TYPE[r.payType] ?? r.payType },
+              ...(sens ? [{ key: "sal", label: "Lương", num: true, sort: salary, render: (r: any) => <span className="num">{r.payType === "monthly" ? money(r.baseSalary) : r.payType === "hourly" ? money(r.hourlyRate) + "/giờ" : money(r.shiftRate) + "/ca"}</span> }] : []),
+              { key: "acc", label: "Tài khoản", hideBelow: 1280, render: (r) => r.username ?? <span className="muted">—</span> },
+              { key: "st", label: "Trạng thái", render: (r) => <Badge tone={r.status === "active" ? "ok" : undefined}>{EMP_STATUS[r.status] ?? r.status}</Badge> },
+            ]} />
+        </SplitLayout>
       )}
       {lt && <LeaveTypes onClose={() => setLt(false)} />}
-      {sel != null && <Detail id={sel} sens={sens} manage={manage} onClose={() => setSel(null)} onChanged={l.reload} onEdit={(e) => { setSel(null); setForm(e); }} />}
       {form && <EmpForm emp={form.id ? form : null} sens={sens} onClose={() => setForm(null)}
         onSaved={(r) => { setForm(null); l.reload(); if (r.tempPassword) setTemp({ username: r.username, password: r.tempPassword, name: r.fullName }); }} />}
       {temp && (
@@ -64,7 +82,7 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
   const e = d.data;
   const reload = () => { d.reload(); onChanged(); };
   return (
-    <Sheet open wide onClose={onClose} title={e ? `${e.fullName} · ${e.code}` : "Nhân viên"}>
+    <DetailPanel onClose={onClose} title={e ? `${e.fullName} · ${e.code}` : "Nhân viên"}>
       {!e ? <Spinner /> : (
         <div className="stack">
           <div className="row wrap">
@@ -116,7 +134,7 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
           {al && <AllowanceForm id={e.id} onClose={() => setAl(false)} onDone={() => { setAl(false); reload(); }} />}
         </div>
       )}
-    </Sheet>
+    </DetailPanel>
   );
 }
 const KV = ({ l, v }: { l: string; v?: string | null }) => <div><div className="small muted">{l}</div><div>{v || "—"}</div></div>;

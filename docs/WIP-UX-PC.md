@@ -1,6 +1,6 @@
-# WIP — Hoàn thiện giao diện máy tính (PC) cho ERP
+# Hoàn thiện giao diện máy tính (PC) cho ERP
 
-Trạng thái ngày 24/11/2026. Việc này đang **dở dang** và được bàn giao cho người khác làm tiếp.
+Trạng thái ngày 25/11/2026: **bước 1, 2B, 2C đã xong** (2B + 2C gộp chung một PR). Tài liệu giữ lại để tra cứu cách chụp/rà ảnh và chạy E2E.
 
 ## Mục tiêu
 
@@ -23,42 +23,31 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
 - **Kiểm thử:** tsc sạch, vitest 642 test đạt, e2e smoke/b2b/hr/online đạt.
 - **Ảnh chụp:** `docs/screenshots/ux1-*.png`.
 
-## Bước 2B — ⏸ DỞ DANG, nhánh `ux-2b` (CHƯA gộp)
+## Bước 2B + 2C — ✅ XONG (gộp chung một PR từ nhánh `claude/gallant-franklin-12orwk`)
 
-**Phạm vi:** Bán hàng (POS), Chốt ca, Kho, Hàng hoá, Giá, Nhà cung cấp, Gợi ý đặt hàng, Giá đối thủ, Khuyến mãi, Giỏ quà, Khách sỉ, Báo giá, Đơn sỉ (+ Đơn lặp), Soạn & giao (dạng 3 cột trên PC), Đơn online, Website, Khu vực giao, Tài khoản khách.
+**Phạm vi 2B:** Bán hàng (POS), Chốt ca, Kho, Hàng hoá, Giá, Nhà cung cấp, Gợi ý đặt hàng, Giá đối thủ, Khuyến mãi, Giỏ quà, Khách sỉ, Báo giá, Đơn sỉ (+ Đơn lặp), Soạn & giao (3 cột trên PC), Đơn online, Website, Khu vực giao, Tài khoản khách.
 
-**Đã có:**
-- Code đã sửa ở tất cả các màn trên.
-- `tsc --noEmit` sạch.
-- Ảnh 1440px trong `docs/screenshots/ux2b-*-1440.png`.
+**Phạm vi 2C:** Công nợ, Hoá đơn, Thu chi (tab Quỹ + phiếu gần đây), Ngân hàng, Báo cáo, Báo cáo tài chính, Xuất Excel, Duyệt, Nhân viên, Lịch ca, Chấm công, Bảng công, Lương, Cửa hàng, Của tôi, Người dùng, Cài đặt (2 cột), Tích hợp.
 
-**Chưa làm / chưa kiểm:**
-- [ ] Backend có sửa nhưng **chưa có test mới**: `routes/b2b.ts`, `inventory.ts`, `online-orders.ts`, `pos.ts`, `quotes.ts`, `services/http.ts` (thêm bộ lọc q/from/to/cursor). Cần viết `test/ux2b-*.test.ts`.
-- [ ] Chưa chạy lại toàn bộ `vitest`.
-- [ ] Chưa chạy lại e2e: smoke, b2b, online (đã sửa `e2e/online.mjs`), d4, shop, shop-b2b.
-- [ ] Chưa chụp ảnh 1920px và 390px, chưa rà ảnh.
-- [ ] Đã sửa thêm `components/list.tsx`, `ui.tsx` và `app.css`. Phải kiểm tra lại là chỉ **thêm**, không đổi hành vi cũ.
+**Đã làm:**
+- Rebase `ux-2b` rồi `ux-2c` lên `main`; xung đột `ui.tsx` (`Segmented` nhận cả `fit` và `className`), `app.css` (giữ cả hai khối).
+- Backend: bộ lọc `q`/`from`/`to` + `summary` cho `/b2b/orders`, `/quotes`, `/online-orders`, `/stock-docs`, `/invoices`, `/vouchers`; `GET /shifts/last`. Kiểm khoảng ngày dùng chung `parseDayRange` (`lib/time.ts`, chỉ thêm hàm mới). Test: `test/ux2b-api.test.ts`, `test/ux2c-lists.test.ts`.
+- Sửa lỗi có sẵn: `GET /debts/payments` lọc `from`/`to` theo ngày UTC → nay theo ngày VN (test `test/fix-debts-payments-vn-day.test.ts`).
+- Thành phần dùng chung chỉ **thêm** prop tuỳ chọn (`PageHeader.compact`, `ExportButton.className`, `Segmented.fit/className`, `BarChart.maxBar/width`, `DataTable` cột `hideBelow: 1600`, `useMedia`). Chỉ báo ca trên thanh trên cập nhật ngay khi mở/chốt ca (sự kiện `hm:shift`).
+- Chụp và **xem từng ảnh** ở 1920/1440/390 cho 46 màn + khung chi tiết; sửa bố cục (bảng bị cắt khi mở khung chi tiết, KPI bị bóp, tab xuống dòng, ô ngày/ô tìm bị cắt, tràn ngang 390px…). Rà chéo sau khi gộp hai đợt. Không màn nào tràn ngang ở 390px.
+- Ảnh: `docs/screenshots/ux2b-*-{1440,390}.png`, `ux2c-*-{1440,390}.png`. Script: `e2e/ux2b-shots.mjs`, `e2e/ux2c-shots.mjs` (biến `BASE`, `SIZES`, `ONLY`, `OUT`).
+- Kiểm thử: `tsc` sạch, toàn bộ `vitest` đạt, **10/10 bộ E2E đạt** trên DB mới (chỉ sửa selector do giao diện đổi cố ý, không giảm assert).
 
-## Bước 2C — ⏸ DỞ DANG, nhánh `ux-2c` (CHƯA gộp)
+**Quyết định (25/11/2026):** quản lý (có `reports.view`, không có `hr.sensitive`) được xem **tổng** chi lương trong Báo cáo lãi lỗ, Dòng tiền, Lãi lỗ theo kênh — chủ dự án xác nhận là chấp nhận được. Lương từng người vẫn chỉ chủ + kế toán xem được (`/vouchers` ẩn phiếu lương, `/payroll/*` cần quyền riêng).
 
-**Phạm vi:** Công nợ, Hoá đơn, Thu chi (tab Quỹ thêm phiếu gần đây), Ngân hàng, Báo cáo (biểu đồ khi ít dữ liệu), Báo cáo tài chính, Xuất Excel, Duyệt, Nhân viên, Lịch ca, Chấm công, Bảng công, Lương, Cửa hàng, Của tôi, Người dùng, Cài đặt (2 cột), Tích hợp.
-
-**Đã có:**
-- Code đã sửa ở tất cả các màn trên.
-- `tsc --noEmit` sạch.
-- Test backend mới `test/ux2c-lists.test.ts`.
-- Đã sửa e2e smoke, b2b, hr theo giao diện mới.
-
-**Chưa làm / chưa kiểm:**
-- [ ] Chưa chạy lại toàn bộ `vitest`.
-- [ ] Chưa chạy lại e2e: smoke, b2b, hr, hr-swap, gaps2, settings.
-- [ ] Chưa chụp ảnh 1920/1440/390 và chưa rà ảnh. Agent đang kiểm tra tràn ngang ở 390px thì bị dừng.
-- [ ] Backend: `lib/time.ts`, `routes/b2b.ts`, `routes/finance.ts`. Cần xem lại diff `lib/time.ts` cẩn thận, vì file này dùng chung cho ranh giới ngày giờ VN.
-- [ ] Đã sửa thêm `components/ui.tsx`, `charts.tsx` và `app.css`. Phải kiểm tra lại là chỉ **thêm**.
+**Còn để lại (nhỏ):**
+- Quản lý gõ thẳng `/payroll` (không có quyền) thì màn hiện spinner thay vì thông báo không có quyền (`App.tsx`: không tìm thấy mục NAV → `<Spinner/>`).
+- Website → Bài viết ở 1920px: lưới chỉ 2 thẻ nên nửa phải trống (do dữ liệu mẫu ít).
+- `e2e/gaps2.mjs` cần tồn kho có sẵn: chạy `smoke.mjs` trước trên cùng DB.
 
 ## Cách làm tiếp
 
-1. Rebase nhánh lên `main` mới. Bước 1 đã nằm trong `main`.
+1. (Đã xong cho 2B/2C.) Rebase nhánh lên `main` mới. Bước 1 đã nằm trong `main`.
    ```bash
    git fetch origin && git checkout ux-2b && git rebase origin/main
    ```
@@ -94,3 +83,5 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
 - Không lộ giá vốn hay lương cho vai trò không có quyền.
 - Giao diện hoàn toàn bằng tiếng Việt.
 - Mọi API mới phải có `requirePerm` và test.
+
+> **Lưu ý khi mở PR từ nhánh này:** commit WIP đầu tiên của nhánh có một bản cũ của tài liệu này chứa token bootstrap **dev local** trong lệnh mẫu, nên gitleaks sẽ báo (báo nhầm, không phải secret thật). Khi rebase lên `main`, hãy gộp (squash) các commit WIP thành một commit để loại bản cũ đó khỏi lịch sử.

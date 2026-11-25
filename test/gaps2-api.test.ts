@@ -96,7 +96,7 @@ describe("GET /debts/payments — lọc", () => {
     expect((await api("accountant", "GET", `${V}/debts/payments?direction=out&partnerId=9801`)).body.items).toHaveLength(0);
     expect((await api("accountant", "GET", `${V}/debts/payments?from=2099-01-01`)).body.items).toHaveLength(0);
     expect((await api("accountant", "GET", `${V}/debts/payments?to=2000-01-01`)).body.items).toHaveLength(0);
-    const day = (await db().prepare(`SELECT substr(paid_at,1,10) d FROM debt_payments WHERE id=?`).bind(id).first<{ d: string }>())!.d;
+    const day = (await db().prepare(`SELECT substr(datetime(substr(paid_at,1,19), '+7 hours'),1,10) d FROM debt_payments WHERE id=?`).bind(id).first<{ d: string }>())!.d;
     expect((await api("accountant", "GET", `${V}/debts/payments?from=${day}&to=${day}&status=posted`)).body.items.map((x: any) => x.id)).toContain(id);
     expect((await api("accountant", "POST", `${V}/debts/payments/${id}/reverse`, { reason: "nhập nhầm" })).status).toBe(200);
     expect((await api("accountant", "GET", `${V}/debts/payments?status=posted&partnerId=9801`)).body.items.map((x: any) => x.id)).not.toContain(id);

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { get, items, post, put } from "../../api";
-import { Badge, Banner, Button, Card, DataTable, Input, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { downloadHref, money, todayVN, unitLabel } from "../../format";
 import { navigate } from "../../router";
@@ -10,32 +11,58 @@ import { ApiError } from "../../api";
 
 export default function Quotes() {
   const can = useCan();
-  const [status, setStatus] = useState("");
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [status, setStatus] = useState(""), [cust, setCust] = useState(""), [q, setQ] = useState("");
   const [sel, setSel] = useState<number | null>(null);
   const pre = qparam("new");
   const [creating, setCreating] = useState<boolean>(!!pre);
-  const list = useAsync(() => get("/quotes", { status, limit: 100 }).then((r) => items<any>(r)), [status]);
+  const custs = useAsync(() => get("/customers", { type: "b2b", limit: 200 }, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]), []);
+  const list = usePagedList<any>("/quotes", { status, customerId: cust, q, from: range.from, to: range.to, limit: 50 }, [status, cust, q, range.from, range.to]);
+  const sum = list.extra?.summary;
+  const by = (k: string) => sum?.byStatus?.[k] ?? { count: 0, total: 0 };
+  const dirty = !!(status || cust || q);
+  const reset = () => { setStatus(""); setCust(""); setQ(""); };
+  const rangeLabel = range.from === range.to ? ymd(range.from) : `${ymd(range.from)} – ${ymd(range.to)}`;
   return (
     <div className="stack">
-      <div className="row wrap" style={{ alignItems: "flex-end" }}>
-        <div className="grow" style={{ minWidth: 200 }}>
-          <Select label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Tất cả</option>{Object.entries(QUOTE_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </Select>
-        </div>
-        {can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo báo giá</Button>}
-      </div>
-      {list.loading ? <Spinner /> : (
-        <DataTable rows={list.data ?? []} rowKey={(q) => q.id} onRowClick={(q) => setSel(q.id)} empty="Chưa có báo giá" cols={[
-          { key: "c", label: "Mã", title: true, render: (q) => <b>{q.code}</b> },
-          { key: "k", label: "Khách hàng", render: (q) => q.customerName },
-          { key: "s", label: "Trạng thái", render: (q) => <Badge tone={quoteTone(q.status)}>{QUOTE_STATUS[q.status] ?? q.status}</Badge> },
-          { key: "v", label: "Hiệu lực đến", render: (q) => ymd(q.validUntil) },
-          { key: "t", label: "Tạm tính", right: true, render: (q) => <span className="money">{money(q.subtotal)}</span> },
-        ]} />
-      )}
-      {creating && <QuoteForm presetCustomerId={pre ? Number(pre) : undefined} onClose={() => { setCreating(false); if (pre) history.replaceState({}, "", "/quotes"); }} onSaved={(q) => { setCreating(false); if (pre) history.replaceState({}, "", "/quotes"); list.reload(); setSel(q.id); }} />}
-      {sel != null && <QuoteDetail id={sel} onClose={() => setSel(null)} onChanged={list.reload} />}
+      <PageHeader compact subtitle={<>{rangeLabel}{sum ? <> · {sum.count} báo giá</> : null}</>}
+        actions={<>
+          <ExportButton filename={`bao-gia-${range.from}_${range.to}`} rows={list.rows} columns={[
+            { label: "Mã", value: (x) => x.code }, { label: "Khách hàng", value: (x) => x.customerName }, { label: "Trạng thái", value: (x) => QUOTE_STATUS[x.status] ?? x.status },
+            { label: "Ngày tạo", value: (x) => ymd(x.createdAt) }, { label: "Hiệu lực đến", value: (x) => ymd(x.validUntil) }, { label: "Tạm tính", value: (x) => x.subtotal },
+          ]} />
+          {can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo báo giá</Button>}
+        </>} />
+      <FilterBar dirty={dirty} onReset={reset} activeCount={[status, cust].filter(Boolean).length} advanced={<>
+        <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(QUOTE_STATUS).map(([v, label]) => ({ v, label }))} />
+        <FilterSelect label="Khách hàng" value={cust} onChange={setCust} options={(custs.data ?? []).map((c: any) => ({ v: String(c.id), label: c.name }))} />
+      </>}>
+        <DateRangeFilter value={range} onChange={setRange} presets={["today", "7d", "month", "lastMonth", "custom"]} />
+        <SearchInput value={q} onSearch={setQ} placeholder="Mã báo giá, tên khách…" label="Tìm báo giá" />
+      </FilterBar>
+      <KpiRow items={[
+        { label: "Số báo giá", value: sum ? sum.count : "—", sub: sum ? `${by("draft").count} nháp` : undefined },
+        { label: "Tổng giá trị", value: sum ? money(sum.total) : "—" },
+        { label: "Đang chờ khách", value: sum ? by("sent").count : "—", sub: sum ? money(by("sent").total) : undefined, tone: "info", onClick: () => setStatus("sent") },
+        { label: "Đã chốt đơn", value: sum ? by("accepted").count : "—", sub: sum ? money(by("accepted").total) : undefined, tone: "ok", onClick: () => setStatus("accepted") },
+      ]} />
+      <SplitLayout open={sel != null} panel={sel != null ? <QuoteDetail id={sel} onClose={() => setSel(null)} onChanged={list.reload} /> : null}>
+        {list.loading ? <Spinner /> : (
+          <DataTable rows={list.rows} rowKey={(x) => x.id} onRowClick={(x) => setSel(x.id)} selectedKey={sel} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+            footer={`Đang hiển thị ${list.rows.length}${sum ? ` / ${sum.count}` : ""} báo giá`}
+            emptyState={<EmptyState title={dirty ? "Không có báo giá nào khớp bộ lọc" : "Chưa có báo giá trong khoảng này"} hint="Báo giá gửi khách sỉ, sau đó chuyển thành đơn giữ hàng."
+              action={<div className="row wrap" style={{ justifyContent: "center" }}>{dirty && <Button variant="soft" onClick={reset}>Xoá lọc</Button>}{can("b2b.write") && <Button onClick={() => setCreating(true)}>+ Tạo báo giá</Button>}{range.preset !== "lastMonth" && <Button variant="ghost" onClick={() => setRange(rangeOf("lastMonth"))}>Xem tháng trước</Button>}</div>} />}
+            cols={[
+              { key: "c", label: "Mã", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
+              { key: "k", label: "Khách hàng", sort: (x) => x.customerName, render: (x) => x.customerName },
+              { key: "s", label: "Trạng thái", sort: (x) => x.status, render: (x) => <Badge tone={quoteTone(x.status)}>{QUOTE_STATUS[x.status] ?? x.status}</Badge> },
+              { key: "d", label: "Ngày tạo", hideBelow: 1280, sort: (x) => x.createdAt, render: (x) => ymd(x.createdAt) },
+              { key: "v", label: "Hiệu lực đến", hideBelow: 1280, sort: (x) => x.validUntil, render: (x) => ymd(x.validUntil) },
+              { key: "t", label: "Tạm tính", num: true, sort: (x) => x.subtotal, render: (x) => <span className="money">{money(x.subtotal)}</span> },
+            ]} />
+        )}
+      </SplitLayout>
+      {creating && <QuoteForm presetCustomerId={pre ? Number(pre) : undefined} onClose={() => { setCreating(false); if (pre) history.replaceState({}, "", "/quotes"); }} onSaved={(x) => { setCreating(false); if (pre) history.replaceState({}, "", "/quotes"); list.reload(); setSel(x.id); }} />}
     </div>
   );
 }
@@ -85,7 +112,7 @@ function QuoteDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
   };
   const showCost = q?.lines?.some((l: any) => l.marginBp != null);
   return (
-    <Sheet open wide onClose={onClose} title={q ? `Báo giá ${q.code}` : "Báo giá"}>
+    <DetailPanel onClose={onClose} title={q ? `Báo giá ${q.code}` : "Báo giá"}>
       {qd.loading || !q ? <Spinner /> : (
         <div className="stack">
           <div className="row wrap"><Badge tone={quoteTone(q.status)}>{QUOTE_STATUS[q.status] ?? q.status}</Badge><span className="muted small">{q.customerName} · hiệu lực {ymd(q.validFrom)} → {ymd(q.validUntil)}</span></div>
@@ -114,7 +141,7 @@ function QuoteDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
       {mode === "cancel" && <ReasonSheet title="Huỷ báo giá" confirm="Huỷ báo giá" danger onClose={() => setMode("")} onSubmit={async (reason) => { await post(`/quotes/${id}/cancel`, { reason }); toast("Đã huỷ báo giá", "ok"); setMode(""); reload(); }} />}
       {mode === "extend" && <ExtendSheet id={id} onClose={() => setMode("")} onDone={() => { setMode(""); reload(); }} />}
       {mode === "convert" && q && <ConvertSheet q={q} onClose={() => setMode("")} onDone={() => { setMode(""); reload(); }} onExtend={() => setMode("extend")} />}
-    </Sheet>
+    </DetailPanel>
   );
 }
 

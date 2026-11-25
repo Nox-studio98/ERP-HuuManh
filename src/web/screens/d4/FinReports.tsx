@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, items, put } from "../../api";
 import { Badge, Banner, Button, Card, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, useAsync } from "../../components/ui";
+import { DateRangeFilter, FilterBar, PageHeader, rangeOf, useWide, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
 import { CHANNELS, money, todayVN } from "../../format";
 import { useCan } from "../../store";
@@ -9,17 +10,20 @@ import { Tile, bpPct, downloadCsv } from "./shared";
 type Tab = "cash" | "pnl" | "vat" | "budget";
 const first = () => todayVN().slice(0, 8) + "01";
 
+const TAB_SUB: Record<Tab, string> = { cash: "Tiền vào / ra các quỹ theo nhóm thu chi", pnl: "Doanh thu, giá vốn và chi phí phân bổ theo kênh bán", vat: "Thuế GTGT đầu ra / đầu vào theo tháng", budget: "Chi thực tế so với ngân sách đã đặt" };
 export default function FinReports() {
   const [tab, setTab] = useState<Tab>("cash");
-  const [from, setFrom] = useState(first());
-  const [to, setTo] = useState(todayVN());
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const { from, to } = range;
   const [period, setPeriod] = useState(todayVN().slice(0, 7));
   const ranged = tab === "cash" || tab === "pnl";
   return (
     <div className="stack d4">
-      <Segmented wrap value={tab} onChange={setTab} options={[{ v: "cash", label: "Dòng tiền" }, { v: "pnl", label: "Lãi lỗ theo kênh" }, { v: "vat", label: "Thuế GTGT" }, { v: "budget", label: "Ngân sách & thực tế" }]} />
-      {ranged ? <div className="grid2"><Input label="Từ ngày" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /><Input label="Đến ngày" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></div>
-        : <Input label="Kỳ (tháng)" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} />}
+      <PageHeader subtitle={TAB_SUB[tab]} />
+      <Segmented fit wrap value={tab} onChange={setTab} options={[{ v: "cash", label: "Dòng tiền" }, { v: "pnl", label: "Lãi lỗ theo kênh" }, { v: "vat", label: "Thuế GTGT" }, { v: "budget", label: "Ngân sách & thực tế" }]} />
+      <FilterBar>
+        {ranged ? <DateRangeFilter value={range} onChange={setRange} /> : <Input label="Kỳ (tháng)" type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)} />}
+      </FilterBar>
       {tab === "cash" && <CashFlow from={from} to={to} />}
       {tab === "pnl" && <Pnl from={from} to={to} />}
       {tab === "vat" && <Vat period={period} />}
@@ -41,12 +45,14 @@ function HBars({ rows, color = "var(--accent)" }: { rows: { label: string; value
 }
 type GSeries = { name: string; color: string; vals: number[] };
 function GroupBars({ labels, series, height = 200 }: { labels: string[]; series: GSeries[]; height?: number }) {
-  const W = 560, p = { l: 8, r: 8, t: 14, b: 26 };
+  const wide = useWide();
+  if (wide) height = 240;
+  const W = wide ? 1000 : 560, p = { l: 8, r: 8, t: 14, b: 26 };
   const all = series.flatMap((s) => s.vals);
   const max = Math.max(1, ...all), min = Math.min(0, ...all);
   const Y = (v: number) => p.t + ((max - v) / (max - min)) * (height - p.t - p.b);
   const gw = (W - p.l - p.r) / Math.max(1, labels.length);
-  const bw = Math.min(40, (gw * 0.8) / series.length);
+  const bw = Math.min(wide ? 44 : 40, (gw * 0.8) / series.length);
   const fmt = (n: number) => (Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(1).replace(".", ",") + "tr" : Math.round(n / 1000) + "k");
   return (
     <div className="stack" style={{ gap: 6 }}>
@@ -76,7 +82,7 @@ function CashFlow({ from, to }: { from: string; to: string }) {
   return (
     <div className="stack">
       <div className="tiles"><Tile label="Đầu kỳ" value={money(d.opening)} /><Tile label="Tổng thu" value={money(d.totalInflow)} tone="ok" /><Tile label="Tổng chi" value={money(d.totalOutflow)} tone="danger" /><Tile label="Cuối kỳ" value={money(d.closing)} sub={`Thu − chi: ${net >= 0 ? "+" : ""}${money(net)}`} /></div>
-      <div className="grid2" style={{ alignItems: "start" }}>
+      <div className="two-col">
         <Card title="Thu theo nhóm">{d.inflows.length ? <HBars rows={d.inflows.map((x: any) => ({ label: x.category, value: x.amount }))} /> : <div className="muted">Không có khoản thu trong kỳ.</div>}</Card>
         <Card title="Chi theo nhóm">{d.outflows.length ? <HBars color="var(--warn)" rows={d.outflows.map((x: any) => ({ label: x.category, value: x.amount }))} /> : <div className="muted">Không có khoản chi trong kỳ.</div>}</Card>
       </div>

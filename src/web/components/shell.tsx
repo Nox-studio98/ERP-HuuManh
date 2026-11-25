@@ -33,12 +33,14 @@ export function ShiftIndicator({ path }: { path: string }) {
   const can = useCan();
   const [shift, setShift] = useState<{ openedAt: string } | null | undefined>();
   const on = can("pos.shift");
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const f = () => setTick((n) => n + 1); window.addEventListener("hm:shift", f); return () => window.removeEventListener("hm:shift", f); }, []);
   useEffect(() => {
     if (!on) return;
     let live = true;
     get("/shifts/current", undefined, { silent: true }).then((r: any) => live && setShift(r.shift ?? null)).catch(() => {});
     return () => { live = false; };
-  }, [on, path]);
+  }, [on, path, tick]);
   if (!on || shift === undefined) return null;
   return shift
     ? <button type="button" className="tb-shift badge ok" style={{ border: 0, cursor: "pointer" }} onClick={() => navigate("/shift-close")} title="Bấm để chốt ca">● Ca đang mở từ {fmtTime(shift.openedAt)}</button>

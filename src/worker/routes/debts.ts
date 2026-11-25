@@ -370,8 +370,8 @@ debtRoutes.get("/debts/payments", requirePerm("debt.view"), async (c) => {
   if (q.partnerId) { conds.push(`p.partner_id = ?`); params.push(Number(q.partnerId)); }
   if (q.direction === "in" || q.direction === "out") { conds.push(`p.direction = ?`); params.push(q.direction); }
   if (q.status === "posted" || q.status === "reversed" || q.status === "pending_approval" || q.status === "rejected") { conds.push(`p.status = ?`); params.push(q.status); }
-  if (q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from)) { conds.push(`substr(p.paid_at,1,10) >= ?`); params.push(q.from); }
-  if (q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to)) { conds.push(`substr(p.paid_at,1,10) <= ?`); params.push(q.to); }
+  if (q.from && /^\d{4}-\d{2}-\d{2}$/.test(q.from)) { conds.push(`substr(datetime(substr(p.paid_at,1,19), '+7 hours'),1,10) >= ?`); params.push(q.from); }
+  if (q.to && /^\d{4}-\d{2}-\d{2}$/.test(q.to)) { conds.push(`substr(datetime(substr(p.paid_at,1,19), '+7 hours'),1,10) <= ?`); params.push(q.to); }
   if (q.cursor) { conds.push(`p.id < ?`); params.push(Number(q.cursor)); }
   const limit = lim(c);
   const rows = (await c.env.DB.prepare(

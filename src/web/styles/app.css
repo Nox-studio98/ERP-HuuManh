@@ -433,3 +433,182 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .cmdk-lbl { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmdk-item .sub { min-width: 0; }
 @media (max-width: 767px) { .cmdk-foot { display: none; } }
+
+/* ===== UX 2B: panel giữa màn hình, kanban, lưới thẻ, POS rộng ===== */
+.hero-panel { max-width: 980px; margin: var(--s-4) auto 0; }
+.hero-grid { display: grid; gap: var(--s-4); align-items: start; }
+@media (min-width: 900px) { .hero-grid { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); } .hero-panel { margin-top: var(--s-6); } }
+.hero-main { padding: var(--s-5); }
+.kbd-list { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-size: .9rem; }
+.kbd-hint { display: none; opacity: .7; font-weight: 500; font-size: .8em; margin-left: 4px; }
+@media (min-width: 1024px) { .kbd-hint { display: inline; } }
+.kanban { display: grid; gap: var(--s-4); grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.kanban-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-2); min-height: 240px; }
+.kanban-col > h3 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 var(--s-1); font-size: .95rem; }
+.kanban-card { text-align: left; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s-3); cursor: pointer; display: flex; flex-direction: column; gap: 4px; font: inherit; color: inherit; }
+.kanban-card:hover { border-color: var(--accent); }
+.kanban-card:disabled { opacity: .6; }
+.kanban-empty { color: var(--muted); font-size: .9rem; padding: var(--s-4) var(--s-2); text-align: center; }
+.cards-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
+.cards-grid.sm { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.only-desktop { display: none !important; }
+@media (min-width: 1024px) { .only-desktop { display: initial !important; } .only-narrow { display: none !important; } }
+@media (min-width: 1024px) {
+  .pos { grid-template-columns: minmax(0, 1fr) 420px; }
+  .pos-cart, .pos.show-cart .pos-cart { top: calc(var(--topbar-h) + var(--s-4)); }
+  .pgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+@media (min-width: 1600px) {
+  .pos { grid-template-columns: minmax(0, 1fr) 480px; gap: var(--s-5); }
+  .pgrid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--s-3); }
+  .ptile { min-height: 108px; }
+}
+.pos-cart .totals .grand { font-size: 1.5rem; }
+.tab-bar-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.tab-bar-row .seg { flex: 0 1 auto; }
+@media (min-width: 768px) { .tab-bar-row .seg { min-width: 320px; } }
+@media (min-width: 1024px) { .seg.tabs-d { display: inline-flex; align-self: flex-start; max-width: 100%; } .seg.tabs-d button { flex: 0 0 auto; padding: 0 var(--s-5); min-width: 120px; } }
+.alert-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .alert-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.trace-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .trace-grid { grid-template-columns: 380px minmax(0, 1fr); } }
+@media (min-width: 1024px) { .ph-actions.compact .btn { min-height: 38px; padding: 0 var(--s-4); font-size: .92rem; } }
+.filterbar .fb-end { margin-left: auto; align-self: flex-end; }
+@media (max-width: 767px) { .filterbar .fb-end { margin-left: 0; } }
+.hero-grid { align-items: stretch; }
+.dt-card .kv > span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.dt-card .kv > span.num { white-space: normal; }
+@media (min-width: 1024px) {
+  .pos-cart .cartline .row.wrap { flex-wrap: nowrap; gap: var(--s-2); }
+  .pos-cart .qty button { width: 38px; height: 38px; }
+  .pos-cart .qty input { width: 52px; height: 38px; }
+  .pos-cart .cartline select.input { width: 74px !important; min-height: 38px; padding: 0 6px; }
+  .pos-cart .cartline .input[placeholder^="Giảm"] { width: 84px !important; }
+  .pos-cart .cartline .btn.sm { padding: 0 var(--s-2); }
+}
+.detail-panel .dt-wrap, .split.open .dt-wrap { overflow-x: auto; }
+.detail-panel .dt-table th, .detail-panel .dt-table td { padding: 8px var(--s-2); }
+/* ===== UX 2C: bổ sung (chỉ thêm lớp mới) ===== */
+.seg.fit { align-self: flex-start; max-width: 100%; }
+@media (min-width: 768px) { .seg.fit { display: inline-flex; width: fit-content; max-width: 100%; } .seg.fit button { flex: 0 0 auto; } }
+.card-grid { display: grid; gap: var(--s-3); grid-template-columns: 1fr; }
+@media (min-width: 768px) { .card-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); } }
+.export-card { display: flex; align-items: center; gap: var(--s-3); }
+.export-ico { flex: none; width: 44px; height: 44px; border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.export-card .btn { flex: none; }
+.kv-grid { display: grid; gap: var(--s-2) var(--s-4); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.kv-grid .kv2 { display: flex; justify-content: space-between; gap: var(--s-3); padding: 6px 0; border-bottom: 1px solid var(--border); }
+.kv-grid .kv2 > :first-child { color: var(--muted); }
+.two-col { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .two-col.wide-left { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+.fund-cards { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.fund-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-3) var(--s-4); text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.fund-card:hover { border-color: var(--accent); }
+.fund-card .v { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fund-card .l { font-size: .8rem; color: var(--muted); }
+.quick-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+/* bảng cuộn ngang với cột đầu dính (Lịch ca, Bảng công) */
+.grid-scroll { overflow: auto; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); max-height: calc(100dvh - 260px); }
+.grid-scroll table { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+.grid-scroll th, .grid-scroll td { padding: 8px 10px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: center; white-space: nowrap; background: var(--surface); }
+.grid-scroll thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); }
+.grid-scroll .sticky-col { position: sticky; left: 0; z-index: 2; text-align: left; background: var(--surface); min-width: 150px; box-shadow: 1px 0 0 var(--border); }
+.grid-scroll thead .sticky-col { z-index: 4; background: var(--surface-2); }
+.settings-layout { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1024px) { .settings-layout { grid-template-columns: 240px minmax(0, 1fr); } }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: calc(var(--topbar-h) + var(--s-4)); }
+.settings-nav button { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); text-align: left; min-height: 40px; padding: 0 var(--s-3); border: 0; border-radius: var(--r-md); background: none; color: var(--text); cursor: pointer; font: inherit; }
+.settings-nav button:hover { background: var(--surface-2); }
+.settings-nav button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+@media (max-width: 1023px) { .settings-nav { display: none; } }
+.btn.inline { width: auto; }
+@media (min-width: 1280px) { .audit-filters { grid-template-columns: repeat(6, minmax(0, 1fr)); } .audit-filters .row { grid-column: auto; } }
+@media (min-width: 1024px) { .set-group .set-row { grid-template-columns: minmax(0, 1fr) minmax(260px, 380px); } }
+.sch-table { min-width: 640px; }
+.sch-table th { font-size: .82rem; font-weight: 600; }
+.sch-table th.today, .sch-table td.today { background: var(--accent-soft); }
+.sch-table td.today { background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+.sch-table .sch-name { font-weight: 600; font-size: .85rem; line-height: 1.25; white-space: normal; max-width: 130px; min-width: 100px; overflow-wrap: anywhere; }
+.sch-cell { vertical-align: top; min-width: 74px; height: 58px; padding: 3px !important; text-align: left !important; }
+.sch-cell.on { background: var(--accent-soft) !important; outline: 2px solid var(--accent); outline-offset: -2px; }
+.sch-chip { border: 0; display: block; width: 100%; margin-bottom: 2px; text-align: left; font-size: .72rem; padding: 2px 6px; }
+@media (min-width: 1024px) {
+  .sch-table .sch-name { max-width: none; min-width: 190px; font-size: .92rem; }
+  .sch-cell { min-width: 120px; height: 64px; }
+  .sch-chip { font-size: .8rem; padding: 4px 8px; }
+  .sch-table th { padding: 10px; }
+}
+.grid-full { grid-column: 1 / -1; }
+.store-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
+@media (min-width: 900px) { .store-grid { grid-template-columns: minmax(0, 1fr) 260px; align-items: start; } }
+.store-actions { justify-content: flex-end; }
+.store-save { min-width: 120px; }
+.geo-prev { display: flex; flex-direction: column; gap: var(--s-2); }
+.geo-prev svg { width: 100%; max-width: 260px; margin: 0 auto; display: block; }
+.geo-bg { fill: var(--surface-2); } .geo-grid { stroke: var(--border); stroke-width: 1; }
+.geo-fence { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.geo-pin { fill: var(--danger); } .geo-rad { stroke: var(--accent); stroke-width: 1; }
+.geo-txt { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.me-page { max-width: 640px; }
+@media (min-width: 1100px) {
+  .me-page { max-width: 1120px; }
+  .me-cols > .stack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: var(--s-3) var(--s-4); }
+  .me-cols > .stack > .banner, .me-cols > .stack > .hint { grid-column: 1 / -1; }
+  .me-sched { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-5); }
+}
+
+/* ===== UX 2C — sửa sau rà ảnh ===== */
+/* Ô tìm kiếm trong thanh lọc: đủ rộng để không cắt placeholder (chỉ từ 768px) */
+@media (min-width: 768px) { .filterbar .searchbox { flex: 1 1 260px; max-width: 320px; } }
+/* Lưới thẻ không tràn ngang khi nội dung thẻ dài (Bảng lương → danh sách kỳ) */
+.card-grid > * { min-width: 0; }
+@media (max-width: 767px) { .card-grid { grid-template-columns: minmax(0, 1fr); } }
+/* Khối KPI trong panel chi tiết / sheet: luôn 2 cột, không bị bóp thành 4 cột hẹp */
+.detail-panel .kpis, .sheet .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Khi panel chi tiết mở, phần danh sách hẹp lại: KPI tự co, bảng gọn hơn */
+.split.open .kpi-row { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.split.open .kpi .v { font-size: 1.1rem; }
+.split.open .dt-table th, .split.open .dt-table td { padding-left: var(--s-2); padding-right: var(--s-2); }
+/* Mã chứng từ trong sao kê không bị ngắt giữa chừng */
+.stmt td.code .nw { white-space: nowrap; }
+/* Thu chi (tab Quỹ): bảng phiếu gần đây nằm trong cột hẹp, ẩn cột Quỹ dưới 1600px */
+@media (max-width: 1599px) { .finance-recent .hb-1440 { display: none; } }
+/* Hai ô ngày trong thanh lọc không tràn khung trên điện thoại */
+@media (max-width: 767px) { .daterange-inputs { display: flex; align-items: center; gap: var(--s-2); } .daterange-inputs .input { flex: 1 1 0; min-width: 0; width: auto; } }
+/* ===== UX 2B — sửa sau rà ảnh ===== */
+/* Thẻ KPI dạng nút (có onClick) căn nội dung từ trên xuống, cùng đường cơ sở với thẻ thường */
+.kpi.click { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; }
+/* Số thẻ KPI lẻ trên điện thoại: thẻ cuối chiếm trọn hàng */
+@media (max-width: 767px) { .kpi-row > .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; } }
+/* Thanh trên (điện thoại): tiêu đề không bị chia đôi chỗ với khoảng đệm, không xuống dòng */
+@media (max-width: 1023px) {
+  .topbar .tb-spacer { display: none; }
+  .topbar h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+/* Nhóm nút thao tác ở đầu trang: từ 3 nút trở lên thì xếp lưới 2 cột trên điện thoại */
+@media (max-width: 767px) {
+  .ph-actions:has(> :nth-child(3)) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .ph-actions:has(> :nth-child(3)) > * { width: 100%; }
+  .ph-actions:has(> :nth-child(3)) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+/* Bán hàng: lưới sản phẩm cách ô tìm kiếm */
+.pos-products .pgrid { margin-top: var(--s-1); }
+/* Kho > Cảnh báo: trạng thái trống gọn trong thẻ nhỏ */
+.alert-grid .empty { padding: var(--s-3) var(--s-2); }
+.alert-grid .empty svg { display: none; }
+/* Ô chọn sản phẩm online: các ô cùng hàng cao bằng nhau */
+.cards-grid.sm { align-items: stretch; }
+.cards-grid.sm > .dt-card { height: 100%; display: flex; align-items: center; }
+.cards-grid.sm > .dt-card > * { width: 100%; }
+/* Thanh lọc có ô ngày giao: thu gọn để vẫn nằm một hàng ở 1440px */
+@media (min-width: 768px) {
+  .filterbar .field input[type="date"] { width: 150px; min-width: 0; }
+  .filterbar:has(.field input[type="date"]) .filter-select { flex-basis: 140px; }
+  .filterbar:has(.field input[type="date"]) .searchbox { flex-basis: 170px; }
+}
+/* Danh sách có khung chi tiết: ô trạng thái chỉ hiện nhãn chính (chi tiết xem ở khung bên phải) */
+.split.open .st-badges { flex-wrap: nowrap; }
+.split.open .st-badges > :nth-child(n+2) { display: none; }
+/* hideBelow: 1600 (thêm mới) — ẩn cột khi màn hình < 1600px hoặc khi đang mở khung chi tiết */
+@media (max-width: 1599px) { .hb-1600 { display: none; } }
+.split.open .hb-1600 { display: none; }

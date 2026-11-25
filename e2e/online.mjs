@@ -241,16 +241,17 @@ try {
   await go(o.page, "/online-orders");
   await o.page.getByRole("tab", { name: /^Hoàn tất \(\d+\)/ }).waitFor();
   await o.page.getByRole("tab", { name: /^Đang chuẩn bị \(\d+\)/ }).click();
-  await o.page.getByText("Chờ khách xác nhận cân").first().waitFor();
+  await o.page.locator("button.dt-card").getByText("Chờ khách xác nhận cân").first().waitFor();
   ok("badge 'Chờ khách xác nhận cân' ở danh sách");
   await o.page.getByRole("tab", { name: /^Tất cả/ }).click();
+  await o.page.getByRole("button", { name: /^Bộ lọc/ }).click(); // mobile: bộ lọc nâng cao gập sau nút
   await o.page.getByLabel("Kênh").selectOption("social");
-  await o.page.getByTestId("online-list").locator("a.dt-card").nth(3).waitFor(); ok("lọc kênh social có ≥4 đơn");
+  await o.page.getByTestId("online-list").locator("button.dt-card").nth(3).waitFor(); ok("lọc kênh social có ≥4 đơn");
   await o.page.getByLabel("Kênh").selectOption("fresco");
   await o.page.getByText("Không có đơn online").waitFor(); ok("lọc kênh fresco trống");
-  await o.page.getByLabel("Kênh").selectOption("all");
+  await o.page.getByLabel("Kênh").selectOption("");
   await o.page.getByRole("tab", { name: /^Đã huỷ/ }).click();
-  await o.page.locator("a.dt-card", { hasText: D.code }).waitFor();
+  await o.page.locator("button.dt-card", { hasText: D.code }).waitFor();
   await o.page.getByRole("tab", { name: /^Tất cả/ }).click();
   await shot(o.page, "online-list.png");
 
@@ -289,7 +290,7 @@ try {
 
   step("Website: banner + bài viết (markdown)");
   await go(o.page, "/website");
-  await o.page.getByRole("button", { name: "+ Thêm banner" }).click();
+  await o.page.getByRole("button", { name: "+ Thêm banner" }).first().click();
   let d = dlg(o.page);
   await d.getByLabel("Tiêu đề").fill(`Banner ${RUN}`);
   assert(await d.getByRole("button", { name: "Lưu banner" }).isDisabled(), "banner chưa có ảnh → không lưu được");
@@ -314,22 +315,22 @@ try {
 
   step("Khu vực & khung giờ, tài khoản khách, duyệt");
   await go(o.page, "/delivery-zones");
-  await o.page.getByTestId("zone-list").getByText("Nội thành gần").waitFor();
+  await o.page.getByTestId("zone-list").locator("button.dt-card").getByText("Nội thành gần").first().waitFor();
   await o.page.getByRole("button", { name: "+ Thêm khu vực" }).click();
   d = dlg(o.page);
   await d.getByLabel("Tên khu vực").fill(`Khu ${RUN}`);
   await d.getByLabel("Quận/huyện").fill("Quận 4"); await d.getByLabel("Quận/huyện").press("Enter");
   await d.getByLabel("Phí giao (₫)").fill("25000");
   await d.getByRole("button", { name: "Lưu khu vực" }).click();
-  await o.page.getByTestId("zone-list").getByText(`Khu ${RUN}`).waitFor();
+  await o.page.getByTestId("zone-list").locator("button.dt-card").getByText(`Khu ${RUN}`).first().waitFor();
   assert((await apiGet(o.ctx, "/delivery-zones")).items.some((z) => z.name === `Khu ${RUN}` && z.districts[0] === "Quận 4" && z.fee === 25000), "API: khu vực mới");
   await o.page.getByRole("tab", { name: "Khung giờ giao" }).click();
-  await o.page.getByTestId("slot-list").getByText("8:00–10:00").first().waitFor();
+  await o.page.getByTestId("slot-list").locator("button.dt-card").getByText("8:00–10:00").first().waitFor();
   await o.page.getByRole("button", { name: "+ Thêm khung giờ" }).click();
   d = dlg(o.page);
   await d.getByLabel("Tên khung giờ").fill(`Ca ${RUN}`);
   await d.getByRole("button", { name: "Lưu khung giờ" }).click();
-  await o.page.getByTestId("slot-list").getByText(`Ca ${RUN}`).waitFor();
+  await o.page.getByTestId("slot-list").locator("button.dt-card").getByText(`Ca ${RUN}`).first().waitFor();
   ok("khung giờ mới đã tạo");
   // Dọn dữ liệu thử: tắt khu vực / khung giờ vừa tạo để không ảnh hưởng website và các kịch bản khác
   for (const [path, match] of [["/delivery-zones", (z) => z.name === `Khu ${RUN}`], ["/delivery-slots", (s) => s.label === `Ca ${RUN}`]]) {
@@ -341,7 +342,7 @@ try {
   }
   await go(o.page, "/shop-accounts");
   await o.page.getByRole("tab", { name: "Tất cả tài khoản" }).click();
-  await o.page.locator("main").getByText(/Chưa có tài khoản|Khách lẻ|Khách sỉ|Chờ liên kết/).first().waitFor();
+  await o.page.getByTestId("account-list").locator("button.dt-card, .empty").first().waitFor();
   ok("màn Tài khoản khách tải được");
   assert((await o.page.getByLabel("Thông báo đơn online mới").count()) === 0, "không có khoá VAPID → ẩn công tắc push");
   await go(o.page, "/approvals");

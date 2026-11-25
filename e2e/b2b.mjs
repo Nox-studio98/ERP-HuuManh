@@ -96,7 +96,7 @@ try {
   const custName = `Nhà hàng E2E ${RUN}`;
   await go(o.page, "/customers");
   await shot(o.page, "khach-si.png");
-  await o.page.getByRole("button", { name: "+ Thêm khách sỉ" }).click();
+  await o.page.getByRole("button", { name: "+ Thêm khách sỉ" }).first().click();
   {
     const d = dlg(o.page);
     await d.getByLabel("Tên khách / công ty").fill(custName);
@@ -361,7 +361,8 @@ try {
   await o.page.getByText(/Dán CSV|đã khoá vĩnh viễn/).first().waitFor();
   ok("Công nợ: Phải thu / Phải trả / Nhắc nợ / Điều chỉnh / Đầu kỳ");
   await go(o.page, "/invoices");
-  await o.page.getByRole("tab", { name: "Còn nợ" }).click();
+  await o.page.getByRole("button", { name: /Bộ lọc/ }).click();
+  await o.page.getByLabel("Thanh toán").selectOption("open");
   await go(o.page, "/bank");
   const ref = `E2E${RUN}${Date.now() % 100000}`;
   await o.page.getByLabel("Dán nội dung CSV").fill(`date,amount,description,ref\n${today},100000,${custCode} thanh toan them,${ref}\n${today},250000,Khach la chuyen khoan ${RUN},${ref}B`);

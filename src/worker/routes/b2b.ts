@@ -7,7 +7,7 @@ import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { lineAmount } from "../lib/money";
 import { nextCode, PREFIX } from "../lib/codes";
-import { vnDate } from "../lib/time";
+import { vnDate, parseDayRange } from "../lib/time";
 import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
 import { releaseOrderStmts, consumeForDeliveryStmts } from "../services/reservations";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
@@ -15,7 +15,7 @@ import { kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { getSettingInt } from "../services/settings";
 import { assertStmt } from "../services/guard";
-import { pageParams } from "../services/http";
+import { addVnRange, likeOf, pageParams } from "../services/http";
 import {
   confirmOrderFlow, createB2bOrder, loadCustomerForOrder, loadOrderDetail, orderLineInsert, priceLines, storeIdOf, isCheckFail, DATE_RE, type LineIn,
 } from "../services/b2b-orders";
@@ -62,6 +62,17 @@ b2bRoutes.get("/b2b/orders", requirePerm("b2b.view"), async (c) => {
   if (q.status) (where.push("o.status = ?"), binds.push(q.status));
   if (q.customerId) (where.push("o.customer_id = ?"), binds.push(Number(q.customerId)));
   if (q.deliveryDate) (where.push("o.delivery_date = ?"), binds.push(q.deliveryDate));
+  if (q.q?.trim()) (where.push(`(o.code LIKE ? ESCAPE '\\' OR cu.name LIKE ? ESCAPE '\\')`), binds.push(likeOf(q.q), likeOf(q.q)));
+  addVnRange(q, "o.created_at", where, binds);
+  const sumRows = (
+    await c.env.DB
+      .prepare(`SELECT o.status AS st, COUNT(*) AS n, COALESCE(SUM(o.total),0) AS s FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id WHERE ${where.join(" AND ")} GROUP BY o.status`)
+      .bind(...binds)
+      .all<{ st: string; n: number; s: number }>()
+  ).results;
+  const byStatus: Record<string, { count: number; total: number }> = {};
+  for (const r of sumRows) byStatus[r.st] = { count: r.n, total: r.s };
+  const summary = { count: sumRows.reduce((a, r) => a + r.n, 0), total: sumRows.filter((r) => r.st !== "cancelled").reduce((a, r) => a + r.s, 0), byStatus };
   if (cursor) (where.push("o.id < ?"), binds.push(cursor));
   const rows = (
     await c.env.DB
@@ -81,6 +92,7 @@ b2bRoutes.get("/b2b/orders", requirePerm("b2b.view"), async (c) => {
       total: r.total, addressLabel: r.address_label, createdAt: r.created_at, invoiceId: r.invoice_id,
     })),
     nextCursor: rows.length > limit ? page[page.length - 1].id : null,
+    summary,
   });
 });
 
@@ -711,22 +723,37 @@ b2bRoutes.get("/invoices", requirePerm("debt.view"), async (c) => {
   if (q.customerId) (where.push("x.customer_id = ?"), binds.push(Number(q.customerId)));
   if (q.status === "open") where.push(`x.kind <> 'adjustment' AND x.status = 'open' AND x.outstanding > 0`);
   if (q.overdue === "1") (where.push(`x.kind <> 'adjustment' AND x.status = 'open' AND x.outstanding > 0 AND x.due_date < ?`), binds.push(today));
+  const range = parseDayRange(q.from, q.to);
+  if (range) (where.push("x.issue_date >= ? AND x.issue_date <= ?"), binds.push(range.from, range.to));
+  const term = q.q?.trim();
+  if (term) {
+    const like = `%${term.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
+    where.push(`(x.code LIKE ? ESCAPE '\\' OR x.customer_name LIKE ? ESCAPE '\\' OR COALESCE(x.einvoice_no,'') LIKE ? ESCAPE '\\')`);
+    binds.push(like, like, like);
+  }
+  const baseWhere = where.length ? "WHERE " + where.join(" AND ") : "";
+  const baseBinds = [...binds];
   if (cursor) (where.push("x.id < ?"), binds.push(cursor));
-  const rows = (
-    await db
-      .prepare(
-        `SELECT * FROM (
-           SELECT i.id, i.code, i.kind, i.customer_id, cu.name AS customer_name, i.issue_date, i.due_date, i.total, i.status, i.einvoice_status, i.einvoice_no,
+  const inner = `SELECT i.id, i.code, i.kind, i.customer_id, cu.name AS customer_name, i.issue_date, i.due_date, i.total, i.status, i.einvoice_status, i.einvoice_no,
                   COALESCE((SELECT SUM(a.amount) FROM debt_allocations a
                              LEFT JOIN debt_payments ap ON ap.id = a.payment_id LEFT JOIN debt_adjustments ad ON ad.id = a.adjustment_id
                             WHERE a.invoice_id = i.id AND (ap.status = 'posted' OR ad.status = 'posted')), 0) AS paid,
                   CASE WHEN i.kind = 'adjustment' THEN 0 ELSE ${OS} END AS outstanding
-             FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
-         ) x ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY x.id DESC LIMIT ?`,
-      )
+             FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id`;
+  const rows = (
+    await db
+      .prepare(`SELECT * FROM (${inner}) x ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY x.id DESC LIMIT ?`)
       .bind(...binds, limit + 1)
       .all<any>()
   ).results;
+  // Tổng hợp trên TOÀN BỘ kết quả lọc (không theo trang): số HĐ, tổng tiền, còn nợ, quá hạn
+  const s = await db
+    .prepare(`SELECT COUNT(*) AS cnt, COALESCE(SUM(x.total),0) AS total,
+                     COALESCE(SUM(CASE WHEN x.kind <> 'adjustment' AND x.status = 'open' THEN x.outstanding ELSE 0 END),0) AS outstanding,
+                     COALESCE(SUM(CASE WHEN x.kind <> 'adjustment' AND x.status = 'open' AND x.outstanding > 0 AND x.due_date < ? THEN x.outstanding ELSE 0 END),0) AS overdue
+                FROM (${inner}) x ${baseWhere}`)
+    .bind(today, ...baseBinds)
+    .first<any>();
   const page = rows.slice(0, limit);
   return c.json({
     items: page.map((r) => ({
@@ -736,6 +763,7 @@ b2bRoutes.get("/invoices", requirePerm("debt.view"), async (c) => {
       einvoiceStatus: r.einvoice_status, einvoiceNo: r.einvoice_no,
     })),
     nextCursor: rows.length > limit ? page[page.length - 1].id : null,
+    summary: { count: s?.cnt ?? 0, total: s?.total ?? 0, outstanding: s?.outstanding ?? 0, overdue: s?.overdue ?? 0 },
   });
 });
 

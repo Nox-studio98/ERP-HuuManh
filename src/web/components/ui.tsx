@@ -121,9 +121,9 @@ export const EmptyState = ({ title, hint, action }: { title: string; hint?: stri
 export const Spinner = () => <div className="spinner" role="status" aria-label="Đang tải" />;
 export const Banner = ({ tone, children }: { tone?: "danger" | "info"; children: ReactNode }) => <div className={"banner " + (tone ?? "")} role="alert">{children}</div>;
 
-export function Segmented<T extends string>({ value, onChange, options, wrap }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[]; wrap?: boolean }) {
+export function Segmented<T extends string>({ value, onChange, options, wrap, fit, className }: { value: T; onChange: (v: T) => void; options: { v: T; label: string }[]; wrap?: boolean; /** desktop: chỉ rộng vừa nội dung (không kéo giãn hết trang) */ fit?: boolean; className?: string }) {
   return (
-    <div className={"seg" + (wrap ? " wrap" : "")} role="tablist">
+    <div className={"seg" + (wrap ? " wrap" : "") + (fit ? " fit" : "") + (className ? " " + className : "")} role="tablist">
       {options.map((o) => <button key={o.v} role="tab" aria-selected={value === o.v} onClick={() => onChange(o.v)}>{o.label}</button>)}
     </div>
   );
@@ -134,7 +134,7 @@ export type Col<T> = {
   /** căn phải (số tiền, số lượng) */ right?: boolean; num?: boolean;
   hideMobile?: boolean; hideDesktop?: boolean; title?: boolean;
   /** giá trị dùng để sắp xếp phía client; có thì tiêu đề cột bấm để sắp xếp */ sort?: (r: T) => string | number | null | undefined;
-  /** ẩn cột khi màn hình hẹp hơn (px): 1024 | 1280 | 1440 */ hideBelow?: 1024 | 1280 | 1440;
+  /** ẩn cột khi màn hình hẹp hơn (px): 1024 | 1280 | 1440 */ hideBelow?: 1024 | 1280 | 1440 | 1600;
 };
 export type SortState = { key: string; dir: "asc" | "desc" } | null;
 const cmp = (a: unknown, b: unknown) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), "vi", { numeric: true }));

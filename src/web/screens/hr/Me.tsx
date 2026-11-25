@@ -42,8 +42,9 @@ export default function Me() {
   if (linked === "loading") return <Spinner />;
   if (linked === "no") return <NoProfile />;
   return (
-    <div className="stack" style={{ maxWidth: 640 }}>
-      <Segmented wrap value={tab} onChange={setTab} options={TABS} />
+    <div className="stack me-page">
+      <Segmented fit wrap value={tab} onChange={setTab} options={TABS} />
+      <div className="me-cols">
       {tab === "today" && <Today onCorrection={(p) => { setPrefill(p); setTab("corr"); }} />}
       {tab === "schedule" && <MySchedule />}
       {tab === "swap" && <Swaps />}
@@ -51,6 +52,7 @@ export default function Me() {
       {tab === "ot" && <Overtime />}
       {tab === "corr" && <Correction prefill={prefill} />}
       {tab === "payslip" && <Payslips />}
+      </div>
     </div>
   );
 }
@@ -242,7 +244,7 @@ function MySchedule() {
   const days = Array.from({ length: 14 }, (_, i) => addDaysS(from, i));
   return (
     <Card title="Lịch ca 14 ngày tới">
-      <div className="stack" style={{ gap: 6 }} data-testid="my-schedule">
+      <div className="stack me-sched" style={{ gap: 6 }} data-testid="my-schedule">
         {days.map((d) => (
           <div key={d} className="row between" style={{ borderBottom: "1px solid var(--border)", padding: "6px 0" }}>
             <span style={{ minWidth: 84 }}><b>{WD_SHORT[wdOf(d)]}</b> {dm(d)}</span>
