@@ -1,6 +1,6 @@
 # Bán hàng tại quầy — đợt B: bán nợ khách lẻ, thu khác, giao hàng tại quầy
 
-Trạng thái (26/11/2026): **thiết kế, chờ chủ dự án chốt các câu hỏi ở mục 5**. Đợt A đã xong (PR #23, `docs/POS-KV.md`).
+Trạng thái (26/11/2026): **thiết kế đã chốt** (quyết định ở mục 5), đang làm. Đợt A đã xong (PR #23, `docs/POS-KV.md`).
 
 Nguyên tắc: dùng lại cơ chế đang có, không làm sổ sách song song.
 - Bán nợ khách lẻ → dùng **hoá đơn phải thu** (`invoices`), thu nợ (`debt_payments` + `debt_allocations`), tuổi nợ, sao kê, QR SePay mã `HDS` y như khách sỉ. Các route công nợ hiện không giới hạn khách sỉ.
@@ -28,7 +28,7 @@ Quy ước như `CLAUDE.md`: một `db.batch` + `auditStmt`; `assertStmt` cho ki
 - **Huỷ đơn**: chỉ được khi hoá đơn chưa được thu đồng nào; sinh hoá đơn `adjustment` bằng toàn bộ (hoá đơn đã phát hành không sửa/xoá). Đã thu một phần → dùng Trả hàng.
 
 ### Dữ liệu / API
-- Migration `0038_pos_credit.sql`: không cần bảng mới. Thêm tham số `pos.retail_credit_enabled` (0), `pos.retail_credit_default_limit` (0), `approval.pos_credit_vnd` (500.000) vào `settings` + `settings-registry.ts`; quyền `pos.credit` (owner, manager) trong `lib/rbac.ts`.
+- Migration `0038_pos_credit.sql`: không cần bảng mới. Thêm tham số `pos.retail_credit_enabled` (0), `pos.retail_credit_default_limit` (0), `approval.pos_credit_vnd` (500.000), `pos.retail_credit_default_terms_days` (7) vào `settings` + `settings-registry.ts`; quyền `pos.credit` (owner, manager) trong `lib/rbac.ts`.
 - `POST /pos/orders` nhận thêm `credit?: { amount }` (phải bằng đúng tổng − Σ payments; sai → 422 `credit_mismatch`; không có khách → 422 `credit_needs_customer`; vượt hạn mức → 409 `credit_limit_exceeded`).
 - Màn **Khách lẻ**: đặt hạn mức + kỳ hạn (quyền `b2b.write`; vượt `b2b.new_credit_limit_max_vnd` cần chủ duyệt — luồng A-10), tab **Công nợ** (hoá đơn mở, đã thu, sao kê).
 - Báo cáo cuối ngày: dòng "Công nợ" trong bảng hình thức thanh toán lấy từ phần ghi nợ (đang hiện 0).
@@ -53,15 +53,16 @@ Quy ước như `CLAUDE.md`: một `db.batch` + `auditStmt`; `assertStmt` cho ki
 ## B3. Bán giao hàng tại quầy
 
 ### Luồng
-1. Trong giỏ POS bật **Giao hàng**: nhập người nhận, SĐT, địa chỉ (gợi ý từ sổ địa chỉ khách), khu vực + khung giờ giao (dùng `delivery_zones`/`delivery_slots`, kiểm sức chứa bằng `services/slots.ts`), phí giao (gợi ý theo khu vực, sửa được → là một dòng Thu khác loại "Phí giao hàng").
+1. Trong giỏ POS bật **Giao hàng**: nhập người nhận, SĐT, địa chỉ (gợi ý từ sổ địa chỉ khách), khu vực giao (gợi ý phí theo khu vực), phí giao (sửa được → ghi vào `orders.shipping_fee` như đơn online, không dùng bảng thu khác), **người giao**: nhân viên cửa hàng (chọn trong danh sách) hoặc xe ngoài (tên hãng + mã vận đơn nhập tay, cột `carrier`/`carrier_tracking_no` sẵn có).
 2. Thanh toán: khách có thể **trả trước tại quầy** (tiền mặt/QR/chuyển khoản — vào két ca như bán thường) và/hoặc **thu hộ COD** phần còn lại.
-3. Máy chủ tạo **đơn online** qua `createSocialOrder` với `source='pos'`, ghi `orders.pos_shift_id` để biết ca tạo; đơn vào màn **Đơn online** ở trạng thái `confirmed` (đã giữ hàng FEFO), rồi đi tiếp luồng sẵn có: soạn → đóng gói (cân lại hàng cân) → giao → hoàn tất / giao thất bại / trả hàng.
+3. Máy chủ tạo **đơn online** qua `createSocialOrder` với `source='pos'`, ghi `orders.pos_shift_id` để biết ca tạo. Hàng đã cân và đóng gói tại quầy nên đơn **đi thẳng sang "Đang giao"** (`shipping`) — máy chủ chạy đúng các bước chuyển trạng thái sẵn có (xác nhận giữ hàng FEFO → đóng gói theo khối lượng thực → giao) trong MỘT batch, không viết đường tắt sửa trạng thái. Sau đó ở màn **Đơn online**: hoàn tất / giao thất bại / trả hàng như đơn thường.
 4. Doanh thu ghi khi đơn **hoàn tất giao** (như đơn online), không ghi lúc bán tại quầy. Tiền trả trước tại quầy là `payments` của đơn (số dư quỹ đã gồm, theo A-11).
 5. COD: người giao thu rồi nộp — dùng quỹ chờ đối soát COD và màn đối soát COD hiện có.
 
 ### Dữ liệu / API
 - Migration `0040_pos_delivery.sql`: `orders.source TEXT` (NULL | 'pos'), `orders.pos_shift_id INTEGER REFERENCES shifts(id)`.
-- `POST /pos/delivery-orders` (quyền `pos.sell`): `{ customerId?, receiver:{name, phone, address, zoneId, slotDate, slotId}, lines[], discounts…, charges[], prepay:[{method, amount}], cod: amount }` → gọi lại `createSocialOrder` + xác nhận đơn trong một batch; trả mã đơn và link tra cứu.
+- `POST /pos/delivery-orders` (quyền `pos.sell`): `{ customerId?, receiver:{name, phone, address, zoneId?}, lines[], discount?, shippingFee, deliverer: {userId} | {carrier, trackingNo?}, prepay:[{method, amount}], cod }` (prepay + cod = tổng; sai → 422) → tạo đơn + đưa sang `shipping` trong một batch; trả mã đơn và link tra cứu.
+- Danh sách đơn online lọc thêm `source=pos`; chi tiết đơn hiện người giao.
 - Phiếu in giao hàng (80mm): người nhận, địa chỉ, khung giờ, số tiền thu hộ, mã đơn + mã vạch.
 
 ---
@@ -72,7 +73,8 @@ Quy ước như `CLAUDE.md`: một `db.batch` + `auditStmt`; `assertStmt` cho ki
 - `test/pos-delivery.test.ts`: tạo đơn giao từ POS (giữ hàng, khung giờ đầy → 409), trả trước vào két ca, COD vào quỹ chờ đối soát, doanh thu chỉ ghi khi giao xong, giao thất bại → trả hàng.
 - E2E `e2e/pos-kv-b.mjs` (1440 + 390): bán nợ + in QR, thu nợ tại quầy, thu khác, đơn giao từ POS đi hết luồng ở màn Đơn online.
 
-## 5. Câu hỏi cần chủ dự án chốt
-1. **Bán nợ khách lẻ**: thu ngân được ghi nợ trong hạn mức, hay **mọi** lần ghi nợ đều cần quản lý duyệt? Hạn mức mặc định cho khách lẻ mới (đề xuất 0 = phải đặt riêng từng khách) và kỳ hạn mặc định (đề xuất 7 ngày)?
-2. **Thu khác**: các loại phí cố định nào (đóng gói, giao hàng, giỏ quà…)? Trả hàng có hoàn thu khác không?
-3. **Giao hàng tại quầy**: ai giao — nhân viên cửa hàng hay xe ngoài (Grab, Ahamove… chỉ ghi tay mã vận đơn)? Đơn giao từ quầy có cần đi qua bước soạn/đóng gói ở màn Đơn online, hay coi như đã đóng gói tại quầy (đi thẳng sang "đang giao")?
+## 5. Quyết định đã chốt (26/11/2026)
+1. **Bán nợ khách lẻ**: thu ngân tự ghi nợ khi còn trong hạn mức; vượt `approval.pos_credit_vnd` (500.000đ/lần) hoặc vượt hạn mức → quản lý duyệt. Khách lẻ mới: hạn mức 0 (phải đặt riêng từng khách), kỳ hạn mặc định 7 ngày (`pos.retail_credit_default_terms_days`).
+2. **Thu khác**: trả một phần → không hoàn phí; trả toàn bộ đơn → hỏi có hoàn phí không, bắt buộc lý do.
+3. **Giao hàng tại quầy**: đóng gói tại quầy, đơn sang thẳng "Đang giao"; doanh thu ghi khi giao xong.
+4. **Người giao**: nhân viên cửa hàng hoặc xe ngoài, ghi tay mã vận đơn; không nối API hãng vận chuyển.
