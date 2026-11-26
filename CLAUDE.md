@@ -8,6 +8,7 @@ Nền tảng: Cloudflare Workers, D1 (SQLite), R2, Queues, Cron. Giao diện và
 
 ## Đọc trước khi làm
 
+0. **`docs/BAN-GIAO.md`: bàn giao mới nhất (26/11/2026) — việc đang dở, thứ tự ưu tiên, thiết lập lại khi đổi tài khoản.**
 1. `docs/HANDOFF.md`: trạng thái dự án, việc còn lại, cách deploy.
 2. `docs/WIP-UX-PC.md`: giao diện PC (đã xong bước 1, 2B, 2C): cách chụp/rà ảnh, quyết định đã chốt, việc nhỏ còn để lại.
 3. `docs/UI-KIT.md`: bộ thành phần giao diện dùng chung (danh sách, bộ lọc, khung chi tiết).
@@ -90,6 +91,8 @@ E2E (Playwright, 10 bộ, mỗi bộ cần một DB mới): xem lệnh đầy đ
 - `@cloudflare/vite-plugin` chọn môi trường **lúc build** (`CLOUDFLARE_ENV=demo npm run build`). Tham số `wrangler deploy --env` bị bỏ qua.
 - `wrangler dev` phục vụ bản **đã build**. Sửa code xong phải chạy `npm run build` trước khi khởi động lại.
 - E2E: mỗi bộ chạy trên DB mới. Bộ b2b cần font BeVietnamPro trên R2 local (để in PDF). Bộ hr cần toạ độ cửa hàng.
+- `wrangler dev -c dist/huu_manh_erp/wrangler.json` đọc `.dev.vars` trong `dist/huu_manh_erp/` (không phải gốc repo); thiếu thì bootstrap trả 404. Dùng `scripts/e2e-db.sh` để dựng DB + server cho E2E.
+- Thêm nhóm tham số trong `settings-registry.ts` → sửa số nhóm trong `e2e/settings.mjs`.
 - Không dùng `git stash` khi có agent khác làm việc song song. Dùng `git worktree` cho mỗi nhánh.
 
 ## Git, PR, deploy
