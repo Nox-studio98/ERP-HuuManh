@@ -125,7 +125,8 @@ tr.bad td { background: var(--warn-soft); }
 .numpad button:active { background: var(--accent-soft); }
 
 /* pos */
-.pos { display: grid; gap: var(--s-4); }
+.pos { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); }
+.pos > * { min-width: 0; } /* chip nhóm hàng cuộn ngang không được kéo giãn cột lưới (mobile) */
 .pos-cart { display: none; } .pos.show-cart .pos-cart { display: block; } .pos.show-cart .pos-products { display: none; }
 .pos-products { display: block; }
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-2); }
@@ -764,3 +765,30 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .bd-info { display: grid; grid-template-columns: 96px 1fr; gap: var(--s-2) var(--s-3); align-items: baseline; }
 @media (max-width: 1023px) { .bd-hm { display: none; } .bd-actions .btn { padding: 0 var(--s-3); } .bd-bar { gap: 6px; } }
 @media (max-width: 1023px) { .bd-selbar { flex-wrap: nowrap; gap: var(--s-2); padding: 8px 12px; width: 100%; justify-content: space-between; } .bd-selbar .btn { white-space: nowrap; padding: 0 var(--s-3); } }
+
+/* POS — nhiều hoá đơn (tab), lọc nhóm hàng, lưới ảnh */
+.pos-tabs { grid-column: 1 / -1; display: flex; gap: var(--s-2); align-items: center; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; min-width: 0; }
+.pos-tabs::-webkit-scrollbar { display: none; }
+.pos-tab { flex: 0 0 auto; display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); overflow: hidden; }
+.pos-tab.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pos-tab-main { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 var(--s-3) 0 var(--s-4); background: none; border: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.pos-tab-main .long { display: none; }
+.pos-tab-n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: .75rem; line-height: 20px; text-align: center; font-weight: 700; }
+.pos-tab-x { min-height: 40px; width: 34px; background: none; border: 0; color: inherit; opacity: .6; font-size: 1.1rem; cursor: pointer; }
+.pos-tab-x:hover { opacity: 1; }
+.pos-tab-add { flex: 0 0 auto; min-height: 40px; min-width: 40px; padding: 0 var(--s-3); border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+.pos-tab-add:disabled { opacity: .4; cursor: not-allowed; }
+.pos-tab-add .kbd-hint { font-weight: 400; }
+@media (min-width: 768px) { .pos-tab-main .long { display: inline; } .pos-tab-main .short { display: none; } }
+.pos-filter { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; margin-top: var(--s-1); }
+.pos-filter .chips.scroll { margin-top: 0; }
+@media (min-width: 768px) { .pos-filter { flex-direction: row; align-items: flex-start; justify-content: space-between; } .pos-filter .chips { flex: 1 1 auto; } .pos-filter .seg { flex: none; } }
+.pgrid.photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.ptile.photo { padding: 0; overflow: hidden; gap: 0; min-height: 0; }
+.ptile.photo > :not(.pimg) { margin: 0 var(--s-3); }
+.ptile.photo .n { margin-top: var(--s-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ptile.photo .p { padding-bottom: var(--s-3); margin-top: 6px; }
+.ptile.photo .small { font-size: .78rem; }
+.pimg { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--surface-2, var(--border)); }
+.pimg.ph { display: flex; align-items: center; justify-content: center; font-size: 2.2rem; font-weight: 700; }
+@media (min-width: 1280px) { .pgrid.photos { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); } }
