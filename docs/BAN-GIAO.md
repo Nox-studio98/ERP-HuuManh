@@ -8,31 +8,30 @@ Tài liệu này dành cho **người/tài khoản tiếp nhận** (kể cả m�
 
 | Hạng mục | Trạng thái | Ở đâu |
 |---|---|---|
-| `main` | Gồm mọi thứ tới PR #20 (chọn ngân hàng SePay) | `origin/main` |
-| **Bảng chấm công dạng lưới (kiểu KiotViet)** | ✅ Xong, **CI xanh, chờ chủ dự án đồng ý gộp** | PR [#21](https://github.com/Nox-studio98/ERP-HuuManh/pull/21), nhánh `claude/hr-board` |
+| `main` | Gồm mọi thứ tới PR #22 (Bảng chấm công + tài liệu bàn giao), gộp ngày 26/11/2026 | `origin/main` |
+| **Bảng chấm công dạng lưới (kiểu KiotViet)** | ✅ **Đã gộp** (26/11/2026) | PR [#21](https://github.com/Nox-studio98/ERP-HuuManh/pull/21) |
 | Nhập nhanh đơn sỉ (Zalo + bảng nhiều chi nhánh + đọc ảnh) | ⏸ **Làm sau** — chỉ làm khi mọi phần khác đã sửa chuẩn; hiện có thiết kế + PoC, chưa code | nhánh `claude/zalo-order-design` (`docs/ZALO-ORDER.md`, `docs/concept-nhap-nhanh-don-si.html`, `tools/ocr-poc/`) — chưa có PR |
 | Bán hàng tại quầy theo KiotViet | ⏸ **Tạm dừng** theo yêu cầu, chỉ có kế hoạch | `docs/POS-KV.md` (nhánh này) |
-| Tài liệu bàn giao (file này, hướng dẫn Bảng chấm công, script E2E) | Nhánh `claude/pos-kv` | PR tài liệu |
-| Bản demo | Chưa có PO/NCC, SePay, ngân hàng, Bảng chấm công — cần **tạo release** | xem mục 6 |
+| Tài liệu bàn giao (file này, hướng dẫn Bảng chấm công, script E2E) | ✅ **Đã gộp** (26/11/2026) | PR [#22](https://github.com/Nox-studio98/ERP-HuuManh/pull/22) |
+| Bản demo | Chưa có PO/NCC, SePay, ngân hàng, Bảng chấm công (PR #18–#22) — cần **tạo release** `demo-2026-11-26` | xem mục 6 |
 
-Kiểm thử ở thời điểm bàn giao (nhánh `claude/hr-board`): `tsc` sạch, **881 test vitest đạt**, E2E `hr`, `hr-swap`, `hr-board` (mới), `settings` đạt trên DB mới.
+Kiểm thử ở thời điểm gộp #21 (nhánh `claude/hr-board`): `tsc` sạch, **881 test vitest đạt**, E2E `hr`, `hr-swap`, `hr-board` (mới), `settings` đạt trên DB mới.
 
 ---
 
 ## 2. Việc tiếp theo (theo thứ tự ưu tiên)
 
-### 2.1 Gộp PR #21 — Bảng chấm công
-- Chờ chủ dự án nói "gộp". Không tự gộp.
-- Sau khi gộp: tạo release `demo-YYYY-MM-DD` để đưa lên demo (mục 6). Kiểm tra trên demo: menu Nhân sự → **Bảng chấm công**.
+### 2.1 PR #21 — Bảng chấm công (✅ đã gộp 26/11/2026)
+- Việc còn lại: tạo release `demo-YYYY-MM-DD` để đưa lên demo (mục 6). Kiểm tra trên demo: menu Nhân sự → **Bảng chấm công**.
 - Tài liệu: `docs/API-attendance-board.md` (hợp đồng + quy tắc tính công), `docs/HUONG-DAN-BANG-CHAM-CONG.md` (hướng dẫn cho quản lý cửa hàng).
 - Quyết định đã chốt: khi bật "tự tính làm thêm" mà có cả đơn tăng ca đã duyệt cùng ngày → lấy **số lớn hơn**, không cộng dồn (chủ dự án đồng ý 26/11).
-- PR này cũng sửa `e2e/settings.mjs` (đếm 11 nhóm tham số). Trên `main` bộ này đang **hỏng sẵn** từ PR SePay (đếm 9 trong khi đã có 10).
+- PR này cũng sửa `e2e/settings.mjs` (đếm 11 nhóm tham số), bộ này từng hỏng trên `main` từ PR SePay.
 
 ### 2.2 Sửa chuẩn những gì đang có (ưu tiên trước mọi tính năng mới)
 Theo yêu cầu chủ dự án: hoàn thiện và sửa chuẩn hệ thống hiện tại trước. Nguồn việc:
 - Lỗi nghiệp vụ trung bình/thấp còn lại sau audit: `docs/audit/README.md` (mục Trạng thái sửa).
 - `HANDOFF.md` mục 3.2 (giả định cần xác nhận: MISA, Fresco, email thật, push…) và mục 3.4 (tham số "Cần xác nhận").
-- Chạy đủ **mọi bộ E2E** trên DB mới sau khi gộp #21 (trên `main` bộ `settings` đang hỏng sẵn, đã sửa trong #21) và rà ảnh các màn chính ở 1440/390.
+- Chạy đủ **mọi bộ E2E** trên DB mới trên `main` (đã gồm #21) và rà ảnh các màn chính ở 1440/390.
 - Đưa bản mới lên demo (mục 6) để chủ dự án/khách kiểm tra, ghi lại lỗi phát hiện.
 
 ### 2.2b Đối chiếu toàn bộ với KiotViet — danh sách việc nên cải thiện
@@ -111,7 +110,7 @@ npx tsc --noEmit && npx vitest run
 ---
 
 ## 6. Deploy bản demo
-GitHub → Releases → *Draft a new release* → tag mới `demo-YYYY-MM-DD` (vd `demo-2026-11-26`) từ `main` → Publish. Job `deploy-demo` tự áp migration, tải font, deploy ERP (`huumanh.noxelis.co`) và website (`huumanhfruit.noxelis.co`). Bản demo hiện **chưa** có các PR #18–#21.
+GitHub → Releases → *Draft a new release* → tag mới `demo-YYYY-MM-DD` (vd `demo-2026-11-26`) từ `main` → Publish. Job `deploy-demo` tự áp migration, tải font, deploy ERP (`huumanh.noxelis.co`) và website (`huumanhfruit.noxelis.co`). Bản demo hiện **chưa** có các PR #18–#22.
 
 ---
 
