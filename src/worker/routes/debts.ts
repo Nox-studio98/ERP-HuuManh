@@ -433,7 +433,7 @@ debtRoutes.post("/debts/adjustments", requirePerm("debt.write"), async (c) => {
     const q = customerCreditSql(body.partnerId);
     await db.batch([
       assertStmt(db, "debt.credit_apply", `SELECT ${q.sql} >= ?`, [...q.binds, body.amount]),
-      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?, 'return_credit', 'customer', ?, ?, 'posted', ?, ?)`).bind(code, body.partnerId, body.amount, body.reason, user.id),
+      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by, posted_at) VALUES (?, 'return_credit', 'customer', ?, ?, 'posted', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`).bind(code, body.partnerId, body.amount, body.reason, user.id),
       ...plan.allocs.map((a) => allocStmt(db, a.doc, a.amount, { adjustmentCode: code })),
       auditStmt(c, { action: "debt.return_credit", entity: "debt_adjustment", entityId: code, after: { partnerId: body.partnerId, amount: body.amount, allocations: plan.allocs.map((a) => ({ invoice: a.doc.id, amount: a.amount })) }, reason: body.reason }),
     ]);
@@ -462,7 +462,7 @@ debtRoutes.post("/debts/adjustments", requirePerm("debt.write"), async (c) => {
     const cCode = await nextCode(db, "DCN");
     const sCode = await nextCode(db, "DCN");
     const ins = (code: string, pt: PartnerType, pid: number) =>
-      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?, 'offset', ?, ?, ?, 'posted', ?, ?)`).bind(code, pt, pid, body.amount, body.reason, user.id);
+      db.prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by, posted_at) VALUES (?, 'offset', ?, ?, ?, 'posted', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`).bind(code, pt, pid, body.amount, body.reason, user.id);
     await db.batch([
       ins(cCode, "customer", customerId),
       ins(sCode, "supplier", supplierId),
@@ -483,8 +483,8 @@ debtRoutes.post("/debts/adjustments", requirePerm("debt.write"), async (c) => {
   const code = await nextCode(db, "DCN");
   const stmts: D1PreparedStatement[] = [
     db
-      .prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?,?,?,?,?,?,?,?)`)
-      .bind(code, body.type, body.partnerType, body.partnerId, body.amount, needApproval ? "pending_approval" : "posted", body.reason, user.id),
+      .prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by, posted_at) VALUES (?,?,?,?,?,?,?,?, CASE WHEN ? = 'posted' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') END)`)
+      .bind(code, body.type, body.partnerType, body.partnerId, body.amount, needApproval ? "pending_approval" : "posted", body.reason, user.id, needApproval ? "pending_approval" : "posted"),
   ];
   if (needApproval) {
     stmts.push(
@@ -522,7 +522,7 @@ registerApprovalHandler("debt_adjustment.post", {
     if (plan.leftover > 0) throw conflict("outstanding_changed", "Số còn nợ đã thay đổi, nhỏ hơn số điều chỉnh — hãy từ chối và lập lại");
     return [
       assertStmt(db, "debt.adj_approve", `SELECT status = 'pending_approval' FROM debt_adjustments WHERE id = ?`, [adjId]),
-      db.prepare(`UPDATE debt_adjustments SET status='posted' WHERE id = ? AND status='pending_approval'`).bind(adjId),
+      db.prepare(`UPDATE debt_adjustments SET status='posted', posted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND status='pending_approval'`).bind(adjId),
       ...plan.allocs.map((x) => allocStmt(db, x.doc, x.amount, { adjustmentId: adjId })),
       auditStmt(c, { action: "debt.adjustment_approved", entity: "debt_adjustment", entityId: adjId, before: { status: "pending_approval" }, after: { status: "posted" } }),
     ];
@@ -639,7 +639,7 @@ debtRoutes.get("/debts/statements/:partnerType/:partnerId", requirePerm("debt.vi
   const pays = (await db.prepare(`SELECT id, code, paid_at, amount, direction FROM debt_payments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
   // Hoàn tiền dư có cho khách (direction='out', partner customer) làm số dư tăng lại → ghi bên phát sinh tăng
   for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: r.direction === "out" && pt === "customer" ? "customer_refund" : "payment", docCode: r.code, debit: r.direction === "out" && pt === "customer" ? r.amount : 0, credit: r.direction === "out" && pt === "customer" ? 0 : r.amount });
-  const adjs = (await db.prepare(`SELECT id, code, type, created_at, amount FROM debt_adjustments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
+  const adjs = (await db.prepare(`SELECT id, code, type, COALESCE(posted_at, created_at) AS created_at, amount FROM debt_adjustments WHERE partner_type=? AND partner_id=? AND status='posted'`).bind(pt, pid).all<any>()).results;
   // 'return_credit' của KHÁCH chỉ chuyển số dư có sang hoá đơn khác (tổng nợ không đổi) → hiển thị nhưng không phát sinh; của NCC (trả hàng) là bút toán giảm nợ phải trả
   for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.type === "return_credit" && pt === "customer" ? 0 : r.amount });
   ev.sort((a, b) => a.date.localeCompare(b.date) || a.ord - b.ord || a.id - b.id);

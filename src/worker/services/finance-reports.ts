@@ -49,14 +49,14 @@ export async function shrinkage(db: D1Database, fromIso: string, toIso: string) 
  *  - voucherIncome: phiếu thu có dòng P&L other_income (vd chênh lệch đối soát thừa), trừ phiếu đảo
  *  - purchaseVariance: chênh lệch giá mua (B-09) của phần đã bán khi chốt hoá đơn tạm khác giá, tính vào ngày chốt
  *  - otherReceipts: phiếu thu các khoản mục còn lại có dòng P&L (vd THU_KHAC 'other'), trừ phiếu đảo (B-11); khoản mục transfer/revenue/cogs bị loại
- * return_credit / offset / opening_balance không đi vào P&L. Mốc ngày theo created_at (UTC) đã quy đổi qua fromIso/toIso của ngày VN.
+ * return_credit / offset / opening_balance không đi vào P&L. Điều chỉnh công nợ theo ngày ghi sổ posted_at (ngày duyệt; dòng cũ thiếu thì created_at); các mục khác theo created_at (UTC) đã quy đổi qua fromIso/toIso của ngày VN.
  */
 export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: string) {
   const adj = (
     await db
       .prepare(
         `SELECT type, partner_type AS pt, COALESCE(SUM(amount),0) AS s FROM debt_adjustments
-          WHERE status='posted' AND type IN ('write_off','discount') AND created_at >= ? AND created_at < ? GROUP BY type, partner_type`,
+          WHERE status='posted' AND type IN ('write_off','discount') AND COALESCE(posted_at, created_at) >= ? AND COALESCE(posted_at, created_at) < ? GROUP BY type, partner_type`,
       )
       .bind(fromIso, toIso)
       .all<{ type: string; pt: string; s: number }>()

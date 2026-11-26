@@ -7,7 +7,7 @@ import { AppError } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { vnDate, vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { parseBody, guarded } from "../services/http";
-import { cashFlow, pnlByChannel, revenueByChannel, shrinkage, voucherCosts } from "../services/finance-reports";
+import { cashFlow, pnlAdjustments, pnlByChannel, revenueByChannel, shrinkage, voucherCosts } from "../services/finance-reports";
 
 export const financeExtraRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -200,6 +200,10 @@ financeExtraRoutes.get("/reports/budget-vs-actual", requirePerm("reports.view"),
   };
   for (const r of costs) lineActual[r.line] = (lineActual[r.line] ?? 0) + r.amount;
   if (shrink) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + shrink;
+  // Chênh lệch kiểm kê/điều chỉnh tồn tính vào dòng hao hụt như /reports/pnl (giảm = chi phí, tăng = giảm chi phí)
+  const { stockCount } = await pnlAdjustments(db, fromIso, toIso);
+  if (stockCount) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + stockCount;
+  lineActual.stockCount = stockCount;
 
   const catAct = (
     await db

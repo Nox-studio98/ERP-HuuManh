@@ -182,11 +182,25 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
     const regularMinutes = Math.max(0, sum(input.days.map((d) => Math.max(0, d.workedMinutes - d.overtimeMinutes))) + input.adjustMinutes.work);
     basePay = Math.round((e.hourlyRate * regularMinutes) / 60);
     lines.push({ label: "Lương theo giờ", amount: basePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(regularMinutes / 60).toFixed(2)} giờ thường (đã trừ giờ tăng ca, trả riêng)` });
+    // C-24: phép có lương của NV lương giờ = số giờ ca đã xếp ngày đó (không có ca → 8 giờ) × phần ngày phép
+    const leaveMinutes = sum(input.days.map((d) => (d.leavePaidX10 > 0 ? Math.round(((d.scheduledMinutes || 480) * Math.min(10, d.leavePaidX10)) / 10) : 0)));
+    if (leaveMinutes > 0) {
+      const leavePay = Math.round((e.hourlyRate * leaveMinutes) / 60);
+      basePay += leavePay;
+      lines.push({ label: "Phép có lương", amount: leavePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(leaveMinutes / 60).toFixed(2)} giờ (giờ ca đã xếp của ngày phép, không có ca tính 8 giờ; phép ${leaveX10 / 10} ngày)` });
+    }
   } else {
     // C-24: phút điều chỉnh công quy đổi 480 phút = 1 ca (trước đây lương theo ca bỏ qua điều chỉnh)
     const adjShifts = input.adjustMinutes.work / 480;
     basePay = Math.round(e.shiftRate * (shifts + adjShifts));
     lines.push({ label: "Lương theo ca", amount: basePay, group: "income", note: `${fmt(e.shiftRate)} × ${shifts} ca${input.adjustMinutes.work ? ` ${adjShifts >= 0 ? "+" : "−"} ${Math.abs(Math.round(adjShifts * 100) / 100)} ca điều chỉnh công (${input.adjustMinutes.work} phút / 480)` : ""}` });
+    // C-24: phép có lương của NV lương ca = 1 ca mỗi ngày phép (nửa ngày = 0,5 ca); đơn giá ca không phụ thuộc độ dài ca
+    const leaveShifts = sum(input.days.map((d) => Math.min(10, d.leavePaidX10))) / 10;
+    if (leaveShifts > 0) {
+      const leavePay = Math.round(e.shiftRate * leaveShifts);
+      basePay += leavePay;
+      lines.push({ label: "Phép có lương", amount: leavePay, group: "income", note: `${fmt(e.shiftRate)} × ${Math.round(leaveShifts * 100) / 100} ca (1 ca mỗi ngày phép có lương)` });
+    }
   }
 
   // ---- Tăng ca ----

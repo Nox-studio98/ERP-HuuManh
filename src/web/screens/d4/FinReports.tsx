@@ -188,7 +188,7 @@ function Vat({ period }: { period: string }) {
 }
 
 // ---------------------------------------------------------------- ngân sách
-const LINES: Record<string, string> = { revenue: "Doanh thu", cogs: "Giá vốn", opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác" };
+const LINES: Record<string, string> = { revenue: "Doanh thu", cogs: "Giá vốn", opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt & chênh lệch kiểm kê", other: "Khác" };
 function Budget({ period }: { period: string }) {
   const can = useCan();
   const r = useAsync(() => get("/reports/budget-vs-actual", { period }), [period]);
