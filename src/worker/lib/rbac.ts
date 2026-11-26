@@ -8,7 +8,7 @@ import { forbidden } from "./errors";
  */
 export const PERMISSIONS = [
   // M1
-  "pos.sell", "pos.void", "pos.return", "pos.shift", "orders.view", "orders.online.manage",
+  "pos.sell", "pos.void", "pos.return", "pos.shift", "orders.view", "orders.online.manage", "orders.edit",
   // M2
   "inventory.view", "inventory.write", "inventory.approve", "products.write",
   // M3
@@ -41,7 +41,7 @@ const ALL = new Set<Permission>(PERMISSIONS);
 export const ROLE_PERMS: Record<Role, ReadonlySet<Permission>> = {
   owner: ALL,
   manager: new Set<Permission>([
-    "pos.sell", "pos.void", "pos.return", "pos.shift", "orders.view", "orders.online.manage",
+    "pos.sell", "pos.void", "pos.return", "pos.shift", "orders.view", "orders.online.manage", "orders.edit",
     "inventory.view", "inventory.write", "inventory.approve", "products.write",
     "prices.view_sell", "prices.view_cost", "prices.write", "prices.approve",
     "finance.view", "finance.shift_reconcile",
