@@ -93,7 +93,8 @@ try {
   await login(o.page, OWNER.u, OWNER.p);
   await o.page.goto(BASE + "/settings");
   await o.page.getByRole("heading", { name: "Ngưỡng duyệt" }).waitFor();
-  assert((await o.page.locator(".set-head").count()) === 9, "9 nhóm tham số");
+  const nGroups = await o.page.locator(".set-head").count();
+  assert(nGroups === 11, `11 nhóm tham số (có ${nGroups}; thêm nhóm Chấm công)`);
   await shot(o.page, "settings-01-params-mobile.png");
   const before = (await apiGet(o.ctx, "/settings")).pendingCount;
   assert(before > 20, `có ${before} mục cần xác nhận`);
