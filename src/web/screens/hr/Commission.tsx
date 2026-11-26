@@ -124,7 +124,7 @@ function Preview() {
                 { key: "r", label: "Doanh thu thuần", num: true, sort: (x) => x.revenue, render: (x) => money(x.revenue) },
                 { key: "u", label: "Ngoài quy tắc", num: true, hideBelow: 1280, sort: (x) => x.uncoveredRevenue, render: (x) => (x.uncoveredRevenue ? money(x.uncoveredRevenue) : "—") },
                 { key: "c", label: "Hoa hồng", num: true, sort: (x) => x.commission, render: (x) => <b>{money(x.commission)}</b> },
-                { key: "p", label: "Diễn giải", hideBelow: 1024, render: (x) => <span className="small">{x.parts.map((p: any) => `${p.name}: ${money(p.revenue)} × ${pctText(p.rateBp)} = ${money(p.amount)}`).join(" · ") || "—"}</span> },
+                { key: "p", label: "Diễn giải", hideBelow: 1024, render: (x) => x.parts.length ? <div className="small" style={{ textAlign: "left" }}>{x.parts.map((p: any, i: number) => <div key={i}>{p.name}: {money(p.revenue)} × {pctText(p.rateBp)} = {money(p.amount)}</div>)}</div> : "—" },
               ]} />
           )}
           <div className="small muted">Doanh thu "ngoài quy tắc" là phần không khớp quy tắc nào nên không có hoa hồng. Người chưa có hồ sơ nhân viên liên kết tài khoản sẽ không nhận hoa hồng trong bảng lương.</div>

@@ -62,7 +62,7 @@ function Sellers({ q, cost }: { q: Q; cost: boolean }) {
       {d?.basis === "lines" && <div className="small muted">Đang lọc theo nhóm hàng: số liệu tính trên dòng hàng của nhóm, không gồm phí giao hàng.</div>}
       {!rows.length ? <Card>{EMPTY}</Card> : (
         <>
-          <Card title="Doanh thu thuần theo người bán"><BarChart width={wide ? 1000 : 560} height={wide ? 220 : 180} maxBar={wide ? 56 : 44} data={rows.slice(0, 10).map((x) => ({ label: x.sellerName.length > 14 ? x.sellerName.slice(0, 13) + "…" : x.sellerName, value: x.revenue }))} /></Card>
+          <Card title="Doanh thu thuần theo người bán"><BarChart width={wide ? 1000 : 560} height={wide ? 220 : 180} maxBar={wide ? 56 : 44} labelMax={wide ? 14 : 9} data={rows.slice(0, 10).map((x) => ({ label: x.sellerName, value: x.revenue }))} /></Card>
           <div className="row" style={{ justifyContent: "flex-end" }}><ExportButton filename={`ban-hang-theo-nguoi-ban_${q.from}_${q.to}`} rows={rows} columns={[
               { label: "Người bán", value: (x) => x.sellerName }, { label: "Số đơn", value: (x) => x.saleCount }, { label: "Doanh thu bán", value: (x) => x.sales }, { label: "Trả hàng", value: (x) => x.returns },
               { label: "Doanh thu thuần", value: (x) => x.revenue }, { label: "TB / đơn", value: (x) => x.avgOrder }, ...(cost ? [{ label: "Giá vốn", value: (x: any) => x.cogs }, { label: "Lãi gộp", value: (x: any) => x.grossProfit }] : []),

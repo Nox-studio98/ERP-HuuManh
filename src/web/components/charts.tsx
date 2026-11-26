@@ -1,7 +1,7 @@
 import { money, num } from "../format";
 
 /** `maxBar` (tuỳ chọn, đơn vị viewBox): giới hạn bề rộng cột và gom nhóm cột vào giữa khi ít dữ liệu, tránh cột to bản. */
-export function BarChart({ data, height = 180, format = money, maxBar, width = 560 }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string; maxBar?: number; width?: number }) {
+export function BarChart({ data, height = 180, format = money, maxBar, width = 560, labelMax }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string; maxBar?: number; width?: number; /** Nhãn là tên (không phải ngày): cắt đuôi kèm "…" khi dài hơn số ký tự này, thay cho cách lấy 5 ký tự cuối. */ labelMax?: number }) {
   const W = width, padL = 8, padB = 22, padT = 16;
   const max = Math.max(1, ...data.map((d) => d.value));
   const slot = (W - padL * 2) / Math.max(1, data.length);
@@ -16,7 +16,7 @@ export function BarChart({ data, height = 180, format = money, maxBar, width = 5
         return (
           <g key={i}>
             <rect className="bar" x={x} y={height - padB - h} width={w} height={h} rx={3}><title>{`${d.label}: ${format(d.value)}`}</title></rect>
-            {data.length <= 12 && <text x={x + w / 2} y={height - 6} textAnchor="middle">{d.label.length > 8 ? d.label.slice(-5) : d.label}</text>}
+            {data.length <= 12 && <text x={x + w / 2} y={height - 6} textAnchor="middle">{labelMax ? (d.label.length > labelMax ? d.label.slice(0, labelMax - 1) + "…" : d.label) : d.label.length > 8 ? d.label.slice(-5) : d.label}</text>}
             {data.length <= 7 && d.value > 0 && <text x={x + w / 2} y={height - padB - h - 4} textAnchor="middle">{num(Math.round(d.value / 1000))}k</text>}
           </g>
         );
