@@ -36,6 +36,17 @@ CREATE TRIGGER att_incidents_immutable BEFORE UPDATE OF employee_id, work_date, 
 BEGIN SELECT RAISE(ABORT, 'incident_immutable'); END;
 CREATE TRIGGER att_incidents_no_delete BEFORE DELETE ON attendance_incidents BEGIN SELECT RAISE(ABORT, 'incident_immutable'); END;
 
+-- Chặn ghi / huỷ phạt-thưởng vào kỳ lương đã duyệt hoặc đã chi (kỳ lương theo work_date).
+CREATE TRIGGER att_incidents_period_ins BEFORE INSERT ON attendance_incidents
+WHEN EXISTS (SELECT 1 FROM payroll_periods WHERE period = substr(NEW.work_date, 1, 7) AND status IN ('approved','paid'))
+BEGIN SELECT RAISE(ABORT, 'payroll_locked'); END;
+CREATE TRIGGER att_incidents_period_void BEFORE UPDATE OF voided_at ON attendance_incidents
+WHEN EXISTS (SELECT 1 FROM payroll_periods WHERE period = substr(OLD.work_date, 1, 7) AND status IN ('approved','paid'))
+BEGIN SELECT RAISE(ABORT, 'payroll_locked'); END;
+
+-- Số công quy đổi theo bậc (hr.workday_tiers) của từng ngày, chụp lúc chốt kỳ. NULL = lúc chốt chưa bật bậc công → lương không dùng.
+ALTER TABLE timesheet_days ADD COLUMN work_units_x10 INTEGER;
+
 -- Ca của người làm thay khi ghi nghỉ (trỏ về ca gốc của người nghỉ).
 ALTER TABLE shift_assignments ADD COLUMN substitute_for_id INTEGER REFERENCES shift_assignments(id);
 
@@ -60,4 +71,4 @@ INSERT OR IGNORE INTO settings(key, value, note) VALUES
   ('hr.ot_min_after_minutes', '0', 'chỉ tính làm thêm sau ca khi ≥ số phút này (khi hr.ot_auto = 1)'),
   ('hr.workday_tiers', '', 'quy đổi giờ làm → công; để trống = tắt. Dạng "240:5,480:10,600:15"'),
   ('hr.auto_attendance', '0', '1 = ca đã qua không có lần chấm nào được tính đủ giờ theo lịch'),
-  ('hr.unscheduled_punch', 'approve', 'off = không cho chấm khi không có ca; approve = cho chấm, chờ duyệt; allow = ghi nhận ngay');
+  ('hr.unscheduled_punch', 'allow', 'off = không cho chấm khi không có ca; approve = cho chấm, chờ duyệt; allow = ghi nhận ngay (mặc định: giữ cách chạy cũ)');

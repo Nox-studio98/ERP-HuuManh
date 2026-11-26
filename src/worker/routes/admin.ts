@@ -262,7 +262,7 @@ async function settingsView(c: Ctx) {
       const needs = needsConfirmNote(r?.note);
       return {
         key: d.key, label: d.label, help: d.help, type: d.type, unit: d.unit ?? null, min: d.min ?? null, max: d.max ?? null,
-        options: d.options ?? null, maxLen: d.maxLen ?? null, sensitive: !!d.sensitive,
+        options: d.options ?? null, maxLen: d.maxLen ?? null, format: d.format ?? null, sensitive: !!d.sensitive,
         value: r ? mask(d.key, r.value) : null, note: r?.note ?? null,
         needsConfirm: needs, confirmed: !!cf, confirmedAt: cf?.confirmed_at ?? null, confirmedByName: cf?.by_name ?? null,
         pending: needs && !cf,

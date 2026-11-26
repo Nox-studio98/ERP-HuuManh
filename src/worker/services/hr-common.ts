@@ -54,6 +54,40 @@ export interface HrSettings {
   qrWindowSeconds: number;
   /** C-15: ngày nghỉ hằng tuần (1 = Thứ Hai … 7 = Chủ nhật) — không tính vào số ngày phép. */
   weeklyOffDays: number[];
+  /** Bảng chấm công (migrations/0031): chế độ ca / khung giờ, ân hạn về sớm, làm thêm tự động, bậc công, tự chấm, chấm ngoài lịch. */
+  attendanceMode: "shift" | "window";
+  windowStart: string;
+  windowEnd: string;
+  windowBreakStart: string;
+  windowBreakEnd: string;
+  earlyGraceMinutes: number;
+  otAuto: boolean;
+  otMinBeforeMinutes: number;
+  otMinAfterMinutes: number;
+  /** [[phút, công×10]] tăng dần; rỗng = tắt. */
+  workdayTiers: [number, number][];
+  autoAttendance: boolean;
+  unscheduledPunch: "off" | "approve" | "allow";
+}
+
+/**
+ * "240:5,480:10,600:15" → [[240,5],[480,10],[600,15]]. Phút 1..1440 tăng dần, công×10 0..100 không giảm. Rỗng → []; sai → null.
+ */
+export function parseWorkdayTiers(v: string | undefined | null): [number, number][] | null {
+  const s = (v ?? "").trim();
+  if (!s) return [];
+  const out: [number, number][] = [];
+  for (const part of s.split(",")) {
+    const m = /^\s*(\d{1,4})\s*:\s*(\d{1,3})\s*$/.exec(part);
+    if (!m) return null;
+    const minutes = Number(m[1]);
+    const units = Number(m[2]);
+    if (minutes < 1 || minutes > 1440 || units > 100) return null;
+    const prev = out[out.length - 1];
+    if (prev && (minutes <= prev[0] || units < prev[1])) return null;
+    out.push([minutes, units]);
+  }
+  return out;
 }
 
 /** "6,7" → [6,7]; bỏ giá trị ngoài 1..7. */
@@ -85,6 +119,7 @@ export async function hrSettings(db: D1Database): Promise<HrSettings> {
     const n = Number(m.get(k));
     return m.has(k) && Number.isFinite(n) ? n : d;
   };
+  const hhmm = (v: string | undefined, d: string) => (v != null && /^([01]\d|2[0-3]):[0-5]\d$/.test(v.trim()) ? v.trim() : d);
   return {
     lateGraceMinutes: num("hr.late_grace_minutes", 5),
     roundingMinutes: Math.max(1, num("hr.rounding_minutes", 15)),
@@ -95,6 +130,18 @@ export async function hrSettings(db: D1Database): Promise<HrSettings> {
     gpsMaxAccuracyM: num("hr.gps_max_accuracy_m", 100),
     qrWindowSeconds: Math.max(5, num("hr.qr_window_seconds", 30)),
     weeklyOffDays: parseWeeklyOff(m.get("hr.weekly_off_days")),
+    attendanceMode: m.get("hr.attendance_mode")?.trim() === "window" ? "window" : "shift",
+    windowStart: hhmm(m.get("hr.window_start"), "08:00"),
+    windowEnd: hhmm(m.get("hr.window_end"), "17:30"),
+    windowBreakStart: hhmm(m.get("hr.window_break_start"), ""),
+    windowBreakEnd: hhmm(m.get("hr.window_break_end"), ""),
+    earlyGraceMinutes: Math.max(0, num("hr.early_grace_minutes", 0)),
+    otAuto: m.get("hr.ot_auto")?.trim() === "1",
+    otMinBeforeMinutes: Math.max(0, num("hr.ot_min_before_minutes", 0)),
+    otMinAfterMinutes: Math.max(0, num("hr.ot_min_after_minutes", 0)),
+    workdayTiers: parseWorkdayTiers(m.get("hr.workday_tiers")) ?? [],
+    autoAttendance: m.get("hr.auto_attendance")?.trim() === "1",
+    unscheduledPunch: ((v) => (v === "off" || v === "approve" ? v : "allow"))(m.get("hr.unscheduled_punch")?.trim()),
   };
 }
 

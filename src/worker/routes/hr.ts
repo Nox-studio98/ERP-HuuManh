@@ -13,6 +13,7 @@ import { getSettingInt } from "../services/settings";
 import {
   addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, isPeriodClosed, leaveBalance, leaveCountableDates, offboardingBlockers, periodOf, prevPeriod, weekStart, minutesBetween, shiftWindow,
 } from "../services/hr-common";
+import { registerBoardRoutes } from "./hr-board";
 import { haversineM } from "../services/hr-geo";
 import { makeQrCode, qrWindowExpiresAt, qrWindowOf, verifyQrCode } from "../services/hr-qr";
 import { MAX_SHIFT_MINUTES, collectUnresolved, computeTimesheet, computeTimesheetLive, hasUnresolved, snapshotStatements } from "../services/hr-timesheet";
@@ -25,6 +26,8 @@ hrRoutes.onError((err, c) => {
   const m = String(err?.message ?? "");
   if (m.includes("attendance_immutable")) return onError(conflict("attendance_immutable", "Nhật ký chấm công không được sửa/xoá — dùng yêu cầu bổ sung"), c);
   if (m.includes("timesheet_closed")) return onError(conflict("timesheet_closed", "Kỳ công đã chốt, không thể sửa"), c);
+  if (m.includes("incident_immutable")) return onError(conflict("incident_immutable", "Phạt/thưởng không được sửa hoặc xoá — hãy huỷ có lý do"), c);
+  if (m.includes("payroll_locked")) return onError(conflict("payroll_locked", "Kỳ lương đã duyệt/đã chi, không thể ghi hoặc huỷ phạt/thưởng của kỳ đó"), c);
   return onError(err, c);
 });
 
@@ -801,6 +804,14 @@ hrRoutes.post("/me/attendance/punch", requirePerm("hr.self"), async (c) => {
   }
 
   const assignmentId = b.kind === "out" ? (last?.assignment_id ?? (await nearestAssignment(db, me.id, effectiveAt, "end"))) : await nearestAssignment(db, me.id, effectiveAt, "start");
+  // Chấm khi không có ca (chỉ ở chế độ theo ca): off = chặn lần vào; approve = chờ quản lý duyệt; allow = ghi nhận như cũ
+  if (assignmentId == null && settings.attendanceMode === "shift") {
+    if (settings.unscheduledPunch === "off" && b.kind === "in") throw new AppError(422, "no_shift", "Bạn chưa được xếp ca nào vào giờ này nên chưa chấm công được. Liên hệ quản lý để xếp ca.");
+    if (settings.unscheduledPunch === "approve" && status === "accepted") {
+      status = "pending";
+      note = note ? `${note}; chấm công ngoài lịch ca, chờ quản lý duyệt` : "Chấm công ngoài lịch ca, chờ quản lý duyệt";
+    }
+  }
   const keepPos = method === "gps" || method === "offline";
   let id: number;
   try {
@@ -1384,3 +1395,6 @@ hrRoutes.put("/stores/:id", async (c) => {
   ]);
   return c.json(mapStore({ ...s, name: next.name, address: next.address, lat, lng, geofence_m: next.geofenceM }));
 });
+
+// Bảng chấm công dạng lưới (docs/API-attendance-board.md)
+registerBoardRoutes(hrRoutes);

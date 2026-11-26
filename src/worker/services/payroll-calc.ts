@@ -1,3 +1,4 @@
+import { parseWorkdayTiers } from "./hr-common";
 /**
  * Tính phiếu lương — HÀM THUẦN (không đụng DB) để test được. Công thức: docs/API-dot4.md mục B.
  * Làm tròn từng khoản tới đồng (Math.round). Mọi tham số lấy từ settings hr.*.
@@ -22,6 +23,8 @@ export interface PayrollSettings {
   weekendPremiumBp: number;
   /** C-24: phụ cấp cố định + lương đóng BH tính theo tỉ lệ ngày làm khi vào/nghỉ giữa tháng hoặc cả tháng không có công. */
   prorateFixedPay: boolean;
+  /** Bảng chấm công: bật khi hr.workday_tiers hợp lệ → lương tháng dùng Σ công theo bậc giờ làm của từng ngày. */
+  workdayTiersOn?: boolean;
 }
 
 export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
@@ -56,6 +59,8 @@ export interface TimesheetDayInput {
   holidayPaid?: boolean;
   /** C-14: số phút ca theo lịch của ngày (0/thiếu → 480). */
   scheduledMinutes?: number;
+  /** Công×10 theo bậc giờ làm (hr.workday_tiers); null/thiếu = lúc chốt công chưa bật bậc. */
+  workUnitsX10?: number | null;
 }
 
 export interface PayslipInput {
@@ -152,7 +157,10 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
   const propDaysX10 = sum(input.days.map((d) => Math.min(10, dayWorkX10(d) + d.leavePaidX10)));
   const propWorkX10 = sum(input.days.map((d) => Math.min(10, dayWorkX10(d) + d.leavePaidX10) - Math.min(10, d.leavePaidX10)));
 
-  let paidDaysX10 = Math.min(std * 10, (e.payType === "monthly" && proportional ? propDaysX10 : workedDays * 10 + leaveX10) + holidayOff * 10);
+  // Bậc công: chỉ khi bật và mọi ngày đã chốt kèm số công theo bậc (kỳ chốt trước khi bật thì giữ cách cũ)
+  const tiersOn = e.payType === "monthly" && !!s.workdayTiersOn && input.days.length > 0 && input.days.every((d) => d.workUnitsX10 != null);
+  const tierWorkX10 = sum(input.days.map((d) => d.workUnitsX10 ?? 0));
+  let paidDaysX10 = Math.min(std * 10, (tiersOn ? tierWorkX10 + leaveX10 : e.payType === "monthly" && proportional ? propDaysX10 : workedDays * 10 + leaveX10) + holidayOff * 10);
   let basePay = 0;
   if (e.payType === "monthly") {
     // phút điều chỉnh công quy đổi 480 phút = 1 ngày
@@ -163,7 +171,9 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       label: "Lương cơ bản",
       amount: basePay,
       group: "income",
-      note: proportional
+      note: tiersOn
+        ? `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (công theo bậc giờ làm trong ngày: ${tierWorkX10 / 10} công trên ${workedDays} ngày có công; phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff}; tối đa ${std} ngày công chuẩn)`
+        : proportional
         ? `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (công theo giờ làm thực tế: mỗi ngày = phút làm / phút ca, tối đa 1, làm tròn 0,1 → ${propWorkX10 / 10} ngày trên ${workedDays} ngày có công, đi muộn/về sớm bị trừ theo giờ; phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`
         : `${fmt(e.baseSalary)} × ${paidDaysX10 / 10} ngày công / ${std} ngày chuẩn (ngày có công ${workedDays}, phép có lương ${leaveX10 / 10}, lễ nghỉ hưởng lương ${holidayOff})`,
     });
@@ -338,6 +348,7 @@ export async function loadPayrollSettings(db: D1Database): Promise<PayrollSettin
     monthlyPayMode: m.get("hr.monthly_pay_mode")?.trim() === "day_present" ? "day_present" : "proportional",
     holidayPremiumBp: Math.max(0, num("hr.holiday_premium_bp", d.holidayPremiumBp)),
     weekendPremiumBp: Math.max(0, num("hr.weekend_premium_bp", d.weekendPremiumBp)),
+    workdayTiersOn: (parseWorkdayTiers(m.get("hr.workday_tiers")) ?? []).length > 0,
     prorateFixedPay: m.has("hr.prorate_fixed_pay") ? m.get("hr.prorate_fixed_pay")!.trim() !== "0" : d.prorateFixedPay,
   };
 }

@@ -1,5 +1,17 @@
 # Bảng chấm công dạng lưới — hợp đồng API và thiết kế
 
+> **Thay đổi so với bản đầu (backend đã làm xong, khớp mã nguồn):** không đổi hình dạng response nào; chỉ bổ sung/chốt chi tiết:
+> - Mặc định `hr.unscheduled_punch` = `allow` (giữ cách chạy cũ), không phải `approve`. Chỉ áp dụng ở chế độ `shift`; `off` chỉ chặn lần **vào** (mã `422 no_shift`).
+> - Nhóm cài đặt mới tên **"Chấm công"** (nằm sau "Nhân sự & lương"). Mỗi item trong `GET /settings` có thêm `format`: `"time"` (HH:MM, `allowEmpty` với giờ nghỉ), `"tiers"` (`hr.workday_tiers`), hoặc `null`; `type` vẫn là `text` cho các khoá này.
+> - `hr.ot_auto` cùng đơn tăng ca đã duyệt: OT ngày = **số lớn hơn** của hai nguồn (không cộng dồn, tránh trả hai lần); cộng vào `overtimeMinutes` rồi làm tròn xuống.
+> - Mỗi ngày trong bảng công có thêm `workUnitsX10` (null = chưa bật bậc công) và `autoShifts`; `totals.workUnitsX10`. Bảng `timesheet_days` có cột `work_units_x10` (NULL ở kỳ chốt trước khi bật bậc công → lương giữ cách cũ).
+> - `POST /attendance/manual` `work`: chỉ thay các lần chấm **cùng loại** (vào/ra) với giờ được gửi; bỏ trống một giờ thì lần chấm loại kia giữ nguyên. Không cho chấm thời điểm chưa tới (`422 future_time`). Lỗi: `mixed_shifts`, `mixed_targets`, `time_required`, `leave_overlap` (đã có đơn nghỉ khác loại), `substitute_busy`. Response ô có thêm `substituteForEmployeeId`. Khi có người làm thay, `cells` gồm cả ô của người làm thay. `updated` = số ô thực sự thay đổi (0 khi lặp lại y hệt).
+> - `POST /schedule/:id/reassign` trả `{id, employeeId, employeeName, workDate, shiftTemplateId, shiftName, startAt, endAt, status}`; chặn: `has_punches` (có lần chấm accepted/pending), `has_incidents`, `employee_busy`, `duplicate`.
+> - `GET /attendance/cell` trả `corrections`, `incidents` (có `voided`), `history` (audit; thao tác chấm tay ghi `entity='attendance_cell'`, `entity_id=<key ô>`). Ô ngoài lịch chưa có dữ liệu được trả dạng ô trống thay vì 404.
+> - `POST /attendance/incidents` trả `{id, employeeId, workDate, assignmentId, typeId, typeName, kind, times, note, voided, amountEach?, amount?}`; kỳ lương `approved/paid` → `409 payroll_locked` (cả khi huỷ; có trigger DB). Loại không hoạt động → `422 incident_type_inactive`. `defaultAmount` của loại chỉ trả cho người có `hr.sensitive`/`hr.schedule` (còn lại `null`).
+> - Lương: phạt/thưởng chưa huỷ vào `penalties`/`bonus` (mỗi dòng một diễn giải); `inputs_hash` chỉ thêm phạt/thưởng khi có (hash các kỳ cũ không đổi). Bậc công chỉ áp dụng cho NV lương tháng và chỉ khi mọi ngày của kỳ đã chốt kèm `work_units_x10`.
+
+
 Mục tiêu: màn **Bảng chấm công** kiểu KiotViet (lưới ca × ngày, ô tô màu theo trạng thái, bấm ô để chấm/sửa, chọn nhiều ô để chấm hàng loạt, phạt/thưởng theo ca) thay cho hai màn *Lịch ca* và *Duyệt chấm công*. Màn *Bảng công* (chốt kỳ theo tháng) giữ nguyên.
 
 Quy ước như `docs/API-dot4.md`: base `/api/v1`, camelCase, tiền VND nguyên, ngày `YYYY-MM-DD` giờ VN, mọi ghi nhiều dòng trong **một** `db.batch` kèm `auditStmt`, kiểm tra-rồi-làm dùng `assertStmt`, kỳ công đã chốt → `assertPeriodsOpen` (409/423 như hiện có). Schema: `migrations/0031_attendance_board.sql`.
