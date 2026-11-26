@@ -35,6 +35,9 @@ Theo yêu cầu chủ dự án: hoàn thiện và sửa chuẩn hệ thống hi�
 - Chạy đủ **mọi bộ E2E** trên DB mới sau khi gộp #21 (trên `main` bộ `settings` đang hỏng sẵn, đã sửa trong #21) và rà ảnh các màn chính ở 1440/390.
 - Đưa bản mới lên demo (mục 6) để chủ dự án/khách kiểm tra, ghi lại lỗi phát hiện.
 
+### 2.2b Đối chiếu toàn bộ với KiotViet — danh sách việc nên cải thiện
+`docs/KIOTVIET-DOI-CHIEU.md`: Kết ca (phiếu bàn giao in được, lịch sử ca, tổng kết theo hình thức thanh toán), **Khách lẻ** (chưa có màn quản lý trong ERP — khoảng trống lớn nhất), báo cáo cuối ngày, trả hàng nhanh, trả hàng NCC, xuất dùng nội bộ, hoa hồng, mẫu in… kèm thứ tự gợi ý. Làm **sau** mục 2.2.
+
 ### 2.3 Bán hàng tại quầy theo KiotViet — tạm dừng
 Kế hoạch đầy đủ ở `docs/POS-KV.md` (đợt A: tab nhiều hoá đơn, lưới ảnh + nhóm hàng, **máy quét mã vạch tuỳ chọn**, người bán khác thu ngân, sao chép hoá đơn, lọc/in lại/chia sẻ; đợt B: bán nợ + QR thu nợ bán lẻ, sửa hoá đơn bằng chứng từ đảo, thu khác, …). Chỉ làm khi chủ dự án bảo làm tiếp. Số migration trong tài liệu là dự kiến — kiểm tra `migrations/` lúc làm.
 
