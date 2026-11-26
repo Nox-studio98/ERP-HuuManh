@@ -3,6 +3,8 @@
 Nguồn: hướng dẫn sử dụng KiotViet ngành bán lẻ (lộ trình 6 bước: hàng hoá → nhập hàng → bán hàng → trả hàng → công nợ → báo cáo, cùng các mục Kết ca, Khách hàng, Nhóm khách, Sổ quỹ, Trả hàng, Nhập hàng, Trả hàng nhập, Kiểm kho, Xuất huỷ, Nhà cung cấp, Báo cáo, Thiết lập giá, Đặt hàng, Hoa hồng, Tích điểm, Thu khác, Mẫu in, Chuyển hàng, Xuất dùng nội bộ).
 Chỉ học **nghiệp vụ và luồng thao tác**; giao diện làm bằng bộ thành phần của dự án. Đã đối chiếu riêng: Chấm công (đã làm, PR #21) và Bán hàng (`docs/POS-KV.md`, tạm dừng).
 
+> **Mức độ:** đây là đối chiếu sơ bộ (đọc kỹ Kết ca và Khách hàng; các mục khác theo tiêu đề tính năng). Đợt đối chiếu chi tiết từng trang so với mã nguồn đã **tạm dừng** ngày 26/11 theo yêu cầu — khi làm tiếp, đọc lại hướng dẫn KiotViet tại `kiotviet.vn/huong-dan-su-dung-kiotviet/retail-…` và kiểm chứng từng mục trong mã trước khi làm.
+>
 > **Thứ tự theo yêu cầu chủ dự án:** sửa chuẩn phần đang có trước (`BAN-GIAO.md` mục 2.2), sau đó mới chọn việc trong danh sách này. Các mục ghi "cần kiểm tra" là chưa chắc mình đã có hay chưa — đọc mã trước khi làm.
 
 ## 1. Kết ca (mở ca / đóng ca)
