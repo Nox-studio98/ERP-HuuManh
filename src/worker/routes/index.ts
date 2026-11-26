@@ -9,6 +9,7 @@ import { reportRoutes } from "./reports";
 import { adminRoutes } from "./admin";
 // Đợt 2
 import { customerRoutes } from "./customers";
+import { retailCustomerRoutes } from "./retail-customers";
 import { quoteRoutes } from "./quotes";
 import { b2bRoutes } from "./b2b";
 import { debtRoutes } from "./debts";
@@ -43,6 +44,7 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", reportRoutes);
   v1.route("/", adminRoutes);
   v1.route("/", customerRoutes);
+  v1.route("/", retailCustomerRoutes);
   v1.route("/", quoteRoutes);
   v1.route("/", b2bRoutes);
   v1.route("/", debtRoutes);
