@@ -32,7 +32,7 @@ export const METHODS: Record<string, string> = { cash: "Tiền mặt", transfer:
 export const CHANNELS: Record<string, string> = { pos: "Tại quầy", online: "Online", b2b: "Sỉ", fresco: "Fresco", social: "Mạng xã hội" };
 export const ROLES: Record<string, string> = { owner: "Chủ", manager: "Quản lý", cashier: "Thu ngân", warehouse: "Thủ kho", accountant: "Kế toán", online_staff: "NV online", staff: "Nhân viên" };
 export const ORDER_STATUS: Record<string, string> = { draft: "Nháp", new: "Mới", confirmed: "Đã xác nhận", preparing: "Đang chuẩn bị", shipping: "Đang giao", completed: "Hoàn tất", cancelled: "Đã huỷ", delivery_failed: "Giao thất bại", returned: "Đã trả", awaiting_payment: "Chờ thanh toán" };
-export const DOC_TYPES: Record<string, string> = { receipt: "Nhập hàng", issue: "Xuất", waste: "Huỷ hàng", adjust: "Điều chỉnh", count: "Kiểm kê", transfer: "Chuyển kho" };
+export const DOC_TYPES: Record<string, string> = { receipt: "Nhập hàng", issue: "Xuất", waste: "Huỷ hàng", adjust: "Điều chỉnh", count: "Kiểm kê", transfer: "Chuyển kho", internal_use: "Xuất dùng nội bộ" };
 export const DOC_STATUS: Record<string, string> = { draft: "Nháp", pending_approval: "Chờ duyệt", posted: "Đã ghi sổ", cancelled: "Đã huỷ" };
 export const uuid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto

@@ -6,6 +6,7 @@ import { Barcode } from "../components/Barcode";
 import { toast } from "../components/toast";
 import { UNIT_OPTIONS, money, qtyText, unitLabel } from "../format";
 import { useCan } from "../store";
+import { navigate } from "../router";
 import { ProductOnline } from "./online/ProductOnline";
 import { priceOf, type Product } from "./Pos";
 
@@ -35,6 +36,7 @@ export default function Products() {
             ...(costOk ? [{ label: "Giá vốn", value: (p: Product) => p.avgCost ?? "" }] : []),
             { label: "Đang bán", value: (p) => (p.active === false || p.active === 0 ? "Không" : "Có") },
           ]} />
+          {can("products.write") && <Button variant="soft" onClick={() => navigate("/import?kind=products")}>Nhập từ Excel</Button>}
           {can("products.write") && <Button onClick={() => setEdit("new")}>+ Thêm hàng hoá</Button>}
         </>} />
       <FilterBar dirty={dirty} onReset={reset} activeCount={[group, active, stock].filter(Boolean).length} advanced={<>

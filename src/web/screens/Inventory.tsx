@@ -30,6 +30,7 @@ export default function Inventory() {
             <Button onClick={() => setEditor({ type: "receipt" })}>+ Nhập hàng</Button>
             {can("purchasing.write") && <Button variant="soft" onClick={() => setRecvPo(true)}>Nhận hàng theo PO</Button>}
             <Button variant="soft" onClick={() => setEditor({ type: "waste" })}>Huỷ hàng</Button>
+            <Button variant="soft" onClick={() => setEditor({ type: "internal_use" })}>Xuất dùng nội bộ</Button>
             <Button variant="soft" onClick={() => setEditor({ type: "count" })}>Kiểm kê</Button>
             <Button variant="soft" onClick={() => setEditor({ type: "transfer" })}>Chuyển kho</Button>
           </>
@@ -240,7 +241,7 @@ function CreateDoc({ type, onCreated }: { type: string; onCreated: (id: number) 
   const locs = useAsync(() => get("/locations").then((x) => items<any>(x)), []);
   const sups = useAsync(() => (type === "receipt" ? get("/suppliers").then((x) => items<any>(x)) : Promise.resolve([])), [type]);
   const [toLoc, setToLoc] = useState(""), [lock, setLock] = useState(false);
-  const [loc, setLoc] = useState(""), [sup, setSup] = useState(""), [ref, setRef] = useState(""), [note, setNote] = useState(""), [busy, setBusy] = useState(false);
+  const [loc, setLoc] = useState(""), [sup, setSup] = useState(""), [ref, setRef] = useState(""), [note, setNote] = useState(""), [busy, setBusy] = useState(false), [purpose, setPurpose] = useState("");
   const locationId = loc || String(locs.data?.[0]?.id ?? "");
   return (
     <div className="stack">
@@ -251,10 +252,14 @@ function CreateDoc({ type, onCreated }: { type: string; onCreated: (id: number) 
         <Select label="Nhà cung cấp" value={sup} onChange={(e) => setSup(e.target.value)}><option value="">— Chọn —</option>{(sups.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
         <Input label="Số chứng từ NCC" value={ref} onChange={(e) => setRef(e.target.value)} />
       </>}
+      {type === "internal_use" && <>
+        <Banner tone="info">Hàng lấy dùng trong cửa hàng (ăn thử, làm hàng mẫu, tặng, trưng bày...). Hệ thống chọn lô hết hạn sớm nhất trước, tính vào chi phí theo giá vốn lô và hiện ở dòng riêng trong báo cáo lãi lỗ.</Banner>
+        <Input label="Lý do / mục đích sử dụng (bắt buộc)" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="vd: Làm hàng mẫu cho khách sỉ, ăn thử kiểm tra chất lượng" />
+      </>}
       <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
-      <Button size="lg" loading={busy} disabled={!locationId || (type === "receipt" && !sup) || (type === "transfer" && !toLoc)} onClick={async () => {
+      <Button size="lg" loading={busy} disabled={!locationId || (type === "receipt" && !sup) || (type === "transfer" && !toLoc) || (type === "internal_use" && purpose.trim().length < 3)} onClick={async () => {
         setBusy(true);
-        try { const r = await post("/stock-docs", { type, locationId: Number(locationId), ...(sup ? { supplierId: Number(sup) } : {}), ...(ref ? { supplierRef: ref } : {}), ...(note ? { note } : {}), ...(type === "transfer" ? { toLocationId: Number(toLoc) } : {}), ...(type === "count" && lock ? { lockLots: true } : {}) }); onCreated(r.id ?? r.doc?.id); } catch {} finally { setBusy(false); }
+        try { const r = await post("/stock-docs", { type, locationId: Number(locationId), ...(sup ? { supplierId: Number(sup) } : {}), ...(ref ? { supplierRef: ref } : {}), ...(note ? { note } : {}), ...(type === "transfer" ? { toLocationId: Number(toLoc) } : {}), ...(type === "count" && lock ? { lockLots: true } : {}), ...(type === "internal_use" ? { reason: purpose.trim() } : {}) }); onCreated(r.id ?? r.doc?.id); } catch {} finally { setBusy(false); }
       }}>Tạo phiếu nháp</Button>
     </div>
   );
@@ -266,7 +271,8 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
   const [unit, setUnit] = useState("");
   const [qty, setQty] = useState<number | "">(""), [docQty, setDocQty] = useState<number | "">(""), [cost, setCost] = useState(0), [exp, setExp] = useState(""), [reason, setReason] = useState("dap");
   const [busy, setBusy] = useState(false);
-  const picked = type === "receipt" ? prod : lot && prod;
+  const byProduct = type === "receipt" || type === "internal_use"; // nhập / xuất dùng nội bộ chọn mặt hàng (xuất tự chọn lô theo FEFO)
+  const picked = byProduct ? prod : lot && prod;
   const u = unit || prod?.baseUnit || "kg";
   const unitOpts = prod ? [prod.baseUnit, ...(prod.units ?? []).map((x) => x.unit).filter((x) => x !== prod.baseUnit)] : [];
   const n = typeof qty === "number" ? qty : 0;
@@ -276,18 +282,19 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
       const body = type === "receipt" ? { productId: prod!.id, unit: u, qty: n, ...(typeof docQty === "number" ? { docQty } : {}), unitCost: cost, ...(exp ? { expiresAt: exp } : {}) }
         : type === "count" ? { lotId: lot.id, countedQty: n, unit: u }
         : type === "transfer" ? { lotId: lot.id, qty: n, unit: u }
+        : type === "internal_use" ? { productId: prod!.id, qty: n, unit: u }
         : { lotId: lot.id, qty: n, unit: u, reason };
       await post(`/stock-docs/${docId}/lines`, body); toast("Đã thêm dòng", "ok"); onDone();
     } catch (e) { if (e instanceof ApiError) { /* toast đã hiện */ } } finally { setBusy(false); }
   };
   return (
-    <Card className="flat" title={type === "receipt" ? "Thêm hàng nhập" : type === "count" ? "Đếm lô" : type === "transfer" ? "Chuyển theo lô" : "Huỷ theo lô"}>
+    <Card className="flat" title={type === "receipt" ? "Thêm hàng nhập" : type === "internal_use" ? "Thêm hàng xuất dùng" : type === "count" ? "Đếm lô" : type === "transfer" ? "Chuyển theo lô" : "Huỷ theo lô"}>
       <div className="stack">
-        {!picked ? (type === "receipt" ? <ProductPick onPick={(p, _l, un) => { setProd(p); setUnit(un ?? ""); }} /> : <LotPick onPick={(l, p) => { setLot(l); setProd(p); }} />) : (
+        {!picked ? (byProduct ? <ProductPick onPick={(p, _l, un) => { setProd(p); setUnit(un ?? ""); }} /> : <LotPick onPick={(l, p) => { setLot(l); setProd(p); }} />) : (
           <>
             <div className="row between"><div><b>{prod!.name}</b>{lot && <div className="small muted num">Lô {lot.lotCode} · còn {qtyText(remain(lot), prod!.baseUnit)}</div>}</div><Button size="sm" variant="ghost" onClick={() => { setProd(null); setLot(null); }}>Đổi</Button></div>
             <div className="grid2">
-              <DecInput label={type === "count" ? "Số đếm thực tế" : "Số lượng thực nhận"} value={qty} onChange={setQty} autoFocus />
+              <DecInput label={type === "count" ? "Số đếm thực tế" : type === "internal_use" ? "Số lượng xuất dùng" : "Số lượng thực nhận"} value={qty} onChange={setQty} autoFocus />
               <Select label="Đơn vị" value={u} onChange={(e) => setUnit(e.target.value)}>{unitOpts.map((x) => <option key={x} value={x}>{unitLabel(x)}</option>)}</Select>
             </div>
             {type === "receipt" && <>
@@ -296,6 +303,7 @@ function LineForm({ type, docId, onDone, onCancel }: { type: string; docId: numb
               <MoneyInput label={`Giá nhập / ${unitLabel(u)} (₫)`} value={cost} onChange={setCost} />
               <Input label="Hạn sử dụng" type="date" value={exp} min={todayVN()} onChange={(e) => setExp(e.target.value)} />
             </>}
+            {type === "internal_use" && <div className="small muted">Hệ thống tự lấy từ lô hết hạn sớm nhất còn tồn tại vị trí kho của phiếu (FEFO); số lượng vượt tồn sẽ bị từ chối.</div>}
             {type === "waste" && <div><div className="small muted" style={{ marginBottom: 6 }}>Lý do</div><div className="chips">{REASONS.map(([k, l]) => <button key={k} className="chip" aria-pressed={reason === k} onClick={() => setReason(k)}>{l}</button>)}</div></div>}
             <div className="row"><Button variant="ghost" onClick={onCancel}>Xong</Button><Button className="grow" loading={busy} disabled={n <= 0 && type !== "count"} onClick={submit}>Thêm dòng</Button></div>
           </>

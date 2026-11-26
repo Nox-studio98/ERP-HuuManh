@@ -33,6 +33,8 @@ import { supplierPortalRoutes } from "./supplier-portal";
 import { shiftReportRoutes } from "./shift-report";
 import { salesReportRoutes } from "./sales-reports";
 import { commissionRoutes } from "./commission";
+import { fundTransferRoutes } from "./fund-transfers";
+import { importRoutes } from "./imports";
 
 /**
  * Đăng ký route các module. Mỗi file export một Hono<AppBindings> mount tại gốc /api/v1
@@ -70,4 +72,6 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", shiftReportRoutes);
   v1.route("/", salesReportRoutes);
   v1.route("/", commissionRoutes);
+  v1.route("/", fundTransferRoutes);
+  v1.route("/", importRoutes);
 }

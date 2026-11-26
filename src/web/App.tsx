@@ -19,6 +19,7 @@ const Orders = lazy(() => import("./screens/Orders"));
 const RetailCustomers = lazy(() => import("./screens/RetailCustomers"));
 const Inventory = lazy(() => import("./screens/Inventory"));
 const Products = lazy(() => import("./screens/Products"));
+const Import = lazy(() => import("./screens/Import"));
 const Prices = lazy(() => import("./screens/Prices"));
 const Finance = lazy(() => import("./screens/Finance"));
 const Sepay = lazy(() => import("./screens/Sepay"));
@@ -69,6 +70,7 @@ const NAV: Nav[] = [
   { path: "/retail-customers", label: "Khách lẻ", group: G.retail, perms: ["b2b.view"], icon: I("M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0"), el: <RetailCustomers /> },
   { path: "/inventory", label: "Kho", group: G.stock, pri: 4, perms: ["inventory.view"], icon: I("M3 8l9-5 9 5v10l-9 5-9-5zM3 8l9 5 9-5M12 13v10"), el: <Inventory /> },
   { path: "/products", label: "Hàng hoá", group: G.stock, perms: ["inventory.view"], icon: I("M12 7c-4 0-7 3-7 7s3 7 7 7 7-3 7-7-3-7-7-7zM12 7c0-2 1-4 4-4"), el: <Products /> },
+  { path: "/import", label: "Nhập Excel", group: G.stock, perms: ["products.write", "b2b.write", "inventory.write"], icon: I("M12 15V3M7 8l5-5 5 5M5 21h14M5 17v4M19 17v4"), el: <Import /> },
   { path: "/prices", label: "Giá", group: G.stock, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM7.5 7.5h.01"), el: <Prices /> },
   { path: "/suppliers", label: "Nhà cung cấp", group: G.stock, perms: ["inventory.view"], icon: I("M3 7h11v9H3zM14 10h4l3 3v3h-7zM7 19a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm10 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"), el: <Suppliers /> },
   { path: "/customers", label: "Khách sỉ", group: G.b2b, perms: ["b2b.view"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM20 20v-1a3 3 0 00-2-2.8M16 4.2a3.5 3.5 0 010 6.6"), el: <Customers /> },

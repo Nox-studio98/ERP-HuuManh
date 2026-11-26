@@ -84,6 +84,7 @@ async function pnl(c: Ctx) {
   const adj = await pnlAdjustments(db, fromIso, toIso);
   if (adj.badDebt) expenses.badDebt = (expenses.badDebt ?? 0) + adj.badDebt;
   if (adj.stockCount) expenses.stockCount = (expenses.stockCount ?? 0) + adj.stockCount;
+  if (adj.internalUse) expenses.internalUse = (expenses.internalUse ?? 0) + adj.internalUse; // xuất dùng nội bộ theo giá vốn lô
   if (adj.purchaseVariance) expenses.purchaseVariance = (expenses.purchaseVariance ?? 0) + adj.purchaseVariance; // B-09
   const otherIncome = {
     forfeitedDeposits: adj.forfeitedDeposits,
@@ -151,7 +152,7 @@ async function pnl(c: Ctx) {
   };
 }
 
-const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
+const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua", internalUse: "Xuất dùng nội bộ" };
 reportRoutes.get("/reports/pnl", requirePerm("reports.view"), async (c) => c.json(await pnl(c)));
 // C-28: PDF lãi lỗ — cùng quyền và cùng số liệu với màn xem
 reportRoutes.get("/reports/pnl.pdf", requirePerm("reports.view"), async (c) => {
@@ -175,9 +176,10 @@ async function inventoryReport(c: Ctx) {
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='sale' THEN -m.qty_delta_milli END),0) AS soldMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='return' THEN m.qty_delta_milli END),0) AS returnedMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli END),0) AS wasteMilli,
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='internal_use' THEN -m.qty_delta_milli END),0) AS internalUseMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS assembleMilli,
-         -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt + Lắp ráp + Điều chỉnh = Tồn cuối
-         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
+         -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt − Xuất dùng nội bộ + Lắp ráp + Điều chỉnh = Tồn cuối
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','internal_use','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -${valueSql('m.qty_delta_milli','m.unit_cost')} END),0) AS wasteValue,
          COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS stockValue
@@ -262,8 +264,8 @@ reportRoutes.get("/reports/export/:file", requirePerm("reports.view"), async (c)
     ]);
   } else if (name === "inventory") {
     const r = await inventoryReport(c);
-    csv = toCsv(["Mã", "Tên", "ĐVT", "Tồn đầu (milli)", "Nhập", "Bán", "Trả", "Hao hụt", "Điều chỉnh", "Tồn cuối (milli)", "Giá trị tồn"],
-      r.items.map((i: any) => [i.sku, i.name, i.baseUnit, i.openingMilli, i.inMilli, i.soldMilli, i.returnedMilli, i.wasteMilli, i.adjustMilli, i.onHandMilli, i.stockValue]));
+    csv = toCsv(["Mã", "Tên", "ĐVT", "Tồn đầu (milli)", "Nhập", "Bán", "Trả", "Hao hụt", "Xuất dùng nội bộ", "Điều chỉnh", "Tồn cuối (milli)", "Giá trị tồn"],
+      r.items.map((i: any) => [i.sku, i.name, i.baseUnit, i.openingMilli, i.inMilli, i.soldMilli, i.returnedMilli, i.wasteMilli, i.internalUseMilli, i.adjustMilli, i.onHandMilli, i.stockValue]));
   } else if (name === "daily") {
     const r = await dailyReport(c);
     csv = toCsv(["Ngày", "Số đơn", "Doanh thu bán", "Trả hàng", "Doanh thu thuần"], [[r.day, r.saleCount, r.saleTotal, r.returnTotal, r.revenue]]);
