@@ -1,0 +1,399 @@
+<title>Nhập nhanh đơn sỉ</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Bố cục: khung màn ERP (thanh trên + nội dung) · thẻ chuyển chế độ · cột trái nhập liệu, cột phải xem trước · thanh hành động dính đáy */
+:root{
+  --bg:#f6f7f2; --surface:#ffffff; --surface-2:#eef1e9; --text:#1b2420; --muted:#5b6760; --border:#dde3d6;
+  --accent:#1d7f46; --accent-soft:#e2f3e8; --on-accent:#ffffff;
+  --warn:#a4580a; --warn-soft:#fff1de; --danger:#b3261e; --danger-soft:#fde8e6; --info:#1f5f99; --info-soft:#e4eefa;
+  --font:"Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --r:12px; --r-sm:8px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#101612; --surface:#172019; --surface-2:#1f2a22; --text:#e8efe9; --muted:#9db0a3; --border:#2b3a2f;
+  --accent:#46b676; --accent-soft:#1a3526; --on-accent:#07200f; --warn:#f0a553; --warn-soft:#3a2a12; --danger:#ff8a80; --danger-soft:#3f1d1a; --info:#8ab8ea; --info-soft:#18283a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#101612; --surface:#172019; --surface-2:#1f2a22; --text:#e8efe9; --muted:#9db0a3; --border:#2b3a2f;
+  --accent:#46b676; --accent-soft:#1a3526; --on-accent:#07200f; --warn:#f0a553; --warn-soft:#3a2a12; --danger:#ff8a80; --danger-soft:#3f1d1a; --info:#8ab8ea; --info-soft:#18283a; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg); color:var(--text); font:15px/1.5 var(--font); margin:0}
+.wrap{max-width:1320px; margin:0 auto; padding-block:20px 96px; padding-left:max(16px, env(safe-area-inset-left,0px)); padding-right:max(16px, env(safe-area-inset-right,0px)); display:grid; gap:16px}
+.topbar{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px}
+.topbar h1{font-size:1.35rem; margin:0; text-wrap:balance}
+.crumb{color:var(--muted); font-size:.9rem}
+.note{font-size:.85rem; color:var(--info); background:var(--info-soft); border-radius:var(--r-sm); padding:8px 12px}
+.card{background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:16px; min-width:0}
+.form{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px}
+label.f{display:grid; gap:4px; font-size:.82rem; color:var(--muted); font-weight:500}
+select,input,textarea{font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); padding:8px 10px; min-height:40px; width:100%}
+textarea{font-family:var(--mono); font-size:.85rem; line-height:1.55; resize:vertical}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.tabs{display:inline-flex; background:var(--surface-2); border-radius:10px; padding:4px; gap:4px; max-width:100%; overflow-x:auto}
+.tabs button{border:0; background:none; font:inherit; font-weight:600; color:var(--muted); padding:8px 16px; border-radius:8px; cursor:pointer; white-space:nowrap}
+.tabs button[aria-selected="true"]{background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgb(0 0 0 / .08)}
+.grid2{display:grid; gap:16px; grid-template-columns:minmax(0,1fr)}
+@media (min-width:1024px){.grid2{grid-template-columns:minmax(0,380px) minmax(0,1fr)}}
+h2{font-size:1rem; margin:0 0 8px}
+.muted{color:var(--muted)} .small{font-size:.82rem}
+.btn{display:inline-flex; align-items:center; gap:6px; font:inherit; font-weight:600; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface); color:var(--text); padding:8px 14px; min-height:40px; cursor:pointer}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
+.btn.primary:disabled{opacity:.45; cursor:not-allowed}
+.btn.sm{min-height:32px; padding:4px 10px; font-size:.85rem}
+.btn.soft{background:var(--accent-soft); border-color:transparent; color:var(--accent)}
+.row{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.summary{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
+.chip{display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:3px 10px; font-size:.8rem; font-weight:600; white-space:nowrap}
+.ok{background:var(--accent-soft); color:var(--accent)} .choose{background:var(--warn-soft); color:var(--warn)}
+.missing{background:var(--surface-2); color:var(--muted)} .bad{background:var(--danger-soft); color:var(--danger)} .info{background:var(--info-soft); color:var(--info)}
+/* Bảng dòng đơn (Zalo) */
+.lines{display:grid; gap:8px}
+.line{display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) 110px 110px auto; gap:10px; align-items:center; border:1px solid var(--border); border-radius:var(--r-sm); padding:10px 12px; background:var(--surface)}
+.line.st-choose,.line.st-unparsed{background:var(--warn-soft); border-color:transparent}
+.line.st-missing{background:var(--surface-2); border-color:transparent}
+.raw{font-family:var(--mono); font-size:.82rem; color:var(--muted); overflow-wrap:anywhere}
+.prod b{font-weight:600} .prod .sub{display:block; font-size:.78rem; color:var(--muted)}
+.qty,.money{font-variant-numeric:tabular-nums; text-align:right}
+.money{font-weight:600}
+.cands{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px}
+.remember{display:flex; align-items:center; gap:6px; font-size:.78rem; color:var(--muted); margin-top:4px}
+.remember input{width:16px; height:16px; min-height:0}
+@media (max-width:760px){.line{grid-template-columns:1fr 1fr} .line .raw{grid-column:1/-1} .line .prod{grid-column:1/-1} .line .st{grid-column:1/-1; justify-self:start}}
+/* Lưới chi nhánh */
+.sheetwrap{overflow:auto; border:1px solid var(--border); border-radius:var(--r-sm); max-height:520px}
+table.sheet{border-collapse:separate; border-spacing:0; font-size:.85rem; min-width:100%}
+.sheet th,.sheet td{border-bottom:1px solid var(--border); border-right:1px solid var(--border); padding:6px 8px; white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; background:var(--surface)}
+.sheet thead th{position:sticky; top:0; z-index:2; background:var(--surface-2); font-weight:600; text-align:center; vertical-align:bottom}
+.sheet .stick{position:sticky; left:0; z-index:1; text-align:left; min-width:170px; box-shadow:1px 0 0 var(--border)}
+.sheet thead .stick{z-index:3}
+.sheet td.zero{color:transparent}
+.sheet td.has{background:color-mix(in srgb, var(--accent-soft) 60%, var(--surface))}
+.sheet td.totbad{background:var(--danger-soft); color:var(--danger); font-weight:600}
+.sheet tr.r-missing td.stick,.sheet tr.r-choose td.stick{background:var(--warn-soft)}
+.sheet th.c-unmapped{background:var(--warn-soft); color:var(--warn)}
+.colmap{display:block; font-weight:400; font-size:.72rem; color:var(--muted); margin-top:2px}
+.sheet select{min-height:28px; padding:2px 4px; font-size:.75rem; width:auto; max-width:140px}
+.branches{display:grid; gap:8px; grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.branch{border:1px solid var(--border); border-radius:var(--r-sm); padding:10px 12px; display:grid; gap:2px}
+.invoice-co{display:grid;gap:4px;border:1px solid var(--accent);border-radius:var(--r-sm);padding:12px;background:var(--accent-soft)}
+.invoice-co b{font-size:.95rem}
+.branch b{font-size:.92rem} .branch .n{font-variant-numeric:tabular-nums; color:var(--muted); font-size:.82rem}
+/* Thanh dưới */
+.bar{position:fixed; left:0; right:0; bottom:0; background:var(--surface); border-top:1px solid var(--border); padding-block:10px calc(10px + env(safe-area-inset-bottom,0px)); padding-left:max(16px, env(safe-area-inset-left,0px)); padding-right:max(16px, env(safe-area-inset-right,0px)); z-index:20}
+.bar .in{max-width:1320px; margin:0 auto; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between}
+.bar .tot{font-variant-numeric:tabular-nums; font-weight:700; font-size:1.05rem}
+/* Hộp tạo nhanh */
+dialog{border:1px solid var(--border); border-radius:var(--r); background:var(--surface); color:var(--text); width:min(440px, calc(100vw - 32px)); padding:20px}
+dialog::backdrop{background:rgb(0 0 0 / .35)}
+dialog form{display:grid; gap:12px}
+.toast{position:fixed; left:50%; transform:translateX(-50%); bottom:84px; background:var(--text); color:var(--bg); padding:10px 16px; border-radius:10px; font-weight:600; z-index:30}
+@media (prefers-reduced-motion:no-preference){.line,.branch{transition:background .15s}}
+</style>
+
+<div class="wrap">
+  <div class="topbar">
+    <h1>Tạo đơn sỉ</h1><span class="crumb">Bán sỉ › Đơn sỉ › Tạo mới · <b>Concept</b> để duyệt luồng, chưa phải màn thật</span>
+  </div>
+  <p class="note">Danh mục sản phẩm, giá sỉ và địa chỉ chi nhánh dưới đây là <b>dữ liệu ví dụ</b>. Tin nhắn Zalo và bảng chi nhánh lấy theo mẫu khách gửi. Bộ đọc chạy thật trong trang: sửa ô dán để thử.</p>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="t-zalo" aria-selected="true">Tin nhắn Zalo</button>
+    <button role="tab" id="t-sheet" aria-selected="false">Bảng nhiều chi nhánh</button>
+  </div>
+
+  <!-- ================= ZALO ================= -->
+  <section id="v-zalo" class="grid2">
+    <div class="card" style="display:grid;gap:12px;align-content:start">
+      <div class="form">
+        <label class="f">Khách sỉ<select id="z-cust"><option>Quán Bún chả Hương Liên (ví dụ)</option></select></label>
+        <label class="f">Ngày giao<input id="z-date" type="date"></label>
+      </div>
+      <label class="f">Dán tin nhắn Zalo<textarea id="z-text" rows="16" spellcheck="false"></textarea></label>
+      <div class="row"><button class="btn sm" id="z-reset">Nạp lại tin nhắn mẫu</button><span class="small muted">Đọc tự động khi dán hoặc sửa.</span></div>
+    </div>
+    <div class="card">
+      <h2>Xem trước dòng đơn</h2>
+      <div class="summary" id="z-sum"></div>
+      <div class="lines" id="z-lines"></div>
+    </div>
+  </section>
+
+  <!-- ================= BẢNG CHI NHÁNH ================= -->
+  <section id="v-sheet" hidden style="display:grid;gap:16px">
+    <div class="card" style="display:grid;gap:12px">
+      <div class="form">
+        <label class="f">Khách sỉ (chuỗi)<select id="s-cust"><option>Công ty CP Ẩm thực NVL — MST 01xxxxxxxx (ví dụ, 12 địa chỉ giao)</option></select></label>
+        <label class="f">Ngày giao<input id="s-date" type="date"></label>
+        <label class="f">Hoặc tải file<input type="file" accept=".xlsx,.csv,.tsv" disabled title="Concept: dùng ô dán bên dưới"></label>
+      </div>
+      <details>
+        <summary class="small" style="cursor:pointer">Dán bảng từ Excel (chọn vùng ô trong Excel → Ctrl+C → dán vào đây)</summary>
+        <textarea id="s-text" rows="8" spellcheck="false" style="margin-top:8px"></textarea>
+        <div class="row" style="margin-top:8px"><button class="btn sm" id="s-reset">Nạp lại bảng mẫu</button></div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Xem trước theo chi nhánh</h2><div class="summary" id="s-sum" style="margin:0"></div></div>
+      <div class="sheetwrap"><table class="sheet" id="s-grid"></table></div>
+      <p class="small muted" style="margin:8px 0 0">Ô xanh: có đặt hàng. Ô TỔNG đỏ: tổng khách ghi khác tổng các chi nhánh. Cột vàng: chưa ghép với địa chỉ giao của khách — chọn ở tiêu đề cột.</p>
+    </div>
+    <div class="card">
+      <h2>Sẽ tạo</h2>
+      <div class="invoice-co" id="s-company"></div>
+      <h3 class="small muted" style="margin:12px 0 8px;font-weight:600">Bill giao hàng từng cơ sở (mỗi cơ sở một đơn, ký nhận riêng)</h3>
+      <div class="branches" id="s-orders"></div>
+    </div>
+  </section>
+</div>
+
+<div class="bar"><div class="in">
+  <div><span id="bar-left" class="small muted"></span> <span class="tot" id="bar-total"></span></div>
+  <button class="btn primary" id="bar-btn"></button>
+</div></div>
+
+<dialog id="dlg"><form method="dialog" id="dlg-form">
+  <h2 style="margin:0">Tạo nhanh sản phẩm</h2>
+  <p class="small muted" style="margin:0">Khách viết: <b id="dlg-raw"></b>. Tên khách gọi sẽ được nhớ cho lần sau.</p>
+  <label class="f">Tên sản phẩm<input id="dlg-name" required></label>
+  <div class="form" style="grid-template-columns:1fr 1fr">
+    <label class="f">Đơn vị bán<select id="dlg-unit"><option>kg</option><option>bìa</option><option>mớ</option><option>quả</option><option>bó</option><option>gói</option><option>hộp</option></select></label>
+    <label class="f">Giá sỉ (₫ / đơn vị)<input id="dlg-price" inputmode="numeric" required placeholder="vd 18000"></label>
+  </div>
+  <div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" formnovalidate>Huỷ</button><button class="btn primary" value="ok" id="dlg-ok">Tạo sản phẩm</button></div>
+</form></dialog>
+
+<script>
+// ---------------- Dữ liệu ví dụ ----------------
+const CATALOG = [
+  {id:1,name:"Đậu phụ",unit:"bìa",units:{"bìa":1},price:5000,aliases:["đậu","đậu hũ","đậu phụ"]},
+  {id:2,name:"Trứng gà ta",unit:"quả",units:{"quả":1},price:3500,aliases:["trứng gà","trứng"]},
+  {id:3,name:"Hành ta bóc",unit:"kg",price:60000},
+  {id:4,name:"Tỏi bóc",unit:"kg",price:70000,aliases:["tỏi"]},
+  {id:5,name:"Sả cây",unit:"kg",price:20000,aliases:["sả"]},
+  {id:6,name:"Cải thìa",unit:"kg",price:25000},
+  {id:7,name:"Bạc hà",unit:"kg",price:60000,aliases:["lá bạc hà"]},
+  {id:8,name:"Húng chó",unit:"kg",price:80000},
+  {id:9,name:"Rau muống",unit:"mớ",units:{"mớ":1},price:8000,aliases:["muống"]},
+  {id:10,name:"Cải xanh",unit:"kg",price:22000,aliases:["rau cải xanh"]},
+  {id:11,name:"Lá lốt",unit:"kg",price:50000},
+  {id:12,name:"Táo Envy",unit:"kg",price:154000},
+  {id:13,name:"Táo Mỹ đỏ",unit:"kg",price:89000},
+  {id:14,name:"Táo xanh Nam Phi",unit:"kg",price:79000},
+  {id:15,name:"Lê Hàn Quốc",unit:"kg",price:95000},
+  {id:16,name:"Lê Nam Phi",unit:"kg",price:69000},
+  // dùng cho bảng chi nhánh
+  {id:20,name:"Bắp cải tím",unit:"kg",price:30000},{id:21,name:"Bắp cải trắng",unit:"kg",price:15000},
+  {id:22,name:"Cà chua bi",unit:"kg",price:45000},{id:23,name:"Cà rốt",unit:"kg",price:18000},
+  {id:24,name:"Chanh tươi",unit:"kg",price:30000,aliases:["chanh"]},{id:25,name:"Củ cải trắng",unit:"kg",price:12000},
+  {id:26,name:"Dưa chuột",unit:"kg",price:20000},{id:27,name:"Đậu cove",unit:"kg",price:28000},
+  {id:28,name:"Gừng",unit:"kg",price:40000},{id:29,name:"Hành lá",unit:"kg",price:35000},
+  {id:30,name:"Hành tây",unit:"kg",price:22000},{id:31,name:"Ớt đỏ Đà Lạt",unit:"kg",price:60000},
+  {id:32,name:"Rau cải ngọt",unit:"kg",price:20000},{id:33,name:"Giá đỗ",unit:"kg",price:15000,aliases:["rau giá","giá"]},
+  {id:34,name:"Xà lách",unit:"kg",price:35000,aliases:["rau xà lách"]},{id:35,name:"Xoài cát",unit:"kg",price:55000,aliases:["xoài"]},
+];
+// Tên riêng đã học của từng khách (ví dụ): chuỗi NVL gọi "Táo" là Táo Mỹ đỏ, "Lê" là Lê Hàn Quốc
+const CUST_ALIAS = { zalo:{}, sheet:{"tao":13,"le":15} };
+const ADDRESSES = ["Xã Đàn","Láng Hạ","Nguyễn Khang","Nghĩa Tân","Ngô Thì Nhậm","Tân Tây Đô","Lê Văn Thiêm","Vũ Tông Phan","Dương Khuê","Linh Đàm","Kho Đức Thượng"]; // "Đội Cấn" chưa có → cần ghép
+
+const ZALO_SAMPLE = `Bún : 1,5kg
+Đậu : 6 bìa
+Trứng gà : 40 quả
+Hành ta bóc : 1kg
+Tỏi bóc : 1kg
+Xả : 1kg
+Khế chua : 2kg
+Cải thìa : 1kg
+Bạc hà : 3 lạng
+Húng chó : 3 lạng
+Muống : 1 mớ
+ Cải xanh : 5 lạng
+Lá lốt: 3 lạng
+Táo : 2kg
+Lê : 1,5kg `;
+
+const SHEET_COLS = ["TÊN NVL","ĐVT GỌI HÀNG","TỔNG SL","Xã Đàn","Láng Hạ","Nguyễn Khang","Nghĩa Tân","Ngô Thì Nhậm","Tân Tây Đô","Đội Cấn","Lê Văn Thiêm","Vũ Tông Phan","Dương Khuê","Linh Đàm","Kho Đức Thượng"];
+const SHEET_ROWS = [
+ ["Bắp cải tím","kg","4.5","0.5","","1.5","","1.","","","","","0.5","1.",""],
+ ["Bắp cải trắng","kg","30.","3.","1.","3.","4.","3.","0.5","2.","1.","5.","3.5","4.",""],
+ ["Cà chua bi","kg","7.3","0.5","1.","1.","0.5","1.","","0.5","0.5","1.","0.8","0.5",""],
+ ["Cà rốt","kg","67.","","7.","8.","5.","8.","3.","5.","5.","10.","8.","5.","3."],
+ ["Chanh tươi","kg","0.4","","","0.2","","","","","","","0.2","",""],
+ ["Củ cải trắng","kg","140.5","","","","","","","","","0.5","","","140."],
+ ["Dưa chuột","kg","6.5","","1.","1.","","1.","0.5","","","1.","1.","1.",""],
+ ["Đậu cove","kg","17.","2.","","2.","","3.","","","3.","3.5","2.5","1.",""],
+ ["Gừng","kg","1.2","","","","","","","","","","0.2","","1."],
+ ["Hành lá","kg","0.5","","","","","","","","","","","","0.5"],
+ ["Hành paro","kg","1.2","","0.5","","","","0.2","","","0.5","","",""],
+ ["Hành tây","kg","16.5","2.","","3.","2.","1.","","","1.","3.5","","2.","2."],
+ ["Lá bạc hà","kg","0.1","","","","","","","","","","0.1","",""],
+ ["Lê","kg","2.","","","","","","","","","","","","2."],
+ ["Nấm kim châm","gói","5.","","","1.","","","","","","3.","1.","",""],
+ ["Ớt đỏ Đà Lạt","kg","4.4","0.5","","0.5","0.5","0.5","","","0.5","0.7","0.7","0.5",""],
+ ["Rau cải ngọt","kg","25.","4.","2.","2.","2.","3.","1.","1.","","4.5","2.5","3.",""],
+ ["Rau giá","kg","9.1","1.","1.","1.5","1.","1.","0.3","0.5","","1.","0.8","1.",""],
+ ["Rau xà lách","kg","19.","1.","1.","2.5","2.","3.","1.","1.","1.","3.","2.5","1.",""],
+ ["Táo","kg","3.7","","0.5","0.7","","","","","","","0.5","","2."],
+ ["Tỏi","kg","3.","0.5","","0.5","","","","","","0.5","0.5","","1."],
+ ["Xoài","kg","7.","0.5","0.5","1.","","1.","","0.5","1.","1.","1.","0.5",""],
+];
+
+// ---------------- Bộ đọc ----------------
+const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/đ/g,"d").replace(/Đ/g,"d").toLowerCase().replace(/\s+/g," ").trim();
+const STRIP = ["rau ","qua ","trai ","cu ","la "];
+const fmtVnd = n => n.toLocaleString("vi-VN")+" ₫";
+const fmtQty = n => (Math.round(n*1000)/1000).toLocaleString("vi-VN");
+function lev(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;let p=Array.from({length:n+1},(_,j)=>j);for(let i=1;i<=m;i++){let c=[i];for(let j=1;j<=n;j++)c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1));p=c}return p[n]}
+function parseNum(s){ // "1,5" "1.5" "30." "1 rưỡi" "nửa"
+  s=s.trim().toLowerCase(); if(/^nửa$|^nua$/.test(s)) return .5;
+  let r=s.match(/^(\d+)\s*(rưỡi|ruoi)$/); if(r) return +r[1]+.5;
+  s=s.replace(/\.$/,"").replace(",","."); const n=Number(s); return Number.isFinite(n)?n:null;
+}
+const UNIT_MAP = {kg:"kg",ky:"kg",ki:"kg",can:"kg",lang:"lạng",g:"g",gr:"g",gam:"g",qua:"quả",trai:"quả",bia:"bìa",mo:"mớ",bo:"bó",hop:"hộp",thung:"thùng",khay:"khay",tui:"túi",goi:"gói",chuc:"chục"};
+function parseLine(raw){
+  let s=raw.replace(/^[\s\-•+*\d]+[.)]\s+/,"").replace(/^[\s\-•+*]+/,"").trim(); if(!s) return null;
+  let note=""; s=s.replace(/\(([^)]*)\)/,(_,x)=>{note=x.trim();return ""}).trim();
+  const re=/^(.+?)\s*[:\-x×]?\s*(\d+(?:[.,]\d+)?\.?|\d+\s*rưỡi|nửa)\s*([a-zA-ZÀ-ỹ]+)?\.?\s*$/i;
+  let m=s.match(re), name, num, unit;
+  if(m){name=m[1].replace(/[:\-x×]\s*$/,"").trim(); num=parseNum(m[2]); unit=m[3]}
+  else { const m2=s.match(/^(\d+(?:[.,]\d+)?)\s*([a-zA-ZÀ-ỹ]+)\s+(.+)$/); if(m2){num=parseNum(m2[1]);unit=m2[2];name=m2[3]} }
+  if(!name||num==null) return {raw, status:"unparsed", note:s};
+  const u = unit ? (UNIT_MAP[norm(unit)]||unit.toLowerCase()) : null;
+  return {raw, name, num, unit:u, note};
+}
+function findProduct(name, scope){
+  const n=norm(name); const ca=CUST_ALIAS[scope]||{};
+  if(ca[n]) return {status:"ok", p:CATALOG.find(x=>x.id===ca[n]), by:"Tên riêng của khách"};
+  const byAlias=CATALOG.find(x=>norm(x.name)===n || (x.aliases||[]).some(a=>norm(a)===n));
+  if(byAlias) return {status:"ok", p:byAlias, by: norm(byAlias.name)===n?"Đúng tên":"Tên gọi khác"};
+  const n2=STRIP.reduce((t,w)=>t.startsWith(w)?t.slice(w.length):t,n);
+  const scored=CATALOG.map(p=>{const pn=norm(p.name), pn2=STRIP.reduce((t,w)=>t.startsWith(w)?t.slice(w.length):t,pn);
+    let sc=0; if(pn.startsWith(n+" ")||pn2.startsWith(n2+" ")) sc=0.75; else if(pn.includes(n2)&&n2.length>=3) sc=.6;
+    const d=Math.min(lev(n2,pn2),lev(n2,pn2.split(" ")[0])); if(n2.length>=2&&d<=Math.max(1,Math.floor(n2.length/4))) sc=Math.max(sc,.85-d*.1);
+    return {p,sc}}).filter(x=>x.sc>0).sort((a,b)=>b.sc-a.sc);
+  if(!scored.length) return {status:"missing"};
+  if(scored.length===1||scored[0].sc-scored[1].sc>=.2) return {status:"ok", p:scored[0].p, by:"Đoán (gần đúng)", guess:true};
+  return {status:"choose", cands:scored.slice(0,3).map(x=>x.p)};
+}
+function convert(num, unit, p){ // → số lượng theo đơn vị bán của SP; null nếu không quy đổi được
+  if(!unit||unit===p.unit) return {q:num,u:p.unit};
+  if(p.unit==="kg"){ if(unit==="lạng") return {q:num/10,u:"kg",hint:`${fmtQty(num)} lạng`}; if(unit==="g") return {q:num/1000,u:"kg",hint:`${fmtQty(num)} g`}; }
+  if(unit==="chục" && p.unit!=="kg") return {q:num*10,u:p.unit,hint:`${fmtQty(num)} chục`};
+  if(p.units&&p.units[unit]) return {q:num*p.units[unit],u:p.unit};
+  return null;
+}
+
+// ---------------- Zalo ----------------
+const zText=document.getElementById("z-text"), zLines=document.getElementById("z-lines"), zSum=document.getElementById("z-sum");
+let zState=[]; // {raw,name,num,unit,status,p,cands,remember,...}
+function readZalo(){
+  zState = zText.value.split(/\r?\n/).map(parseLine).filter(Boolean).map(l=>{
+    if(l.status==="unparsed") return l;
+    const f=findProduct(l.name,"zalo"); return {...l, ...f, remember:true};
+  });
+  renderZalo();
+}
+function lineQty(l){ if(!l.p) return null; return convert(l.num,l.unit,l.p); }
+function renderZalo(){
+  const order={unparsed:0,choose:1,missing:2,ok:3};
+  const rows=zState.map((l,i)=>({l,i})).sort((a,b)=>order[a.l.status]-order[b.l.status]);
+  zLines.innerHTML="";
+  for(const {l,i} of rows){
+    const el=document.createElement("div"); el.className="line st-"+l.status;
+    const c=lineQty(l); let qtyTxt="—", money="—";
+    if(l.status==="ok"&&!c){ l.status="choose"; l.unitIssue=true; }
+    if(l.status==="ok"&&c){ qtyTxt=`${fmtQty(c.q)} ${c.u}`+(c.hint?`<span class="sub small muted" style="display:block">${c.hint}</span>`:""); money=fmtVnd(Math.round(c.q*l.p.price)); }
+    let prod="", st="";
+    if(l.status==="ok"){ prod=`<b>${l.p.name}</b><span class="sub">${l.by}${l.note?` · ghi chú: ${l.note}`:""}</span>${l.picked?`<label class="remember"><input type="checkbox" ${l.remember?"checked":""} data-rem="${i}"> Nhớ “${l.name}” cho khách này</label>`:""}`; st=`<span class="chip ok">${l.guess?"Khớp (đoán)":"Khớp"}</span>`; }
+    else if(l.status==="choose"){ const cs=l.unitIssue?[l.p]:l.cands; prod=`<b>${l.unitIssue?`${l.p.name}: chưa có đơn vị “${l.unit}”`:`“${l.name}” — chọn sản phẩm`}</b><div class="cands">${cs.map(p=>l.unitIssue?`<button class="btn sm soft" data-unit="${i}">Thêm đơn vị “${l.unit}”</button>`:`<button class="btn sm" data-pick="${i}" data-pid="${p.id}">${p.name}</button>`).join("")}</div>`; st=`<span class="chip choose">Cần chọn</span>`; }
+    else if(l.status==="missing"){ prod=`<b>Chưa có “${l.name}”</b><div class="cands"><button class="btn sm soft" data-new="${i}">+ Tạo nhanh</button><button class="btn sm" data-skip="${i}">Bỏ dòng</button></div>`; st=`<span class="chip missing">Chưa có SP</span>`; }
+    else if(l.status==="skipped"){ prod=`<span class="muted">Đã bỏ dòng</span>`; st=`<span class="chip missing">Bỏ qua</span>`; }
+    else { prod=`<b>Không đọc được số lượng</b><span class="sub">Sửa dòng trong ô dán, ví dụ “Tên : 2kg”</span>`; st=`<span class="chip bad">Sửa tay</span>`; }
+    el.innerHTML=`<div class="raw">${esc(l.raw.trim())}</div><div class="prod">${prod}</div><div class="qty">${qtyTxt}</div><div class="money">${money}</div><div class="st">${st}</div>`;
+    zLines.append(el);
+  }
+  const ok=zState.filter(l=>l.status==="ok"), need=zState.filter(l=>["choose","missing","unparsed"].includes(l.status));
+  zSum.innerHTML=`<span class="chip ok">${ok.length} khớp</span>`+(need.length?`<span class="chip choose">${need.length} cần xử lý</span>`:"")+`<span class="chip info">${zState.length} dòng đọc được</span>`;
+  const total=ok.reduce((s,l)=>{const c=lineQty(l);return s+(c?Math.round(c.q*l.p.price):0)},0);
+  setBar(`${ok.length} dòng sẵn sàng${need.length?` · ${need.length} dòng cần xử lý`:""} · tạm tính`, fmtVnd(total), need.length?`Xử lý ${need.length} dòng để tạo đơn`:`Tạo đơn (${ok.length} dòng)`, need.length>0||!ok.length, ()=>toast(`Concept: sẽ tạo 1 đơn sỉ ${ok.length} dòng và nhớ ${ok.filter(l=>l.picked&&l.remember).length} tên riêng cho khách`));
+}
+zLines.addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  if(b.dataset.pick){const l=zState[+b.dataset.pick]; l.p=CATALOG.find(x=>x.id===+b.dataset.pid); l.status="ok"; l.by="Nhân viên chọn"; l.picked=true; renderZalo()}
+  if(b.dataset.skip){zState[+b.dataset.skip].status="skipped"; renderZalo()}
+  if(b.dataset.unit){const l=zState[+b.dataset.unit]; l.p={...l.p, units:{...(l.p.units||{}), [l.unit]:1}}; l.status="ok"; l.unitIssue=false; l.by="Đã thêm đơn vị"; renderZalo()}
+  if(b.dataset.new){openNew(+b.dataset.new)}
+});
+zLines.addEventListener("change",e=>{const i=e.target.dataset.rem; if(i!=null) zState[+i].remember=e.target.checked});
+zText.addEventListener("input",()=>{clearTimeout(zText._t); zText._t=setTimeout(readZalo,250)});
+document.getElementById("z-reset").onclick=()=>{zText.value=ZALO_SAMPLE; readZalo()};
+
+// Tạo nhanh
+const dlg=document.getElementById("dlg"); let newIdx=null;
+function openNew(i){ newIdx=i; const l=zState[i]; document.getElementById("dlg-raw").textContent=l.name; document.getElementById("dlg-name").value=l.name.replace(/^./,c=>c.toUpperCase()); const u=document.getElementById("dlg-unit"); u.value=l.unit&&["kg","bìa","mớ","quả","bó","gói","hộp"].includes(l.unit)?l.unit:"kg"; document.getElementById("dlg-price").value=""; if(dlg.showModal) dlg.showModal(); }
+dlg.addEventListener("close",()=>{
+  if(dlg.returnValue!=="ok"||newIdx==null) return;
+  const name=document.getElementById("dlg-name").value.trim(), unit=document.getElementById("dlg-unit").value, price=Number(document.getElementById("dlg-price").value.replace(/\D/g,""));
+  if(!name||!price) return;
+  const p={id:1000+newIdx,name,unit,units:{[unit]:1},price}; CATALOG.push(p);
+  const l=zState[newIdx]; l.p=p; l.status="ok"; l.by="Vừa tạo nhanh"; l.picked=true; renderZalo(); toast(`Đã tạo “${name}” (ví dụ)`);
+});
+
+// ---------------- Bảng chi nhánh ----------------
+const sText=document.getElementById("s-text"), sGrid=document.getElementById("s-grid"), sSum=document.getElementById("s-sum"), sOrders=document.getElementById("s-orders");
+let colMap={}; // tên cột → địa chỉ | "" (bỏ) | undefined
+function sampleTsv(){return [SHEET_COLS,...SHEET_ROWS].map(r=>r.join("\t")).join("\n")}
+function readSheet(){
+  const rows=sText.value.split(/\r?\n/).filter(r=>r.trim()).map(r=>r.split("\t"));
+  if(rows.length<2){sGrid.innerHTML="";return renderSheet(null)}
+  const head=rows[0], body=rows.slice(1);
+  const iName=0, iUnit=head.findIndex(h=>/đvt|don vi|dvt/i.test(norm(h))), iTot=head.findIndex(h=>/tong/.test(norm(h)));
+  const branchIdx=head.map((h,i)=>i).filter(i=>i!==iName&&i!==iUnit&&i!==iTot&&head[i].trim());
+  for(const i of branchIdx){const h=head[i].trim(); if(!(h in colMap)){const a=ADDRESSES.find(x=>norm(x)===norm(h)); colMap[h]=a}}
+  const items=body.map(r=>{const name=(r[iName]||"").trim(); const f=findProduct(name,"sheet"); const qty={}; let sum=0;
+    for(const i of branchIdx){const v=parseNum(r[i]||""); if(v){qty[head[i].trim()]=v; sum+=v}}
+    const tot=iTot>=0?parseNum(r[iTot]||""):null; return {name, unit:(r[iUnit]||"").trim(), f, qty, sum:Math.round(sum*1000)/1000, tot}});
+  renderSheet({head, branchIdx, items});
+}
+function renderSheet(d){
+  if(!d){sSum.innerHTML="";sOrders.innerHTML="";return}
+  const br=d.branchIdx.map(i=>d.head[i].trim());
+  let h=`<thead><tr><th class="stick">Sản phẩm</th><th>ĐVT</th><th>TỔNG SL</th>`+br.map(b=>{const m=colMap[b]; const cls=m===undefined?"c-unmapped":"";
+    const opts=`<option value="__">— chọn —</option>`+ADDRESSES.map(a=>`<option ${m===a?"selected":""}>${a}</option>`).join("")+`<option value="" ${m===""?"selected":""}>Bỏ cột</option><option value="+">+ Thêm chi nhánh “${b}”</option>`;
+    return `<th class="${cls}">${esc(b)}<span class="colmap">${m===undefined?`<select data-col="${esc(b)}">${opts}</select>`:m===""?"bỏ cột":"→ "+esc(m)}</span></th>`}).join("")+`</tr></thead><tbody>`;
+  for(const it of d.items){
+    const st=it.f.status, rc=st==="ok"?"":"r-"+st;
+    const pname=st==="ok"?`${esc(it.f.p.name)}<span class="colmap">${esc(it.name)} · ${it.f.by}</span>`:st==="choose"?`<span style="color:var(--warn);font-weight:600">${esc(it.name)}</span><span class="colmap">cần chọn: ${it.f.cands.map(c=>c.name).join(" / ")}</span>`:`<span style="color:var(--warn);font-weight:600">${esc(it.name)}</span><span class="colmap">chưa có SP · tạo nhanh</span>`;
+    const totBad=it.tot!=null&&Math.abs(it.tot-it.sum)>1e-9;
+    h+=`<tr class="${rc}"><td class="stick">${pname}</td><td style="text-align:center">${esc(it.unit)}</td><td class="${totBad?"totbad":""}" title="${totBad?`Tổng các chi nhánh = ${fmtQty(it.sum)}`:""}">${it.tot!=null?fmtQty(it.tot):""}${totBad?` ≠ ${fmtQty(it.sum)}`:""}</td>`+br.map(b=>{const v=it.qty[b];return `<td class="${v?"has":"zero"}">${v?fmtQty(v):"·"}</td>`}).join("")+`</tr>`;
+  }
+  sGrid.innerHTML=h+"</tbody>";
+  // tổng hợp
+  const needRows=d.items.filter(i=>i.f.status!=="ok").length, needCols=br.filter(b=>colMap[b]===undefined).length, totBad=d.items.filter(i=>i.tot!=null&&Math.abs(i.tot-i.sum)>1e-9).length;
+  const orders={};
+  for(const it of d.items){ if(it.f.status!=="ok") continue; for(const [b,v] of Object.entries(it.qty)){const a=colMap[b]; if(!a) continue; (orders[a]??=[]).push({it,v})}}
+  const list=Object.entries(orders);
+  sSum.innerHTML=`<span class="chip info">${d.items.length} mặt hàng × ${br.length} cột</span>`+(needRows?`<span class="chip choose">${needRows} hàng cần ghép SP</span>`:"")+(needCols?`<span class="chip choose">${needCols} cột chưa ghép địa chỉ</span>`:"")+(totBad?`<span class="chip bad">${totBad} TỔNG lệch</span>`:`<span class="chip ok">TỔNG khớp</span>`);
+  let grand=0;
+  sOrders.innerHTML=list.map(([a,ls])=>{const t=ls.reduce((s,x)=>s+Math.round(x.v*x.it.f.p.price),0); grand+=t; return `<div class="branch"><b>Bill · ${esc(a)}</b><span class="n">${ls.length} mặt hàng · chi nhánh ký nhận</span><span class="money" style="text-align:left">${fmtVnd(t)}</span></div>`}).join("")||`<p class="muted small">Chưa có đơn nào.</p>`;
+  document.getElementById("s-company").innerHTML = list.length ? `<b>Công nợ & hoá đơn GTGT: Công ty CP Ẩm thực NVL (một MST)</b><span class="small">Công nợ tăng ${fmtVnd(grand)} — theo dõi được theo từng cơ sở, một số dư chung cho công ty.</span><span class="small">Hoá đơn GTGT: <b>1 hoá đơn tổng hợp</b> gộp ${list.length} bill (cuối ngày / cuối kỳ tuỳ cài đặt của khách), dòng hàng cộng theo sản phẩm, kèm bảng kê bill theo cơ sở.</span>` : "";
+  const blockers=needRows+needCols;
+  setBar(`${list.length} đơn · ${blockers?`${blockers} việc cần xử lý · `:""}tạm tính`, fmtVnd(grand), blockers?`Xử lý ${blockers} việc để tạo đơn`:`Tạo ${list.length} đơn`, blockers>0||!list.length, ()=>toast(`Concept: sẽ tạo ${list.length} đơn sỉ trong một lô, kiểm hạn mức nợ trên tổng ${fmtVnd(grand)}`));
+}
+sGrid.addEventListener("change",e=>{const c=e.target.dataset.col; if(c==null) return; const v=e.target.value; if(v==="__") return; if(v==="+"){ADDRESSES.push(c); colMap[c]=c; toast(`Đã thêm chi nhánh “${c}” (ví dụ)`)} else colMap[c]=v; readSheet()});
+sText.addEventListener("input",()=>{clearTimeout(sText._t); sText._t=setTimeout(readSheet,250)});
+document.getElementById("s-reset").onclick=()=>{colMap={}; sText.value=sampleTsv(); readSheet()};
+
+// ---------------- Chung ----------------
+const barLeft=document.getElementById("bar-left"), barTotal=document.getElementById("bar-total"), barBtn=document.getElementById("bar-btn");
+function setBar(l,t,btn,dis,fn){barLeft.textContent=l; barTotal.textContent=t; barBtn.textContent=btn; barBtn.disabled=dis; barBtn.onclick=fn}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function toast(m){const t=document.createElement("div"); t.className="toast"; t.textContent=m; document.body.append(t); setTimeout(()=>t.remove(),2600)}
+const tabs={zalo:[document.getElementById("t-zalo"),document.getElementById("v-zalo")], sheet:[document.getElementById("t-sheet"),document.getElementById("v-sheet")]};
+function show(k){for(const [n,[b,v]] of Object.entries(tabs)){const on=n===k; b.setAttribute("aria-selected",on); v.hidden=!on} if(k==="zalo") renderZalo(); else readSheet(); try{localStorage.setItem("tab",k)}catch{}}
+tabs.zalo[0].onclick=()=>show("zalo"); tabs.sheet[0].onclick=()=>show("sheet");
+const tmr=new Date(Date.now()+864e5).toISOString().slice(0,10); document.getElementById("z-date").value=tmr; document.getElementById("s-date").value=tmr;
+zText.value=ZALO_SAMPLE; sText.value=sampleTsv(); readZalo();
+let start="zalo"; try{start=localStorage.getItem("tab")||"zalo"}catch{} show(location.hash==="#bang"?"sheet":start);
+</script>
