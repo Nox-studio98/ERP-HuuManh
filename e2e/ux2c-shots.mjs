@@ -22,7 +22,7 @@ const only = process.env.ONLY?.split(",");
 const SCREENS = [
   ["cong-no", "/debts", true], ["hoa-don", "/invoices", true], ["thu-chi", "/finance", false], ["ngan-hang", "/bank", false],
   ["bao-cao", "/reports", false], ["bao-cao-tai-chinh", "/fin-reports", false], ["xuat-excel", "/exports", false], ["duyet", "/approvals", false],
-  ["nhan-vien", "/hr/employees", true], ["lich-ca", "/hr/schedule", false], ["duyet-cham-cong", "/hr/attendance", false], ["cham-cong", "/me", false],
+  ["nhan-vien", "/hr/employees", true], ["lich-ca", "/hr/schedule", false], ["duyet-cham-cong", "/hr/approvals", false], ["cham-cong", "/me", false],
   ["bang-cong", "/hr/timesheets", false], ["luong", "/payroll", true], ["cua-hang", "/hr/stores", false],
   ["nguoi-dung", "/users", true], ["cai-dat", "/settings", false], ["tich-hop", "/integrations", false],
 ];

@@ -23,6 +23,13 @@
   --tap: 44px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --tab-h: 64px;
+  /* màu trạng thái ô chấm công (Bảng chấm công) */
+  --st-on_time-bg: #dbeafe; --st-on_time-fg: #1d4f91; --st-on_time-dot: #3b82f6;
+  --st-late_early-bg: #ede5fb; --st-late_early-fg: #5b32a3; --st-late_early-dot: #8b5cf6;
+  --st-incomplete-bg: #fde8e6; --st-incomplete-fg: #a8221b; --st-incomplete-dot: #dc3d33;
+  --st-not_yet-bg: #ffead0; --st-not_yet-fg: #944a05; --st-not_yet-dot: #f08a1c;
+  --st-leave-bg: #e9ece6; --st-leave-fg: #55605a; --st-leave-dot: #8c978f;
+  --st-working-bg: #dcf3e3; --st-working-fg: #17693a; --st-working-dot: #2f9d5b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -30,6 +37,12 @@
     --border: #2b3a2f; --accent: #46b676; --accent-hover: #5cc787; --accent-soft: #1a3526; --on-accent: #07200f;
     --warn: #f0a553; --warn-soft: #3a2a12; --danger: #ff8a80; --danger-soft: #3f1d1a;
     --info: #7cc0e3; --info-soft: #16303d;
+    --st-on_time-bg: #172c47; --st-on_time-fg: #9fc7f5; --st-on_time-dot: #5b9cf0;
+    --st-late_early-bg: #2a2147; --st-late_early-fg: #c9b4f5; --st-late_early-dot: #a283f0;
+    --st-incomplete-bg: #43201d; --st-incomplete-fg: #ffa59c; --st-incomplete-dot: #f0675d;
+    --st-not_yet-bg: #3d2a10; --st-not_yet-fg: #f5b970; --st-not_yet-dot: #f0a040;
+    --st-leave-bg: #262e29; --st-leave-fg: #a3b2a8; --st-leave-dot: #77867c;
+    --st-working-bg: #17351f; --st-working-fg: #8fdfaa; --st-working-dot: #46b676;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3); --shadow-up: 0 -6px 24px rgba(0,0,0,.5);
   }
 }

@@ -211,7 +211,7 @@ try {
   ok("lần chấm offline tính công ngay theo giờ bấm, hiển thị 'chờ xem lại' (C-01)");
 
   step("Chủ duyệt lần chấm offline + yêu cầu bổ sung công (hộp Duyệt chấm công)");
-  await go(o.page, "/hr/attendance");
+  await go(o.page, "/hr/approvals");
   const pp = o.page.getByTestId("pending-punches");
   await pp.getByText(NAME_A).first().waitFor();
   await shot(o.page, "hr-attendance.png");
@@ -247,7 +247,7 @@ try {
   await s2.page.getByTestId("punch-btn").click();
   await s2.page.getByTestId("punch-info").waitFor();
   assert(/Thiết bị mới, đã gửi quản lý duyệt/.test(await s2.page.getByTestId("punch-info").innerText()), "hiện thông báo thiết bị mới");
-  await go(o.page, "/hr/attendance");
+  await go(o.page, "/hr/approvals");
   await o.page.getByRole("tab", { name: /Thiết bị/ }).click();
   await btn(o.page.getByTestId("pending-devices").locator(".card").filter({ hasText: STAFF.u }).first(), "Cho phép thiết bị").click();
   await toastOk(o.page, /Đã duyệt thiết bị/);
@@ -271,7 +271,7 @@ try {
   await s.page.getByLabel("Ngày làm").fill(YESTERDAY);
   await btn(s.page, "Gửi đăng ký").click();
   await toastOk(s.page, /Đã gửi đăng ký tăng ca/);
-  await go(o.page, "/hr/attendance");
+  await go(o.page, "/hr/approvals");
   await o.page.getByRole("tab", { name: /Nghỉ phép/ }).click();
   const pl = o.page.getByTestId("pending-leaves");
   const overCard = pl.locator(".card").filter({ hasText: "Vượt số dư phép" });

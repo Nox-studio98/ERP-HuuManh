@@ -170,7 +170,7 @@ function Templates({ write }: { write: boolean }) {
     </div>
   );
 }
-function TplForm({ t, onClose, onSaved }: { t: any; onClose: () => void; onSaved: () => void }) {
+export function TplForm({ t, onClose, onSaved }: { t: any; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ code: t.code ?? "", name: t.name ?? "", startTime: t.startTime ?? "08:00", endTime: t.endTime ?? "17:00", breakMinutes: t.breakMinutes ?? 0, active: t.active ?? true });
   const [busy, setBusy] = useState(false);
   const save = async () => {
