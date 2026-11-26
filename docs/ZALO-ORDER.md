@@ -28,7 +28,7 @@ Quyết định đã chốt:
 | Đặt ở đâu | Màn **Tạo đơn sỉ** (đợt này). Có thể mở rộng sang đơn MXH / POS sau |
 | Dòng không đọc được | **Quy tắc là mặc định**, không gửi dữ liệu ra ngoài. AI (Claude API) là tuỳ chọn bật sau, chỉ cho dòng quy tắc không đọc được (mục 8) |
 | Sản phẩm chưa có | **Nút tạo nhanh** ngay trong bảng xem trước |
-| Khách nhiều chi nhánh gửi bảng Excel | Dán bảng (hoặc tải file .xlsx) → **mỗi chi nhánh một đơn**, cùng một khách (mục 9) |
+| Khách nhiều chi nhánh | **Mỗi chi nhánh tự đặt trên cổng khách sỉ**; hệ thống tự sinh bảng tổng hợp hàng × chi nhánh cho văn phòng chuỗi (mục 9.7). Dán bảng Excel chỉ còn là cách dự phòng (mục 9.1–9.5) |
 
 ## 2. Luồng
 
@@ -273,6 +273,90 @@ CREATE TABLE einvoice_batch_items (       -- bill nào nằm trong hoá đơn t�
 - **Sao kê / đối chiếu công nợ** cho công ty: nhóm theo cơ sở, tổng cuối cùng một số dư; xuất PDF/Excel.
 - **Bill in cho cơ sở:** tên + địa chỉ chi nhánh, danh sách hàng thực giao, đơn giá, thành tiền, chữ ký nhận; ghi "Hoá đơn GTGT xuất tổng cho [Tên công ty] — MST …" để chi nhánh không đòi hoá đơn riêng.
 
+### 9.7 (TẠM DỪNG) Chi nhánh tự đặt trên cổng khách sỉ, bảng tổng hợp do hệ thống sinh
+
+> **Tạm dừng 25/11/2026:** khách không muốn đổi quy trình (văn phòng tổng vẫn gom đơn các chi nhánh và gửi **ảnh** bảng mỗi ngày). Giữ lại làm phương án sau; hướng chính hiện tại là **9.8 đọc ảnh**.
+
+Văn phòng chuỗi đang mất nhiều thời gian gom yêu cầu các chi nhánh vào file Excel. Đảo ngược luồng: **mỗi chi nhánh tự đặt**, bảng hàng × chi nhánh (đúng dạng file khách đang dùng) **do hệ thống tự sinh**. Ô dán Excel ở 9.1–9.5 giữ lại cho giai đoạn chuyển đổi.
+
+```
+Chi nhánh (điện thoại, cổng khách sỉ)              Văn phòng chuỗi (cổng khách sỉ)            Cửa hàng (ERP)
+──────────────────────────────────────             ────────────────────────────────           ───────────────────
+Mở "Đặt hàng ngày mai"                              Bảng tổng hợp tự cập nhật:
+  danh sách món hay đặt, SL gợi ý sẵn                 hàng × chi nhánh + cột TỔNG
+  +/− chỉnh, thêm món, ghi chú                         chi nhánh nào chưa đặt (đỏ)
+Gửi trước giờ chốt (vd 22:00)  ───────────────►      sửa ô nếu cần, xuất Excel
+21:00 chưa đặt → nhắc                                [nếu bật duyệt] Duyệt & gửi ─────►   12 đơn sỉ (mỗi chi nhánh 1),
+                                                                                           1 khách, công nợ chung,
+                                                                                           bill theo cơ sở, HĐ tổng hợp (9.6),
+                                                                                           phần thiếu → PO 03:00
+```
+
+**Tài khoản và quyền (cổng khách sỉ đã có tài khoản gắn khách):**
+- `shop_accounts` thêm `address_id` (NULL = cấp văn phòng, xem/đặt mọi chi nhánh) và vai trò trong chuỗi: `branch` (chỉ đặt cho địa chỉ của mình) / `office` (xem bảng tổng hợp, sửa, duyệt, xuất Excel).
+- Văn phòng tự mời tài khoản chi nhánh (hoặc cửa hàng tạo hộ từ ERP). Mọi truy vấn lọc theo `customer_id` + `address_id` của phiên (test IDOR giữa chi nhánh và giữa các khách).
+- Chi nhánh **không thấy công nợ, hoá đơn** của công ty; văn phòng thấy (như cổng khách sỉ hiện nay).
+
+**Màn chi nhánh đặt hàng (ưu tiên điện thoại):**
+- Danh sách **món hay đặt** của chi nhánh (đặt ≥ 2 lần trong 30 ngày), nhóm theo loại; ô tìm để thêm món khác trong bảng giá của khách.
+- **Số lượng gợi ý** điền sẵn: trung bình 4 lần gần nhất **cùng thứ trong tuần** (làm tròn bước đặt, vd 0,5 kg); nút **Giống lần trước**; tuỳ chọn **Định mức − tồn** (chi nhánh khai định mức một lần, mỗi tối chỉ nhập "còn bao nhiêu").
+- Bước +/− theo đơn vị (kg bước 0,5; gói/quả bước 1); ô số nhập tay được.
+- Đồng hồ tới **giờ chốt** (`b2b.branch_cutoff_time`, mặc định 22:00); sau giờ chốt chỉ văn phòng sửa được (hoặc gọi cửa hàng).
+- Gửi → đơn sỉ trạng thái `submitted` (nếu chuỗi bật duyệt) hoặc `new` (đi thẳng). Sửa lại được tới giờ chốt; dùng `clientUuid` chống gửi trùng.
+
+**Bảng tổng hợp văn phòng chuỗi:**
+- Lưới hàng × chi nhánh như file Excel của khách, cột **TỔNG** tự cộng, hàng tiêu đề ghi trạng thái mỗi chi nhánh: **Đã đặt (giờ)** / **Chưa đặt** / **Đã sửa bởi văn phòng**.
+- Văn phòng sửa ô trực tiếp (ghi lại ai sửa), bấm **Nhắc chi nhánh chưa đặt**, **Xuất Excel** (đúng bố cục file cũ để lưu sổ).
+- Tham số khách `b2b.chain_approval` (mặc định tắt): bật thì đơn chi nhánh chờ văn phòng **Duyệt & gửi** cả bảng; tới giờ chốt chưa duyệt → nhắc văn phòng (không tự gửi).
+- Cùng dữ liệu đó là màn ERP "Đơn chuỗi theo ngày" cho cửa hàng soạn gộp theo sản phẩm rồi chia theo chi nhánh (9.3).
+
+**Nhắc đặt hàng:** 21:00 (tham số) thông báo đẩy cho chi nhánh chưa đặt và văn phòng. Nhắc qua Zalo (ZNS/OA) cần tài khoản Zalo OA trả phí — để sau.
+
+**Dữ liệu bổ sung:**
+```sql
+-- shop_accounts thêm: address_id INTEGER REFERENCES customer_addresses(id), chain_role TEXT CHECK (chain_role IN ('office','branch'))
+CREATE TABLE branch_par_levels (           -- định mức theo chi nhánh (tuỳ chọn)
+  address_id INTEGER NOT NULL REFERENCES customer_addresses(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  par_milli INTEGER NOT NULL CHECK (par_milli >= 0),
+  PRIMARY KEY(address_id, product_id)
+);
+-- orders: trạng thái thêm 'submitted' (chờ văn phòng chuỗi duyệt) khi bật b2b.chain_approval
+```
+
+## 9.8 Hướng chính: khách gửi ảnh bảng → đọc ảnh bằng Cloudflare Workers AI (PoC 25–26/11/2026)
+
+Khách không dùng Google Sheets, không điền file mẫu; mỗi ngày gửi **ảnh chụp màn hình** bảng Excel (vd 817×309 px, 22 dòng hàng × 12 chi nhánh). OCR truyền thống đọc kém ở độ phân giải này; mô hình thị giác (vision LLM) đọc được. Chủ dự án chọn **Cloudflare Workers AI** (cùng tài khoản Cloudflare, gói miễn phí 10.000 neuron/ngày, không gửi dữ liệu ra bên thứ ba khác).
+
+**Kết quả PoC trên 1 ảnh thật** (đáp án chuẩn chép tay, có dùng cột TỔNG để kiểm):
+
+| Cách đọc | Ô đúng | Dòng tự khớp TỔNG |
+|---|---|---|
+| Gemma 4 (`@cf/google/gemma-4-26b-a4b-it`), nguyên ảnh | 69,6% | 4/22 |
+| Qwen 3.8, nguyên ảnh | 57,3% | 5/22 |
+| Llama 4 Scout, cắt 3 dải | 72,4% | 7/22 |
+| Gemma 4, cắt **4 dải cột** (mỗi dải giữ cột Tên/ĐVT/TỔNG, phóng 3×) | 96,5–97,2% | 14/22 |
+| **Gemma 4, 4 dải + mặt nạ ô xanh + bù bằng TỔNG** | **99,6–100%** | **21–22/22, 0 ô sai lọt** |
+| Clairic / Clairic Flash (mô hình trích xuất của Cloudflare) | 88–94% | đắt ~25× (≈4.000 neuron/ảnh) |
+| DeepSeek V4.1 Flash, Inkling 2 Small | chưa thử | chỉ có ở gói Workers Paid |
+| Kimi K2.6 | — | Cloudflare ngừng 20/11/2026 |
+
+**Quy trình đề xuất (đã chạy trong PoC, mã ở `tools/ocr-poc/`):**
+1. Chuẩn hoá ảnh về khổ mẫu của khách (rộng 817 px). Mỗi khách có **mẫu bảng** lưu một lần: toạ độ cột (Tên/ĐVT/TỔNG, từng chi nhánh), dòng đầu, chiều cao dòng. Nhân viên kéo vạch cột trên ảnh đầu tiên (cần làm màn hình này).
+2. Cắt 4 dải dọc, mỗi dải = cột trái (Tên/ĐVT/TỔNG) + 3 cột chi nhánh; phóng 3×; gửi song song tới Gemma 4 với `reasoning_effort: "none"` (bật suy luận thì hết token mà không trả lời), `temperature: 0`, yêu cầu trả JSON.
+3. **Mặt nạ màu:** bảng của khách tô xanh mọi ô có số → đọc pixel để biết ô nào có giá trị (khớp 264/264 ô). Model đọc số ở ô trắng → bỏ (lệch cột); ô xanh mà model để trống → ô "chưa chắc".
+4. **Bù bằng cột TỔNG:** dòng chỉ còn 1 ô chưa chắc → giá trị = TỔNG − các ô còn lại. Không đọc lại từng ô bằng AI (model đọc "1." thành 1,4/1,5).
+5. Dòng nào vẫn không khớp TỔNG → đánh dấu **"cần xem"**, nhân viên sửa trên màn duyệt; không tự nhận.
+6. Thử lại khi Workers AI trả 429 (hết tải) / 408 (quá giờ).
+
+**Chi phí:** ~140–190 neuron/ảnh (≈ 50–60 ảnh/ngày miễn phí; vượt mức ≈ 0,002 USD/ảnh). ~30 giây/ảnh.
+
+**Việc còn lại trước khi làm thật:**
+- Thử thêm 5–10 ảnh thật (zoom khác, chụp bằng điện thoại, ngày thêm/bớt cột). Đã chuẩn bị 6 biến thể ảnh (JPEG Zalo, JPEG nén mạnh, to/nhỏ, mờ); 2 biến thể đầu: 96,6% và 99,2%, 0 ô sai lọt. 4 biến thể còn lại **chưa chạy** vì hết hạn mức ngày 26/11 — hạn mức báo hết ngay sau giờ đặt lại, nên kiểm tra mục Workers AI trên dashboard Cloudflare xem có thứ khác đang dùng.
+- Gemma trả kết quả hơi khác giữa các lần chạy (16–22 dòng tự duyệt) — luôn để bước "cần xem".
+- Giới hạn số ảnh/ngày và báo rõ khi hết hạn mức.
+- Màn hình: thiết lập mẫu bảng theo khách; màn duyệt kết quả (tô dòng "cần xem"); tạo một đơn cho mỗi chi nhánh (9.2–9.6).
+
 ## 10. Kiểm thử dự kiến
 
 - Bộ tin nhắn mẫu thật (ẩn danh) → kết quả mong đợi từng dòng: định dạng số (1,5 / 1.5 / rưỡi / nửa), đơn vị (lạng, chục), ghi chú trong ngoặc, dòng chào hỏi.
@@ -288,6 +372,8 @@ CREATE TABLE einvoice_batch_items (       -- bill nào nằm trong hoá đơn t�
 3. Khách có hay nhắn kèm yêu cầu (giờ giao, loại hàng) trong cùng tin nhắn không? Có cần đọc ngày giao từ tin nhắn ("mai giao 6h") không?
 4. Khách chuỗi: hoá đơn GTGT tổng hợp **theo ngày** hay **theo kỳ** (tuần / tháng)? Theo kỳ cần kế toán của cửa hàng xác nhận cách lập phù hợp quy định thời điểm lập hoá đơn.
 5. Kho Đức Thượng là kho trung tâm của khách: giao về kho rồi khách tự chia, hay cửa hàng chia sẵn theo chi nhánh?
-6. Khách có thể gửi thẳng file .xlsx qua Zalo không, hay chỉ ảnh chụp màn hình? (Ảnh thì cần nhận dạng chữ — phức tạp hơn, đề xuất làm sau.)
+6. Mỗi chi nhánh có người phụ trách đặt hàng dùng điện thoại được không (bếp trưởng / quản lý)? Văn phòng có muốn **duyệt** trước khi gửi cửa hàng không?
 7. Bill cơ sở có cần **giá** không (một số chuỗi chỉ muốn chi nhánh thấy số lượng, giá chỉ ở bảng kê gửi văn phòng)?
 8. Công ty thanh toán gộp cho cả chuỗi hay từng cơ sở tự trả?
+9. Giờ chốt nhận đơn của chuỗi (đề xuất 22:00) và giờ nhắc (21:00)?
+10. Bếp có kiểm kho mỗi tối không (để dùng cách gợi ý "định mức − tồn")?
