@@ -13,6 +13,8 @@ import Login, { ChangePassword } from "./screens/Login";
 const Dashboard = lazy(() => import("./screens/Dashboard"));
 const Pos = lazy(() => import("./screens/Pos"));
 const ShiftClose = lazy(() => import("./screens/ShiftClose"));
+const ShiftHistory = lazy(() => import("./screens/ShiftHistory"));
+const DailyReport = lazy(() => import("./screens/DailyReport"));
 const Orders = lazy(() => import("./screens/Orders"));
 const Inventory = lazy(() => import("./screens/Inventory"));
 const Products = lazy(() => import("./screens/Products"));
@@ -79,6 +81,7 @@ const NAV: Nav[] = [
   { path: "/bank", label: "Ngân hàng", group: G.fin, perms: ["debt.view", "finance.write"], icon: I("M3 10l9-6 9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"), el: <Bank /> },
   { path: "/sepay", label: "Giao dịch SePay", group: G.fin, perms: ["finance.view"], icon: I("M12 3v12M8 11l4 4 4-4M4 19h16"), el: <Sepay /> },
   { path: "/exports", label: "Xuất Excel", group: G.fin, perms: ["reports.view"], icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), el: <Exports /> },
+  { path: "/reports/daily", label: "Báo cáo cuối ngày", group: G.fin, perms: ["reports.view"], icon: I("M7 3h10v18H7zM10 8h4M10 12h4M10 16h2"), el: <DailyReport /> }, // đứng trước /reports (khớp tiền tố theo thứ tự)
   { path: "/reports", label: "Báo cáo", group: G.fin, perms: ["reports.view"], icon: I("M4 20V10M10 20V4M16 20v-8M22 20H2"), el: <Reports /> },
   { path: "/approvals", label: "Duyệt", group: G.admin, perms: ["approvals.decide"], icon: I("M5 12l4 4 10-10"), el: <Approvals /> },
   { path: "/integrations", label: "Tích hợp", group: G.admin, perms: ["integrations.manage"], icon: I("M9 7V3M15 7V3M7 7h10v5a5 5 0 01-10 0zM12 17v4"), el: <Integrations /> },
@@ -100,6 +103,7 @@ const NAV: Nav[] = [
   { path: "/payroll", label: "Bảng lương", group: G.hr, perms: ["hr.sensitive"], icon: I("M3 7h18v10H3zM12 12a2 2 0 100-4 2 2 0 000 4zM6 12h.01M18 12h.01"), el: <HrPayroll /> },
   { path: "/hr/stores", label: "Cửa hàng", group: G.hr, perms: ["hr.manage", "users.manage"], icon: I("M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"), el: <HrStores /> },
   { path: "/hr/qr", label: "Mã QR chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2z"), el: <HrQrDisplay /> },
+  { path: "/shift-history", label: "Lịch sử ca", group: G.retail, perms: ["pos.shift", "reports.view"], icon: I("M12 8v5l3 2M3 12a9 9 0 109-9M3 4v5h5"), el: <ShiftHistory /> },
   { path: "/shift-close", label: "Chốt ca", perms: ["pos.shift"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <ShiftClose />, hidden: true },
 ];
 

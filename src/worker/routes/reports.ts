@@ -6,6 +6,7 @@ import { requirePerm, can } from "../lib/rbac";
 import { AppError, notFound } from "../lib/errors";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { salesSummary } from "../services/salesreport";
+import { cancelledOrders, cashFlow, paymentBreakdown } from "../services/shift-report";
 import { pnlAdjustments } from "../services/finance-reports";
 import { renderPnlPdf } from "../services/report-pdf";
 import { audit } from "../lib/audit";
@@ -207,8 +208,8 @@ async function dailyReport(c: Ctx) {
   const shifts = (
     await db
       .prepare(
-        `SELECT s.id, s.user_id, u.full_name AS cashier_name, s.status, s.opening_cash, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason
-           FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.opened_at >= ? AND s.opened_at < ?`,
+        `SELECT s.id, s.user_id, u.full_name AS cashier_name, s.status, s.opening_cash, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason, s.opened_at, s.closed_at
+           FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.opened_at >= ? AND s.opened_at < ? ORDER BY s.id`,
       )
       .bind(r.from, r.to)
       .all()
@@ -217,7 +218,23 @@ async function dailyReport(c: Ctx) {
     .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS total FROM orders WHERE kind='sale' AND status='cancelled' AND voided_by IS NOT NULL AND created_at >= ? AND created_at < ?`)
     .bind(r.from, r.to)
     .first();
-  return { day, ...summary, vouchers, shifts, voided };
+  // Báo cáo cuối ngày (bổ sung, giữ nguyên các khoá cũ): theo hình thức thanh toán, trả hàng, huỷ, thu/chi quỹ ròng; giá vốn/lãi gộp chỉ khi có prices.view_cost
+  const byPayment = await paymentBreakdown(db, `o.completed_at >= ? AND o.completed_at < ?`, [r.from, r.to]);
+  const flow = await cashFlow(db, r.from, r.to);
+  const cancelled = await cancelledOrders(db, r.from, r.to);
+  const out: Record<string, unknown> = {
+    day, ...summary, vouchers, shifts, voided, byPayment, cashFlow: flow, cancelled,
+    returns: { count: summary.returnCount, total: summary.returnTotal, byMethod: byPayment.filter((p) => p.refunded > 0).map((p) => ({ method: p.method, amount: p.refunded })) },
+  };
+  if (can(c.get("user").role, "prices.view_cost")) {
+    const cost = await db
+      .prepare(`SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN ol.cost_amount ELSE -ol.cost_amount END),0) AS cogs FROM order_lines ol JOIN orders o ON o.id = ol.order_id WHERE o.status='completed' AND o.completed_at >= ? AND o.completed_at < ?`)
+      .bind(r.from, r.to)
+      .first<{ cogs: number }>();
+    out.cogs = cost?.cogs ?? 0;
+    out.grossProfit = summary.revenue - (cost?.cogs ?? 0);
+  }
+  return out as any;
 }
 reportRoutes.get("/reports/daily", requirePerm("reports.view"), async (c) => c.json(await dailyReport(c)));
 

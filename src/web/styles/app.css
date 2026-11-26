@@ -792,3 +792,39 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .pimg { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--surface-2, var(--border)); }
 .pimg.ph { display: flex; align-items: center; justify-content: center; font-size: 2.2rem; font-weight: 700; }
 @media (min-width: 1280px) { .pgrid.photos { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); } }
+
+/* ===== Báo cáo cuối ngày / phiếu bàn giao ca: bản in A4 + 80mm ===== */
+.rpt-doc { display: none; }
+@media print {
+  .rpt-doc { display: block; background: #fff; color: #000; font-family: "Be Vietnam Pro", system-ui, sans-serif; }
+  body:has(.rpt-doc) * { visibility: hidden; }
+  body:has(.rpt-doc) .rpt-doc, body:has(.rpt-doc) .rpt-doc * { visibility: visible; }
+  body:has(.rpt-doc) .rpt-doc { position: absolute; left: 0; top: 0; }
+  .rpt-store { text-align: center; font-weight: 700; }
+  .rpt-title { text-align: center; font-weight: 700; margin: 2px 0; }
+  .rpt-meta { text-align: center; margin-bottom: 6px; }
+  .rpt-h { font-weight: 700; margin: 8px 0 3px; }
+  .rpt-kv { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+  .rpt-kv.b { font-weight: 700; }
+  .rpt-kv > span:last-child { text-align: right; white-space: nowrap; }
+  .rpt-table { width: 100%; border-collapse: collapse; }
+  .rpt-table th { text-align: left; font-weight: 700; }
+  .rpt-table .r { text-align: right; white-space: nowrap; }
+  .rpt-table tfoot td { font-weight: 700; }
+  .rpt-note { margin-top: 3px; font-style: italic; }
+  .rpt-foot { margin-top: 12px; }
+  .rpt-sec { break-inside: avoid; }
+  /* A4 */
+  .print-area.rpt-doc.paper-a4 { width: 100%; font-size: 11.5pt; }
+  .paper-a4 .rpt-store { font-size: 14pt; }
+  .paper-a4 .rpt-title { font-size: 16pt; }
+  .paper-a4 .rpt-table th, .paper-a4 .rpt-table td { border: 1px solid #000; padding: 3px 6px; }
+  .paper-a4 .rpt-kv { border-bottom: 1px dotted #888; }
+  /* giấy nhiệt 80mm */
+  .print-area.rpt-doc.paper-80 { width: 72mm; font-size: 9.5pt; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .paper-80 .rpt-table { table-layout: fixed; }
+  .paper-80 .rpt-table th, .paper-80 .rpt-table td { padding: 1px 2px; border-bottom: 1px dashed #666; font-size: 8pt; overflow-wrap: anywhere; }
+  .paper-80 .rpt-table td.r, .paper-80 .rpt-table th.r { overflow-wrap: normal; }
+  .paper-80 .rpt-table th:first-child, .paper-80 .rpt-table td:first-child { width: 32%; }
+  .paper-80 .rpt-h { border-top: 1px dashed #000; padding-top: 4px; }
+}

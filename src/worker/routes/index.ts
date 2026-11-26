@@ -29,6 +29,7 @@ import { dashboardRoutes } from "./dashboard";
 import { sepayRoutes } from "./sepay";
 import { purchaseOrderRoutes } from "./purchase-orders";
 import { supplierPortalRoutes } from "./supplier-portal";
+import { shiftReportRoutes } from "./shift-report";
 
 /**
  * Đăng ký route các module. Mỗi file export một Hono<AppBindings> mount tại gốc /api/v1
@@ -62,4 +63,5 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", sepayRoutes);
   v1.route("/", purchaseOrderRoutes);
   v1.route("/", supplierPortalRoutes);
+  v1.route("/", shiftReportRoutes);
 }
