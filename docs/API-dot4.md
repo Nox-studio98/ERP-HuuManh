@@ -173,3 +173,33 @@ Migration `0012_leave_types_active.sql` thêm cột `leave_types.active`. `GET /
 - **C-21**: kế toán (`accountant`) không còn `hr.manage`; chỉ xem hồ sơ (kể cả `hr.sensitive`), chốt/điều chỉnh công (`timesheet.close`, quyền mới) và làm bảng lương (`payroll.write`). Tạo/sửa hồ sơ, lương, hợp đồng, phụ cấp, nghỉ việc, loại phép, ngày lễ, cấu hình cửa hàng: chủ (`hr.manage`).
 - **C-26**: nghỉ việc / khoá tài khoản còn kiểm thêm chứng từ nháp/chờ duyệt do người đó lập (`draftOrders`, `draftStockDocs`, `draftQuotes`, `draftPromotions`, `draftPurchaseReturns`, `draftSettlements`) → 409 `pending_requests`, đi tiếp với `force` (+ lý do với nghỉ việc).
 - **C-29**: tham số `retention.gps_months` (12), `retention.employee_pii_months` (24), `retention.audit_years` (10), `backup.retention_days` (90); xem docs/SECOPS.md mục 11.
+
+## Báo cáo bán hàng & hoa hồng
+
+Quy ước: **người bán của đơn = `COALESCE(orders.seller_id, orders.created_by)`** (migrations/0033). Số liệu cùng điều kiện với `/reports/pnl`: đơn `completed`, khoảng ngày theo giờ VN, đơn trả (`kind='return'`) trừ ra và tính về người bán / khách của **đơn gốc**.
+
+### Báo cáo bán hàng (`reports.view`)
+
+Query chung: `from`, `to` (YYYY-MM-DD, gồm cả hai đầu, tối đa 366 ngày, mặc định hôm nay), `channel` (`pos|online|b2b|fresco|social`), `groupId` (nhóm hàng). Sai tham số → 422. Giá vốn / lãi gộp (`cogs`, `grossProfit`) **chỉ có trong phản hồi** khi vai trò có `prices.view_cost`.
+
+| Route | Trả về |
+|---|---|
+| `GET /reports/sales/sellers` | `items[]`: `sellerId` (null = không rõ), `sellerName`, `saleCount`, `sales`, `returnCount`, `returns`, `revenue` (thuần), `avgOrder` (= sales / saleCount), [`cogs`, `grossProfit`]; `totals`; `basis`: `orders` (khớp `/reports/pnl` kể cả phí giao hàng) hoặc `lines` (khi lọc `groupId`: tính trên dòng hàng của nhóm, không gồm phí giao). |
+| `GET /reports/sales/products` | `items[]` (tối đa 500, theo doanh thu): `productId`, `sku`, `name`, `baseUnit`, `groupName`, `qtyMilli` (thuần), `revenue`, [`cogs`, `grossProfit`]; `unsold[]`: hàng đang bán không có đơn bán nào trong kỳ (kèm `onHandMilli`); `totals`. Bán chạy / chậm = sắp xếp phía client. Tổng `items.revenue` + phí giao hàng = `revenue` của `/reports/pnl`. |
+| `GET /reports/sales/customers` | `items[]` (top 500 theo doanh thu thuần): `customerId`, `code`, `name`, `type`, `phone` (che theo `customers.view_pii`), `orders`, `sales`, `returns`, `revenue`, `avgOrder`, `lastAt`; `walkIn`: khách lẻ không lưu thông tin; `totals`. |
+| `GET /reports/sales/suppliers` | Cần thêm `prices.view_cost` (thiếu → 403). Theo phiếu nhập `posted` và phiếu trả NCC `posted` trong kỳ (`posted_at`): `items[]`: `supplierId`, `code`, `name`, `receiptCount`, `purchased`, `returnCount`, `returned`, `netPurchased`, `debt` (công nợ còn phải trả hiện tại, chỉ khi có `debt.view`); `totals`. Không đổi theo `channel` / `groupId`. |
+
+Xuất CSV thực hiện phía giao diện (nút "Xuất CSV" của bộ UI kit) trên chính số liệu các route trên.
+
+### Quy tắc hoa hồng (bảng `commission_rules`, migrations/0036)
+
+Quyền: **xem** `hr.sensitive`; **tạo / sửa / ngừng** `payroll.approve` (chính sách lương, chủ cửa hàng). Không có xoá (trigger chặn `DELETE`): muốn bỏ quy tắc thì ngừng (`active=false`).
+
+- `GET /commission/rules` → `items[]`: `id`, `name`, `scope` (`all|group|product`), `productGroupId/Name`, `productId/Name`, `employeeId/Name` (null = mọi người), `rateBp` (0–10000, 0 = loại khỏi hoa hồng), `active`, `effectiveFrom`, `effectiveTo` (YYYY-MM-DD giờ VN, null = không giới hạn), `version`.
+- `POST /commission/rules` `{ name, scope, productGroupId?, productId?, employeeId?, rateBp, effectiveFrom?, effectiveTo? }` → 201. `scope=group` bắt buộc `productGroupId`; `scope=product` bắt buộc `productId`; tham chiếu không tồn tại / ngày đảo → 422.
+- `PATCH /commission/rules/:id` `{ version, ...trường cần đổi, active? }` → 200; `version` cũ → **409 `version_conflict`**. Mỗi lần sửa `version + 1`, có audit (`commission.rule.create|update|deactivate`).
+- `GET /commission/preview?period=YYYY-MM` (`hr.sensitive`) → `{ period, rulesActive, legacySalesBonusBp, rules[], items[], total }`. `items[]`: `userId`, `userName`, `employeeId`, `employeeName`, `paid` (có hồ sơ nhân viên liên kết), `revenue`, `uncoveredRevenue` (phần không khớp quy tắc nào), `commission`, `parts[]` (`ruleId`, `name`, `rateBp`, `revenue`, `amount`). Dùng chung hàm với bảng lương nên khớp số khi tính lương.
+
+**Cách tính** (`services/commission.ts`): doanh thu thuần dòng hàng (`order_lines.line_total`, đã gồm giảm giá phân bổ) của đơn **POS** hoàn tất trong kỳ, theo người bán; trả hàng trừ lại theo mặt hàng cho người bán của đơn gốc vào kỳ hoàn tất phiếu trả. Mỗi dòng (người bán × mặt hàng × ngày) chọn **một** quy tắc cụ thể nhất: phạm vi sản phẩm > nhóm > tất cả, rồi quy tắc riêng nhân viên > chung, hoà thì quy tắc tạo sau (id lớn hơn); quy tắc phải đang bật và ngày đơn nằm trong hiệu lực. Hoa hồng một quy tắc = `round(Σ doanh thu × rateBp / 10000)`; tổng của người bán tối thiểu 0.
+
+**Tích hợp lương**: kỳ có ≥ 1 quy tắc đang bật giao với kỳ → `salesBonus` của phiếu lương = hoa hồng theo quy tắc (mỗi quy tắc một dòng "Hoa hồng: <tên>" trong `lines`, chịu thuế như thưởng doanh số), thay cho `hr.sales_bonus_bp`; dữ liệu quy tắc + doanh thu theo quy tắc được đưa vào `inputs_hash` nên đổi quy tắc / phát sinh đơn hoặc trả hàng sau khi tính → duyệt báo `409 payroll_stale`. Kỳ **không** có quy tắc nào: giữ nguyên cách tính cũ (`hr.sales_bonus_bp`) và `inputs_hash` không đổi.

@@ -14,6 +14,7 @@ import { getSettingInt } from "../services/settings";
 import { buildXlsx, XLSX_MIME } from "../services/xlsx";
 import { renderPayrollPdf, renderPayslipPdf } from "../services/report-pdf";
 import { periodValue, pick, type HistRow } from "../services/salary-history";
+import { loadCommissionInputs } from "../services/commission";
 import { calculatePayslip, loadPayrollSettings, type PayslipInput, type TimesheetDayInput } from "../services/payroll-calc";
 
 /** Lương (M9): tính, duyệt, chi, phiếu lương, tạm ứng, báo cáo chi phí. Công thức ở services/payroll-calc.ts. */
@@ -104,6 +105,8 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   for (const s of sales) salesBy.set(s.uid, (salesBy.get(s.uid) ?? 0) + s.t);
   for (const r of returns) salesBy.set(r.uid, (salesBy.get(r.uid) ?? 0) - r.t);
   const hrSettingRows = (await db.prepare(`SELECT key, value FROM settings WHERE key LIKE 'hr.%' ORDER BY key`).all<any>()).results;
+  // Hoa hồng theo quy tắc (services/commission.ts): null khi kỳ không có quy tắc nào → giữ thưởng doanh số cũ
+  const commission = await loadCommissionInputs(db, period, new Map(emps.filter((e) => e.user_id).map((e) => [e.user_id as number, e.id as number])));
   // Phạt/thưởng theo ca (bảng chấm công) chưa huỷ, theo work_date của kỳ
   const incidents = (
     await db
@@ -114,7 +117,7 @@ async function loadPayrollInputs(db: D1Database, period: string) {
       .bind(first, last)
       .all<any>()
   ).results;
-  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows, incidents };
+  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows, incidents, commission };
 }
 type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
 
@@ -122,6 +125,7 @@ type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
 async function inputsHash(inp: PayrollInputs): Promise<string> {
   const parts: unknown[] = [inp.emps, inp.days, inp.adjs, inp.allw, inp.hist, inp.entries, inp.advs, inp.hrSettingRows, inp.settings.salesBonusBp > 0 ? [...inp.salesBy.entries()] : null];
   if (inp.incidents.length) parts.push(inp.incidents); // chỉ thêm khi có → hash các kỳ cũ không đổi
+  if (inp.commission) parts.push({ commission: inp.commission.hashData }); // chỉ khi có quy tắc hoa hồng → kỳ không dùng quy tắc giữ nguyên hash
   const payload = JSON.stringify(parts);
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -182,6 +186,7 @@ async function calculatePeriod(c: Ctx, period: string) {
       ],
       advances: advs.filter((a) => a.employee_id === e.id).map((a) => ({ amount: a.amount, date: a.advance_date })),
       salesRevenue: e.user_id ? Math.max(0, salesBy.get(e.user_id) ?? 0) : 0,
+      commission: inp.commission ? { parts: (e.user_id && inp.commission.bySeller.get(e.user_id)?.parts) || [] } : undefined,
     };
     const p = calculatePayslip(input, settings);
     totalNet += p.net;
