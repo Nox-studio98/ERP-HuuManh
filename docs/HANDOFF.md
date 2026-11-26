@@ -1,5 +1,7 @@
 # Handoff — ERP Hữu Mạnh (cập nhật 24/11/2026)
 
+> **Bàn giao mới nhất (26/11/2026): xem `docs/BAN-GIAO.md`** — trạng thái PR/nhánh, việc tiếp theo theo ưu tiên, quyết định đã chốt, cách thiết lập lại khi chuyển tài khoản. Các PR đã gộp sau ngày 24/11: #16 giao diện PC 2B+2C, #17 sửa 34 lỗi audit, #18 phần còn lại + SePay, #19 PO tự động + cổng NCC, #20 chọn ngân hàng SePay. PR #21 (Bảng chấm công) đang chờ gộp.
+
 Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: **`docs/GO-LIVE.md` (kế hoạch go-live)**, **`docs/WIP-UX-PC.md` (việc đang dở: giao diện PC)**, `docs/UI-KIT.md`, `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
 
 ## 1. Tóm tắt nhanh
@@ -109,6 +111,11 @@ Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạ
 - Hoá đơn điện tử chỉ phát hành cho đơn sỉ (giá thoả thuận, không có KM/voucher) nên không có dòng chiết khấu; nếu sau này xuất HĐĐT cho đơn lẻ/online thì cần thêm dòng chiết khấu thương mại.
 - `loyalty.enabled` mặc định 0 — bật trong Cài đặt khi cửa hàng chốt quy tắc tích điểm.
 - Rủi ro còn lại có chủ đích (ghi trong báo cáo audit): kiểm hạn mức khi xác nhận đơn sỉ đồng thời trả 409 để thử lại (ưu tiên chặn); quỹ chờ đối soát chỉ rút phần tiền đã ghi vào quỹ đó.
+
+### 3.3b Bán hàng tại quầy theo đối chiếu KiotViet — TẠM DỪNG (26/11/2026)
+Kế hoạch đã chốt, chưa code: **`docs/POS-KV.md`**.
+- Đợt A: nhiều hoá đơn cùng lúc (tab), chọn hàng theo ảnh + nhóm hàng, máy quét mã vạch USB/Bluetooth **tuỳ chọn** (bật/tắt theo thiết bị, không phụ thuộc), người bán khác thu ngân, sao chép hoá đơn, lọc thêm + in lại + chia sẻ.
+- Đợt B: bán nợ tại quầy + QR thu nợ hoá đơn bán lẻ, sửa hoá đơn bằng chứng từ đảo, thu khác, bán giao hàng tại quầy, xuất file chi tiết, HĐĐT bán lẻ, import Excel, tem cân điện tử.
 
 ### 3.4 Điểm [Cần xác nhận] với chủ cửa hàng (ảnh hưởng cấu hình)
 Tất cả đã có trên màn **Cài đặt → Tham số** (lọc "chỉ mục cần xác nhận"); chủ cửa hàng lưu/xác nhận là nhãn biến mất.
