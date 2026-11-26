@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { api, seedBase, testEnv } from "./helpers";
+import { seedSales } from "./seed-sales";
 
 const db = () => testEnv.DB;
 const U = "/api/v1/retail-customers";
@@ -181,5 +182,71 @@ describe("khách sỉ không đổi", () => {
     expect(r.body.items.find((x: any) => x.id === 9704).type).toBe("b2b");
     expect(retail.results.length).toBeGreaterThan(0);
     expect((await api("owner", "POST", "/api/v1/customers", { name: "X", type: "retail", customerGroupId: 1, creditLimit: 0, paymentTermsDays: 0, contacts: [], addresses: [] })).status).toBe(422);
+  });
+});
+
+describe("gộp khách — hoàn / thu hồi điểm của đơn đã chuyển sang khách đích", () => {
+  const V = "/api/v1";
+  const pts = async (id: number) => (await db().prepare(`SELECT points p FROM customers WHERE id=?`).bind(id).first<{ p: number }>())!.p;
+  const ver = async (id: number) => (await db().prepare(`SELECT version v FROM customers WHERE id=?`).bind(id).first<{ v: number }>())!.v;
+  const merge = (src: number, dst: number) => (async () => api("owner", "POST", `${U}/${src}/merge`, { targetId: dst, version: await ver(src), targetVersion: await ver(dst), reason: "Cùng một người" }))();
+  let n = 0;
+  const uuid = () => `rcm-${Date.now()}-${++n}`;
+  const line = (qty: number) => ({ productId: 1, unit: "kg", qty });
+
+  beforeAll(async () => {
+    await seedSales();
+    await db().prepare(`UPDATE settings SET value='1' WHERE key='loyalty.enabled'`).run();
+    await db().batch([
+      db().prepare(`INSERT INTO customers(id, code, type, name, customer_group_id) VALUES (9801,'KL-R1','retail','Khách A',1),(9802,'KL-R2','retail','Khách B',1),(9803,'KL-R3','retail','Khách C',1),(9804,'KL-R4','retail','Khách D',1)`),
+      db().prepare(`UPDATE lots SET qty_in_milli=200000, qty_on_hand_milli=200000 WHERE id=1`),
+    ]);
+    await api("cashier", "POST", `${V}/shifts/open`, { openingCash: 0 });
+    expect((await api("manager", "POST", `${V}/customers/9801/loyalty/adjust`, { points: 500, note: "đặt số dư thử nghiệm" })).status).toBe(200);
+  });
+
+  it("POS: trả toàn phần đơn tích điểm + huỷ đơn có đổi điểm sau khi gộp → thu hồi/hoàn đúng cho khách đích, không âm", async () => {
+    const x = await api("cashier", "POST", `${V}/pos/orders`, { clientUuid: uuid(), customerId: 9801, lines: [line(4)], payments: [{ method: "cash", amount: 400000 }] });
+    expect(x.status, JSON.stringify(x.body)).toBe(201);
+    const y = await api("cashier", "POST", `${V}/pos/orders`, { clientUuid: uuid(), customerId: 9801, redeemPoints: 100, lines: [line(2)], payments: [{ method: "cash", amount: 190000 }] });
+    expect(y.status, JSON.stringify(y.body)).toBe(201);
+    expect(await pts(9801)).toBe(500 + 40 - 100 + 19);
+    const m = await merge(9801, 9802);
+    expect(m.status, JSON.stringify(m.body)).toBe(200);
+    expect(await pts(9801)).toBe(0);
+    expect(await pts(9802)).toBe(459);
+    // trả toàn phần đơn X → thu hồi 40 điểm tích của X từ khách đích
+    const rx = await api("cashier", "POST", `${V}/orders/${x.body.id}/return`, { lines: [{ orderLineId: x.body.lines[0].id, qty: 4, unit: "kg", restock: true, reason: "dư" }], refundMethod: "cash" });
+    expect(rx.status, JSON.stringify(rx.body)).toBe(201);
+    expect(await pts(9802)).toBe(419);
+    // huỷ đơn Y → thu hồi 19 điểm tích và hoàn 100 điểm đã đổi
+    const v = await api("manager", "POST", `${V}/orders/${y.body.id}/void`, { reason: "khách đổi ý" });
+    expect(v.status, JSON.stringify(v.body)).toBe(200);
+    expect(await pts(9802)).toBe(500);
+    expect(await pts(9801)).toBe(0);
+    const rows = (await db().prepare(`SELECT customer_id, order_id, kind, points FROM loyalty_ledger WHERE kind = 'reverse' AND order_id IN (?, ?)`).bind(x.body.id, y.body.id).all<any>()).results;
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    expect(rows.every((r: any) => r.customer_id === 9802)).toBe(true);
+    expect(rows.filter((r: any) => r.order_id === x.body.id).reduce((a: number, r: any) => a + r.points, 0)).toBe(-40);
+    expect(rows.filter((r: any) => r.order_id === y.body.id).reduce((a: number, r: any) => a + r.points, 0)).toBe(-19 + 100);
+  });
+
+  it("đơn online đã gộp: trigger huỷ đơn hoàn điểm đổi và thu hồi điểm tích cho khách đích", async () => {
+    await db().batch([
+      db().prepare(`INSERT INTO shop_accounts(id, customer_id, email, full_name, pass_hash, kind) VALUES (9810,9803,'c@example.com','C','x','retail')`),
+      db().prepare(`INSERT INTO orders(id, code, channel, kind, store_id, customer_id, shop_account_id, status, total) VALUES (98001,'RC-ON-1','online','sale',1,9803,9810,'completed',100000)`),
+      db().prepare(`INSERT INTO loyalty_ledger(customer_id, order_id, kind, points, note) VALUES (9803,98001,'earn',30,'tích'),(9803,98001,'redeem',-20,'đổi')`),
+      db().prepare(`UPDATE customers SET points = 50 WHERE id = 9803`),
+    ]);
+    expect((await merge(9803, 9804)).status).toBe(200);
+    expect(await pts(9804)).toBe(50);
+    await db().prepare(`UPDATE orders SET status = 'cancelled' WHERE id = 98001`).run();
+    expect(await pts(9804)).toBe(50 + 20 - 30);
+    const rows = (await db().prepare(`SELECT customer_id, points FROM loyalty_ledger WHERE order_id = 98001 AND kind = 'reverse'`).all<any>()).results;
+    expect(rows.every((r: any) => r.customer_id === 9804)).toBe(true);
+    expect(rows.map((r: any) => r.points).sort((a: number, b: number) => a - b)).toEqual([-30, 20]);
+    // idempotent: không thu hồi/hoàn lần hai
+    await db().prepare(`UPDATE orders SET status = 'returned' WHERE id = 98001`).run();
+    expect(await pts(9804)).toBe(40);
   });
 });
