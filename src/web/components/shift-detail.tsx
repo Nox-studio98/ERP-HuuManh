@@ -71,7 +71,7 @@ export function shiftSections(s: ShiftSummary): DocSection[] {
     { heading: "Tiền mặt", kv: [["Tiền đầu ca", money(f.opening)], ["+ Thu tiền mặt bán hàng", money(f.cashSold)], ["− Hoàn tiền mặt trả hàng", money(f.cashRefunded)], ["± Cọc đặt trước", money(f.deposits)], ["− Hoàn tiền huỷ đơn", money(f.voidRefunds)],
       ["Dự kiến trong két", money(sh.expectedCash), true], ...(closed ? ([["Tiền bàn giao (kiểm đếm)", money(sh.countedCash), true], ["Chênh lệch", money(sh.diffCash ?? 0), true]] as [string, string, boolean?][]) : [])],
       note: closed && sh.diffCash ? `Lý do chênh lệch: ${sh.diffReason || "—"}` : undefined },
-    { heading: "Bán hàng", kv: [["Số đơn bán", s.sales.saleCount], ["Doanh thu bán", money(s.sales.saleTotal)], [`Trả hàng (${s.sales.returnCount} phiếu)`, `-${money(s.sales.returnTotal)}`], ["Doanh thu thuần", money(s.sales.revenue), true]] },
+    { heading: "Bán hàng", kv: [["Số đơn bán", s.sales.saleCount], ["Doanh thu bán", money(s.sales.saleTotal)], [`Trả hàng (${s.sales.returnCount} phiếu)`, s.sales.returnTotal ? `-${money(s.sales.returnTotal)}` : money(0)], ["Doanh thu thuần", money(s.sales.revenue), true]] },
     { heading: "Theo hình thức thanh toán", table: { head: ["Hình thức", "Bán", "Hoàn", "Ròng"], right: [1, 2, 3], rows: s.byPayment.map((p: any) => [PAY_LABEL[p.method] ?? p.method, money(p.sold), money(p.refunded), money(p.net)]), foot: ["Thu tiền", money(t.sold), money(t.refunded), money(t.net)] },
       note: "Điểm và voucher là giảm trừ, không phải tiền thu." },
     { heading: "Theo kênh", table: { head: ["Kênh", "Đơn", "Doanh thu"], right: [1, 2], rows: (s.byChannel ?? []).map((c: any) => [CHANNELS[c.channel] ?? c.channel, c.orders, money(c.revenue)]) } },
@@ -82,5 +82,5 @@ export function shiftSections(s: ShiftSummary): DocSection[] {
 
 export function ShiftHandoverDoc({ s, paper }: { s: ShiftSummary; paper: Paper }) {
   return <PrintDoc paper={paper} title="PHIẾU BÀN GIAO CA" meta={`Ca #${s.shift.id} · in lúc ${fmtDateTime(new Date().toISOString())}`} sections={shiftSections(s)}
-    footer={<div className="rpt-kv"><span>Người giao: ................</span><span>Người nhận: ................</span></div>} />;
+    footer={<div className="rpt-sign"><div><b>Người giao</b><span>(ký, ghi rõ họ tên)</span></div><div><b>Người nhận</b><span>(ký, ghi rõ họ tên)</span></div></div>} />;
 }

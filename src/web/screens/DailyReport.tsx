@@ -33,7 +33,7 @@ export default function DailyReport() {
   ];
 
   const sections: DocSection[] = !d ? [] : [
-    { heading: "Tổng quan", kv: [["Số đơn bán", d.saleCount], ["Doanh thu bán", money(d.saleTotal)], [`Trả hàng (${d.returnCount} phiếu)`, `-${money(d.returnTotal)}`], ["Doanh thu thuần", money(d.revenue), true],
+    { heading: "Tổng quan", kv: [["Số đơn bán", d.saleCount], ["Doanh thu bán", money(d.saleTotal)], [`Trả hàng (${d.returnCount} phiếu)`, d.returnTotal ? `-${money(d.returnTotal)}` : money(0)], ["Doanh thu thuần", money(d.revenue), true],
       ...(showCost ? ([["Giá vốn", money(d.cogs)], ["Lãi gộp", money(d.grossProfit), true]] as [string, string, boolean?][]) : [])] },
     { heading: "Theo kênh bán", table: { head: ["Kênh", "Đơn", "Doanh thu"], right: [1, 2], rows: (d.byChannel ?? []).map((c: any) => [CHANNELS[c.channel] ?? c.channel, c.orders, money(c.revenue)]) } },
     { heading: "Theo hình thức thanh toán", table: { head: ["Hình thức", "Bán", "Hoàn", "Ròng"], right: [1, 2, 3], rows: pay.map((p) => [PAY_LABEL[p.method] ?? p.method, money(p.sold), money(p.refunded), money(p.net)]), foot: ["Thu tiền (không gồm điểm/voucher)", money(totals.sold), money(totals.refunded), money(totals.net)] },
