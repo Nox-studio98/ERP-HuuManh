@@ -84,7 +84,7 @@ export async function cancelledOrders(db: D1Database, from: string, to: string) 
 
 type ShiftRow = { id: number; user_id: number; fund_id: number; opened_at: string; opening_cash: number; closed_at: string | null; expected_cash: number | null; counted_cash: number | null; diff_cash: number | null; diff_reason: string | null; status: string };
 
-/** Các thành phần của công thức tiền mặt dự kiến — CÙNG công thức với `expectedCash` trong routes/pos.ts (không đổi). */
+/** Công thức tiền mặt dự kiến của ca (nguồn duy nhất — routes/pos.ts dùng khi chốt ca). */
 export async function cashFormula(db: D1Database, s: ShiftRow) {
   const sales = await db
     .prepare(

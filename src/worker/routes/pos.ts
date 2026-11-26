@@ -18,6 +18,7 @@ import { assertPeriodOpen } from "../services/period";
 import { retireStaleDraft } from "../services/online-ops";
 import { sepayConfig } from "../services/sepay";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
+import { cashFormula } from "../services/shift-report";
 
 export const posRoutes = new Hono<AppBindings>();
 
@@ -130,32 +131,9 @@ posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
   return c.json({ shift }, 201);
 });
 
-async function expectedCash(db: D1Database, shift: { id: number; opening_cash: number; fund_id?: number; user_id?: number; opened_at?: string; closed_at?: string | null }) {
-  const r = await db
-    .prepare(
-      `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
-        WHERE o.shift_id = ? AND o.status = 'completed' AND p.method = 'cash' AND p.status = 'confirmed'`,
-    )
-    .bind(shift.id)
-    .first<{ s: number }>();
-  // Đặt cọc đơn đặt trước (M1-12): phiếu thu/chi tiền mặt trên quỹ của ca, do người mở ca lập từ lúc mở ca
-  const dep = await db
-    .prepare(
-      `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS s FROM cash_vouchers
-        WHERE status='posted' AND ref_type='order_deposit' AND fund_id = ? AND created_by = ? AND created_at >= ?
-          AND (? IS NULL OR created_at <= ?)`,
-    )
-    .bind((shift as any).fund_id, (shift as any).user_id, (shift as any).opened_at, (shift as any).closed_at ?? null, (shift as any).closed_at ?? null)
-    .first<{ s: number }>();
-  // A-06: tiền mặt hoàn khi huỷ đơn của CA ĐÃ CHỐT được lấy từ két ca này → trừ khỏi dự kiến (số liệu ca cũ giữ nguyên)
-  const voidRef = await db
-    .prepare(
-      `SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id
-        WHERE o.refund_shift_id = ? AND p.method = 'cash' AND p.status = 'refunded'`,
-    )
-    .bind(shift.id)
-    .first<{ s: number }>();
-  return shift.opening_cash + (r?.s ?? 0) + (dep?.s ?? 0) - (voidRef?.s ?? 0);
+/** Tiền mặt dự kiến của ca — một công thức duy nhất ở services/shift-report.ts (dùng chung với phiếu bàn giao ca). */
+async function expectedCash(db: D1Database, shift: any) {
+  return (await cashFormula(db, shift)).expected;
 }
 
 posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
