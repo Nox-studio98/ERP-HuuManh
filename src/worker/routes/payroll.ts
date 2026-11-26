@@ -85,8 +85,8 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const sales = (
     await db
       .prepare(
-        `SELECT created_by AS uid, SUM(total) AS t FROM orders WHERE kind='sale' AND status='completed' AND channel='pos' AND created_by IS NOT NULL
-            AND completed_at >= ? AND completed_at < ? GROUP BY created_by`,
+        `SELECT COALESCE(seller_id, created_by) AS uid, SUM(total) AS t FROM orders WHERE kind='sale' AND status='completed' AND channel='pos' AND COALESCE(seller_id, created_by) IS NOT NULL
+            AND completed_at >= ? AND completed_at < ? GROUP BY COALESCE(seller_id, created_by)`,
       )
       .bind(fromIso, toIso)
       .all<any>()
@@ -94,8 +94,8 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const returns = (
     await db
       .prepare(
-        `SELECT so.created_by AS uid, SUM(ABS(r.total)) AS t FROM orders r JOIN orders so ON so.id = r.original_order_id
-          WHERE r.kind='return' AND r.status='completed' AND so.created_by IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY so.created_by`,
+        `SELECT COALESCE(so.seller_id, so.created_by) AS uid, SUM(ABS(r.total)) AS t FROM orders r JOIN orders so ON so.id = r.original_order_id
+          WHERE r.kind='return' AND r.status='completed' AND COALESCE(so.seller_id, so.created_by) IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY COALESCE(so.seller_id, so.created_by)`,
       )
       .bind(fromIso, toIso)
       .all<any>()

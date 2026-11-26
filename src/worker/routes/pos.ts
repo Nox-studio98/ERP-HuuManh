@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { AppBindings } from "../env";
-import { requirePerm, can, maskPhone } from "../lib/rbac";
+import { requirePerm, can, maskPhone, ROLE_PERMS } from "../lib/rbac";
 import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
@@ -213,6 +213,7 @@ const checkoutSchema = z.object({
   discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm cả đơn
   payments: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().max(100).optional(), qrRequestId: z.number().int().positive().optional() })).max(10),
   note: z.string().max(500).optional(),
+  sellerId: z.number().int().positive().optional(), // người bán khác thu ngân (A4)
   approvalId: z.number().int().positive().optional(),
   voucherCode: z.string().trim().min(1).max(40).optional(), // Đợt 4: voucher khuyến mãi
   redeemPoints: z.number().int().positive().max(1_000_000_000).optional(), // Đợt 4: đổi điểm tích luỹ
@@ -224,17 +225,40 @@ const checkoutSchema = z.object({
   overrideReason: z.string().trim().min(3).max(300).optional(),
 });
 
+/** Người có thể là "người bán": tài khoản đang hoạt động có quyền pos.sell hoặc có hồ sơ nhân viên đang làm. */
+const SELLER_ROLES = (Object.keys(ROLE_PERMS) as (keyof typeof ROLE_PERMS)[]).filter((r) => ROLE_PERMS[r].has("pos.sell"));
+async function listSellers(db: D1Database) {
+  const marks = SELLER_ROLES.map(() => "?").join(",");
+  return (
+    await db
+      .prepare(
+        `SELECT u.id, u.full_name AS name FROM users u
+          WHERE u.active = 1 AND (u.role IN (${marks}) OR EXISTS (SELECT 1 FROM employees e WHERE e.user_id = u.id AND e.status = 'active'))
+          ORDER BY u.full_name, u.id`,
+      )
+      .bind(...SELLER_ROLES)
+      .all<{ id: number; name: string }>()
+  ).results;
+}
+async function assertSeller(db: D1Database, sellerId: number) {
+  if (!(await listSellers(db)).some((s) => s.id === sellerId)) throw new AppError(422, "invalid_seller", "Người bán không hợp lệ");
+}
+
+/** Số lần sửa thông tin (người bán/ghi chú) của đơn — dùng làm `version` chống sửa đồng thời, không cần cột riêng. */
+const metaVersionSql = `(SELECT COUNT(*) FROM audit_log WHERE action = 'order.meta' AND entity = 'order' AND entity_id = ?)`  /* bind chuỗi: D1 có thể bind số nguyên thành REAL */;
+
 async function getOrderFull(c: Ctx, orderId: number) {
   const db = c.env.DB;
   const role = c.get("user").role;
   const o = await db
     .prepare(
-      `SELECT o.*, cu.name AS customer_name, cu.phone AS customer_phone, u.full_name AS cashier_name
-         FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id LEFT JOIN users u ON u.id = o.created_by WHERE o.id = ?`,
+      `SELECT o.*, cu.name AS customer_name, cu.phone AS customer_phone, u.full_name AS cashier_name, sl.full_name AS seller_name
+         FROM orders o LEFT JOIN customers cu ON cu.id = o.customer_id LEFT JOIN users u ON u.id = o.created_by LEFT JOIN users sl ON sl.id = o.seller_id WHERE o.id = ?`,
     )
     .bind(orderId)
     .first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  const metaVersion = (await db.prepare(`SELECT ${metaVersionSql} AS v`).bind(String(orderId)).first<{ v: number }>())?.v ?? 0;
   const lines = (
     await db
       .prepare(
@@ -267,6 +291,7 @@ async function getOrderFull(c: Ctx, orderId: number) {
       : null;
   return {
     ...rest,
+    metaVersion,
     exchange: exchange ? { role: o.exchange_of_order_id ? "new_sale" : "return", linkedId: exchange.id, linkedCode: exchange.code } : null,
     ...(canCost ? { cost_total } : {}),
     customer: o.customer_id ? { id: o.customer_id, name: o.customer_name, phone: maskPhone(customer_phone, role) } : null,
@@ -299,6 +324,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const shift = await openShiftOf(db, user.id);
   if (!shift) throw conflict("no_open_shift", "Chưa mở ca bán hàng");
   const storeId = shift.store_id as number;
+  if (body.sellerId && body.sellerId !== user.id) await assertSeller(db, body.sellerId);
+  const sellerId = body.sellerId && body.sellerId !== user.id ? body.sellerId : null;
 
   // A-09: đơn offline — dùng thời điểm bán gốc (trong giới hạn), kiểm kỳ khoá sổ; ca gốc đã chốt thì ghi vào ca đang mở và lưu vết
   let soldAt: string | null = null;
@@ -457,10 +484,10 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   try {
     const r = await db
       .prepare(
-        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, shift_id, customer_id, status, note, created_by)
-         VALUES (?,?,?,?,?,?,?,'draft',?,?)`,
+        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, shift_id, customer_id, status, note, created_by, seller_id)
+         VALUES (?,?,?,?,?,?,?,'draft',?,?,?)`,
       )
-      .bind(code, body.clientUuid, "pos", "sale", storeId, shift.id, body.customerId ?? null, body.note ?? null, user.id)
+      .bind(code, body.clientUuid, "pos", "sale", storeId, shift.id, body.customerId ?? null, body.note ?? null, user.id, sellerId)
       .run();
     orderId = r.meta.last_row_id as number;
   } catch (e) {
@@ -628,19 +655,24 @@ posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
   if (q.shiftId) { conds.push(`o.shift_id = ?`); params.push(Number(q.shiftId)); }
   if (q.kind) { conds.push(`o.kind = ?`); params.push(q.kind); }
   if (q.cashierId) { conds.push(`o.created_by = ?`); params.push(Number(q.cashierId)); }
+  if (q.sellerId) { conds.push(`COALESCE(o.seller_id, o.created_by) = ?`); params.push(Number(q.sellerId)); }
   if (q.method) { conds.push(`EXISTS (SELECT 1 FROM payments pm WHERE pm.order_id = o.id AND pm.method = ? AND pm.status = 'confirmed')`); params.push(q.method); }
   const term = q.q?.trim();
   if (term) {
     const like = `%${term.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
     // SĐT chỉ được tìm khi người dùng có quyền xem PII (tránh dò số điện thoại qua kết quả tìm kiếm)
-    const parts = [`o.code LIKE ? ESCAPE '\\'`, `cu.name LIKE ? ESCAPE '\\'`, `o.receiver_name LIKE ? ESCAPE '\\'`];
-    const ps: unknown[] = [like, like, like];
+    // Khớp thêm ghi chú và tên hàng trong đơn (A4/A6)
+    const parts = [
+      `o.code LIKE ? ESCAPE '\\'`, `cu.name LIKE ? ESCAPE '\\'`, `o.receiver_name LIKE ? ESCAPE '\\'`, `o.note LIKE ? ESCAPE '\\'`,
+      `EXISTS (SELECT 1 FROM order_lines ql JOIN products qp ON qp.id = ql.product_id WHERE ql.order_id = o.id AND (qp.name LIKE ? ESCAPE '\\' OR qp.sku LIKE ? ESCAPE '\\'))`,
+    ];
+    const ps: unknown[] = [like, like, like, like, like, like];
     if (pii) { parts.push(`cu.phone LIKE ? ESCAPE '\\'`, `o.receiver_phone LIKE ? ESCAPE '\\'`); ps.push(like, like); }
     conds.push(`(${parts.join(" OR ")})`);
     params.push(...ps);
   }
   const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
-  const join = `FROM orders o LEFT JOIN users u ON u.id = o.created_by LEFT JOIN customers cu ON cu.id = o.customer_id`;
+  const join = `FROM orders o LEFT JOIN users u ON u.id = o.created_by LEFT JOIN users sl ON sl.id = o.seller_id LEFT JOIN customers cu ON cu.id = o.customer_id`;
   const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
   const cursorCond = q.cursor ? `${where ? where + " AND" : "WHERE"} o.id < ?` : where;
   const rows = (
@@ -648,6 +680,7 @@ posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
       .prepare(
         `SELECT o.id, o.code, o.channel, o.kind, o.status, o.total, o.discount, o.paid_total, o.shift_id, o.customer_id, o.original_order_id, o.exchange_of_order_id, o.exchange_return_order_id,
                 o.created_at, o.completed_at, o.created_by AS cashier_id, u.full_name AS cashier_name,
+                COALESCE(o.seller_id, o.created_by) AS seller_id, COALESCE(sl.full_name, u.full_name) AS seller_name, o.note,
                 COALESCE(cu.name, o.receiver_name) AS customer_name, COALESCE(cu.phone, o.receiver_phone) AS customer_phone,
                 (SELECT GROUP_CONCAT(DISTINCT pm.method) FROM payments pm WHERE pm.order_id = o.id AND pm.status = 'confirmed') AS methods
            ${join} ${cursorCond} ORDER BY o.id DESC LIMIT ?`,
@@ -688,6 +721,61 @@ posRoutes.get("/orders/cashiers", requirePerm("orders.view"), async (c) => {
     .prepare(`SELECT u.id, u.full_name AS name FROM users u WHERE u.id IN (SELECT DISTINCT created_by FROM orders WHERE created_by IS NOT NULL) ORDER BY u.full_name`)
     .all<any>();
   return c.json({ items: results });
+});
+
+/** Danh sách người bán chọn được ở POS và màn Đơn hàng — chỉ id và tên. */
+posRoutes.get("/pos/sellers", requirePerm("pos.sell"), async (c) => c.json({ items: await listSellers(c.env.DB) }));
+
+// ===================== Sửa thông tin đơn (người bán, ghi chú) — A4 =====================
+
+const metaFields = {
+  sellerId: z.number().int().positive().nullable().optional(), // null = trả về người lập đơn
+  note: z.string().trim().max(500).nullable().optional(),
+};
+const metaPatchSchema = z.object({ ...metaFields, version: z.number().int().min(0).optional() }).refine((b) => b.sellerId !== undefined || b.note !== undefined, { message: "Cần sellerId hoặc note" });
+const metaBulkSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(100), ...metaFields }).refine((b) => b.sellerId !== undefined || b.note !== undefined, { message: "Cần sellerId hoặc note" });
+
+/** Câu lệnh sửa một đơn: kiểm tra còn là đơn bán, (tuỳ chọn) đúng version, cập nhật, ghi audit. Không đụng tiền/hàng. */
+function metaStatements(c: Ctx, o: any, patch: { sellerId?: number | null; note?: string | null }, version?: number) {
+  const db = c.env.DB;
+  const nextSeller = patch.sellerId === undefined ? o.seller_id : patch.sellerId === o.created_by ? null : patch.sellerId;
+  const nextNote = patch.note === undefined ? o.note : patch.note ? patch.note : null;
+  const stmts = [
+    assertStmt(db, "order.meta", `SELECT kind = 'sale' AND status <> 'draft' AND ${version === undefined ? "1" : `${metaVersionSql} = ?`} FROM orders WHERE id = ?`, version === undefined ? [o.id] : [String(o.id), version, o.id]),
+    db.prepare(`UPDATE orders SET seller_id = ?, note = ? WHERE id = ?`).bind(nextSeller, nextNote, o.id),
+    auditStmt(c, { action: "order.meta", entity: "order", entityId: o.id, before: { sellerId: o.seller_id, note: o.note }, after: { sellerId: nextSeller, note: nextNote } }),
+  ];
+  return stmts;
+}
+
+async function loadMetaOrder(db: D1Database, id: number) {
+  const o = await db.prepare(`SELECT id, code, kind, status, seller_id, created_by, note, created_at FROM orders WHERE id = ?`).bind(id).first<any>();
+  if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  if (o.kind !== "sale" || o.status === "draft") throw new AppError(422, "not_editable", `Chỉ sửa thông tin được với đơn bán (${o.code})`, { orderId: id });
+  await assertPeriodOpen(db, o.created_at, "thay đổi đơn hàng");
+  return o;
+}
+
+posRoutes.patch("/orders/:id/meta", requirePerm("orders.edit"), async (c) => {
+  const id = Number(c.req.param("id"));
+  const body = await parseBody(c, metaPatchSchema);
+  const db = c.env.DB;
+  if (!Number.isInteger(id) || id <= 0) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
+  const o = await loadMetaOrder(db, id);
+  if (body.sellerId) await assertSeller(db, body.sellerId);
+  await db.batch(metaStatements(c, o, body, body.version));
+  return c.json(await getOrderFull(c, id));
+});
+
+posRoutes.post("/orders/meta/bulk", requirePerm("orders.edit"), async (c) => {
+  const body = await parseBody(c, metaBulkSchema);
+  const db = c.env.DB;
+  const ids = [...new Set(body.ids)];
+  if (body.sellerId) await assertSeller(db, body.sellerId);
+  const orders = [];
+  for (const id of ids) orders.push(await loadMetaOrder(db, id));
+  await db.batch(orders.flatMap((o) => metaStatements(c, o, body)));
+  return c.json({ updated: ids.length, ids });
 });
 
 posRoutes.get("/orders/:id", requirePerm("orders.view"), async (c) => c.json(await getOrderFull(c, Number(c.req.param("id")))));
