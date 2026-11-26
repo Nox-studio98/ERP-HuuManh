@@ -201,8 +201,10 @@ financeExtraRoutes.get("/reports/budget-vs-actual", requirePerm("reports.view"),
   for (const r of costs) lineActual[r.line] = (lineActual[r.line] ?? 0) + r.amount;
   if (shrink) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + shrink;
   // Chênh lệch kiểm kê/điều chỉnh tồn tính vào dòng hao hụt như /reports/pnl (giảm = chi phí, tăng = giảm chi phí)
-  const { stockCount } = await pnlAdjustments(db, fromIso, toIso);
+  const { stockCount, internalUse } = await pnlAdjustments(db, fromIso, toIso);
   if (stockCount) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + stockCount;
+  // Xuất dùng nội bộ là chi phí vận hành (giá vốn lô) như trên /reports/pnl
+  if (internalUse) lineActual.opex = (lineActual.opex ?? 0) + internalUse;
   lineActual.stockCount = stockCount;
 
   const catAct = (

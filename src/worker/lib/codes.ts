@@ -35,6 +35,8 @@ export const PREFIX = {
   adjust: "DC",
   count: "KK",
   transfer: "CK",
+  internal_use: "XN",
+  fundTransfer: "CQ",
   cashIn: "PT",
   cashOut: "PC",
 } as const;

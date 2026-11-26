@@ -46,6 +46,7 @@ export async function shrinkage(db: D1Database, fromIso: string, toIso: string) 
  *  - payableIncome: chiết khấu / xoá nợ phải trả NCC → thu khác
  *  - forfeitedDeposits: cọc đặt trước không hoàn → thu khác
  *  - stockCount: chênh lệch kiểm kê/điều chỉnh tồn (move_type='adjust') theo giá vốn lô; giảm = chi phí (+), tăng = giảm chi phí (−). Hao hụt (waste) đã tính riêng.
+ *  - internalUse: xuất dùng nội bộ (move_type='internal_use') theo giá vốn lô → chi phí "Xuất dùng nội bộ"
  *  - voucherIncome: phiếu thu có dòng P&L other_income (vd chênh lệch đối soát thừa), trừ phiếu đảo
  *  - purchaseVariance: chênh lệch giá mua (B-09) của phần đã bán khi chốt hoá đơn tạm khác giá, tính vào ngày chốt
  *  - otherReceipts: phiếu thu các khoản mục còn lại có dòng P&L (vd THU_KHAC 'other'), trừ phiếu đảo (B-11); khoản mục transfer/revenue/cogs bị loại
@@ -68,6 +69,11 @@ export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: str
     .first<{ s: number }>();
   const stock = await db
     .prepare(`SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='adjust' AND at >= ? AND at < ?`)
+    .bind(fromIso, toIso)
+    .first<{ v: number }>();
+  // Xuất dùng nội bộ (move_type='internal_use'): chi phí theo giá vốn lô, dòng riêng trên lãi lỗ
+  const iu = await db
+    .prepare(`SELECT COALESCE(SUM(-${valueSql('qty_delta_milli','unit_cost')}),0) AS v FROM stock_moves WHERE move_type='internal_use' AND at >= ? AND at < ?`)
     .bind(fromIso, toIso)
     .first<{ v: number }>();
   // B-11: phiếu thu của khoản mục có dòng P&L (other_income, other...) là thu nhập; phiếu đảo (cùng khoản mục, ngược chiều) trừ lại đúng dòng của phiếu gốc
@@ -93,6 +99,7 @@ export async function pnlAdjustments(db: D1Database, fromIso: string, toIso: str
     payableIncome: pick("discount", "supplier") + pick("write_off", "supplier"),
     forfeitedDeposits: forfeited!.s,
     stockCount: Math.round(stock!.v),
+    internalUse: Math.round(iu!.v),
     voucherIncome: vi!.surplus,
     otherReceipts: vi!.other,
   };
@@ -161,6 +168,7 @@ export async function pnlByChannel(db: D1Database, from: string, to: string, fro
   const adj = await pnlAdjustments(db, fromIso, toIso);
   if (adj.badDebt) unallocated.push({ categoryId: null, category: "Xoá nợ khó đòi", amount: adj.badDebt, reason: "not_attributable" });
   if (adj.stockCount) unallocated.push({ categoryId: null, category: "Chênh lệch kiểm kê", amount: adj.stockCount, reason: "not_attributable" });
+  if (adj.internalUse) unallocated.push({ categoryId: null, category: "Xuất dùng nội bộ", amount: adj.internalUse, reason: "not_attributable" });
   if (adj.purchaseVariance) unallocated.push({ categoryId: null, category: "Chênh lệch giá mua", amount: adj.purchaseVariance, reason: "not_attributable" });
 
   const rows = [...channels.values()].map((c) => ({

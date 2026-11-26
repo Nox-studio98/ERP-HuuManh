@@ -1,33 +1,37 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { get, items, post } from "../api";
 import { Badge, Banner, Button, Card, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
 import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, rangeOf, usePagedList, type DateRange } from "../components/list";
 import { toast } from "../components/toast";
-import { fmtDateTime, fmtTime, money, todayVN } from "../format";
+import { fmtDateTime, fmtTime, money, todayVN, uuid } from "../format";
 import { useCan } from "../store";
 
-type Tab = "funds" | "vouchers" | "recon";
+type Tab = "funds" | "vouchers" | "transfers" | "recon";
+const CLEARING = ["cod_clearing", "marketplace_clearing", "card_clearing"];
 export default function Finance() {
   const can = useCan();
   const [tab, setTab] = useState<Tab>(can("finance.view") ? "funds" : "recon");
   const [fundId, setFundId] = useState("");
   const [add, setAdd] = useState<null | "in" | "out">(null);
+  const [xfer, setXfer] = useState(false);
   const [tick, setTick] = useState(0);
   const funds = useAsync(() => (can("finance.view") ? get("/funds").then((r) => items<any>(r)) : Promise.resolve([] as any[])), []);
   const cats = useAsync(() => (can("finance.view") ? get("/cash-categories").then((r) => items<any>(r)) : Promise.resolve([] as any[])), []);
   const opts = [
-    ...(can("finance.view") ? [{ v: "funds" as const, label: "Quỹ" }, { v: "vouchers" as const, label: "Phiếu thu chi" }] : []),
+    ...(can("finance.view") ? [{ v: "funds" as const, label: "Quỹ" }, { v: "vouchers" as const, label: "Phiếu thu chi" }, { v: "transfers" as const, label: "Chuyển tiền" }] : []),
     ...(can("finance.shift_reconcile") ? [{ v: "recon" as const, label: "Đối soát ca" }] : []),
   ];
   const openVouchers = (fid = "") => { setFundId(fid); setTab("vouchers"); };
   return (
     <div className="stack">
-      <PageHeader subtitle={tab === "funds" ? "Số dư các quỹ và phiếu thu chi gần đây" : tab === "vouchers" ? "Sổ phiếu thu / phiếu chi" : "Đối chiếu tiền mặt kiểm đếm với hệ thống theo từng ca"}
-        actions={can("finance.write") && tab !== "recon" ? <><Button size="sm" variant="soft" onClick={() => setAdd("in")}>+ Phiếu thu</Button><Button size="sm" onClick={() => setAdd("out")}>+ Phiếu chi</Button></> : undefined} />
+      <PageHeader subtitle={tab === "funds" ? "Số dư các quỹ và phiếu thu chi gần đây" : tab === "vouchers" ? "Sổ phiếu thu / phiếu chi" : tab === "transfers" ? "Chuyển tiền giữa các quỹ (tiền mặt ↔ ngân hàng) — không tính vào lãi lỗ" : "Đối chiếu tiền mặt kiểm đếm với hệ thống theo từng ca"}
+        actions={can("finance.write") && tab !== "recon" ? <><Button size="sm" variant="soft" onClick={() => setXfer(true)}>⇄ Chuyển quỹ</Button><Button size="sm" variant="soft" onClick={() => setAdd("in")}>+ Phiếu thu</Button><Button size="sm" onClick={() => setAdd("out")}>+ Phiếu chi</Button></> : undefined} />
       <Segmented fit value={tab} onChange={setTab} options={opts} />
-      {tab === "funds" && <Funds funds={funds.data ?? []} loading={funds.loading} reloadKey={tick} onOpen={openVouchers} onAdd={setAdd} />}
+      {tab === "funds" && <Funds funds={funds.data ?? []} loading={funds.loading} reloadKey={tick} onOpen={openVouchers} onAdd={setAdd} onXfer={() => setXfer(true)} />}
       {tab === "vouchers" && <Vouchers key={fundId} funds={funds.data ?? []} cats={cats.data ?? []} fundId={fundId} setFundId={setFundId} reloadKey={tick} onAdd={() => setAdd("out")} />}
+      {tab === "transfers" && <Transfers funds={funds.data ?? []} reloadKey={tick} onNew={() => setXfer(true)} onChanged={() => { funds.reload(); setTick((x) => x + 1); }} />}
       {tab === "recon" && <Recon />}
+      {xfer && <TransferForm funds={funds.data ?? []} onClose={() => setXfer(false)} onSaved={() => { setXfer(false); funds.reload(); setTick((x) => x + 1); setTab("transfers"); }} />}
       {add && <VoucherForm dir={add} funds={funds.data ?? []} cats={cats.data ?? []} onClose={() => setAdd(null)} onSaved={() => { setAdd(null); funds.reload(); setTick((x) => x + 1); }} />}
     </div>
   );
@@ -37,7 +41,7 @@ const vTone = (s: string) => (s === "posted" ? "ok" : s === "pending_approval" ?
 const vLabel = (s: string) => (s === "posted" ? "Đã ghi" : s === "pending_approval" ? "Chờ duyệt" : s === "cancelled" ? "Đã huỷ" : s);
 const sgn = (x: any) => (x.direction === "in" ? x.amount : -x.amount);
 
-function Funds({ funds, loading, reloadKey, onOpen, onAdd }: { funds: any[]; loading: boolean; reloadKey: number; onOpen: (fundId?: string) => void; onAdd: (d: "in" | "out") => void }) {
+function Funds({ funds, loading, reloadKey, onOpen, onAdd, onXfer }: { funds: any[]; loading: boolean; reloadKey: number; onOpen: (fundId?: string) => void; onAdd: (d: "in" | "out") => void; onXfer: () => void }) {
   const can = useCan();
   const monthFrom = rangeOf("month").from, today = todayVN();
   const recent = useAsync(() => get("/vouchers", { from: monthFrom, to: today, limit: 10 }), [reloadKey]);
@@ -73,7 +77,7 @@ function Funds({ funds, loading, reloadKey, onOpen, onAdd }: { funds: any[]; loa
           ]} />
           {can("finance.write") && (
             <Card title="Thao tác nhanh">
-              <div className="quick-actions"><Button variant="soft" onClick={() => onAdd("in")}>+ Phiếu thu</Button><Button onClick={() => onAdd("out")}>+ Phiếu chi</Button><Button variant="ghost" onClick={() => onOpen()}>Sổ phiếu thu chi</Button></div>
+              <div className="quick-actions"><Button variant="soft" onClick={() => onXfer()}>⇄ Chuyển quỹ</Button><Button variant="soft" onClick={() => onAdd("in")}>+ Phiếu thu</Button><Button onClick={() => onAdd("out")}>+ Phiếu chi</Button><Button variant="ghost" onClick={() => onOpen()}>Sổ phiếu thu chi</Button></div>
             </Card>
           )}
         </div>
@@ -122,10 +126,88 @@ function Vouchers({ funds, cats, fundId, setFundId, reloadKey, onAdd }: { funds:
           { key: "f", label: "Quỹ", hideBelow: 1440, sort: (x) => x.fundName, render: (x) => x.fundName },
           { key: "s", label: "TT", render: (x) => <Badge tone={vTone(x.status)}>{vLabel(x.status)}</Badge> },
           { key: "a", label: "Số tiền", num: true, sort: sgn, render: (x) => <b className="money" style={{ color: x.direction === "in" ? "var(--accent)" : undefined }}>{x.direction === "in" ? "+" : "−"}{money(x.amount)}</b> },
-          { key: "r", label: "", render: (x) => (can("finance.write") && x.status === "posted" && !x.reversesId ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>Đảo phiếu</Button> : x.reversesId ? <Badge>Phiếu đảo</Badge> : x.status === "pending_approval" && x.refType !== "salary_advance" && (can("finance.approve") || can("finance.write")) ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>{can("finance.approve") ? "Từ chối" : "Huỷ phiếu"}</Button> : null) },
+          { key: "r", label: "", render: (x) => (x.refType === "fund_transfer" ? <Badge tone="info">Chuyển quỹ</Badge> : can("finance.write") && x.status === "posted" && !x.reversesId ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>Đảo phiếu</Button> : x.reversesId ? <Badge>Phiếu đảo</Badge> : x.status === "pending_approval" && x.refType !== "salary_advance" && (can("finance.approve") || can("finance.write")) ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>{can("finance.approve") ? "Từ chối" : "Huỷ phiếu"}</Button> : null) },
         ]} />}
       {rev && <ReverseSheet v={rev} onClose={() => setRev(null)} onDone={() => { setRev(null); list.reload(); }} />}
     </div>
+  );
+}
+
+function Transfers({ funds, reloadKey, onNew, onChanged }: { funds: any[]; reloadKey: number; onNew: () => void; onChanged: () => void }) {
+  const can = useCan();
+  const [range, setRange] = useState<DateRange>(() => rangeOf("month"));
+  const [fundId, setFundId] = useState("");
+  const [rev, setRev] = useState<any>(null);
+  const list = usePagedList<any>("/fund-transfers", { from: range.from, to: range.to, fundId, limit: 50 }, [range.from, range.to, fundId, reloadKey]);
+  const posted = list.rows.filter((x) => x.status === "posted");
+  return (
+    <div className="stack">
+      <FilterBar dirty={!!fundId} onReset={() => setFundId("")} activeCount={fundId ? 1 : 0} advanced={<FilterSelect label="Quỹ" value={fundId} onChange={setFundId} options={funds.map((x) => ({ v: String(x.id), label: x.name }))} />}>
+        <DateRangeFilter value={range} onChange={setRange} />
+      </FilterBar>
+      <KpiRow cols={3} items={[
+        { label: "Số lần chuyển", value: posted.length, sub: list.rows.length - posted.length ? `${list.rows.length - posted.length} đã đảo` : undefined },
+        { label: "Tổng tiền đã chuyển", value: money(posted.reduce((a, x) => a + x.amount, 0)) },
+        { label: "Ảnh hưởng lãi lỗ", value: money(0), sub: "Chỉ đổi quỹ, không phải thu / chi" },
+      ]} />
+      {list.loading ? <Spinner /> : (
+        <DataTable rows={list.rows} rowKey={(x) => x.id} hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
+          emptyState={<EmptyState title="Chưa có lần chuyển quỹ nào" hint="Dùng khi nộp tiền mặt vào ngân hàng hoặc rút ngân hàng về quỹ tiền mặt." action={can("finance.write") ? <Button onClick={onNew}>⇄ Chuyển quỹ</Button> : undefined} />}
+          cols={[
+            { key: "c", label: "Mã", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
+            { key: "t", label: "Thời gian", sort: (x) => x.createdAt, render: (x) => <span className="nw">{fmtDateTime(x.createdAt)}</span> },
+            { key: "r", label: "Từ quỹ → Đến quỹ", render: (x) => <span>{x.fromFundName} <span className="muted">→</span> {x.toFundName}</span> },
+            { key: "v", label: "Phiếu", hideBelow: 1280, render: (x) => <span className="small muted nw">{x.outVoucherCode} · {x.inVoucherCode}</span> },
+            { key: "n", label: "Ghi chú", hideBelow: 1440, render: (x) => x.note || "—" },
+            { key: "s", label: "TT", render: (x) => <Badge tone={x.status === "posted" ? "ok" : "danger"}>{x.status === "posted" ? "Đã ghi" : "Đã đảo"}</Badge> },
+            { key: "a", label: "Số tiền", num: true, sort: (x) => x.amount, render: (x) => <b className="money">{money(x.amount)}</b> },
+            { key: "x", label: "", render: (x) => (can("finance.write") && x.status === "posted" ? <Button size="sm" variant="ghost" onClick={() => setRev(x)}>Đảo</Button> : null) },
+          ]} />
+      )}
+      {rev && (
+        <Sheet open onClose={() => setRev(null)} title={`Đảo chuyển quỹ ${rev.code}`}>
+          <ReverseTransfer t={rev} onDone={() => { setRev(null); onChanged(); }} />
+        </Sheet>
+      )}
+    </div>
+  );
+}
+function ReverseTransfer({ t, onDone }: { t: any; onDone: () => void }) {
+  const [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  return (
+    <div className="stack">
+      <Banner>Đảo cả cặp phiếu: {money(t.amount)} quay lại <b>{t.fromFundName}</b> và rút khỏi <b>{t.toFundName}</b>. Phiếu cũ không bị sửa; hai phiếu đảo được ghi ở kỳ hiện tại.</Banner>
+      <TextArea label="Lý do đảo" value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Button block variant="danger" loading={busy} disabled={reason.trim().length < 3} onClick={async () => { setBusy(true); try { await post(`/fund-transfers/${t.id}/reverse`, { reason: reason.trim() }); toast("Đã đảo cả cặp phiếu", "ok"); onDone(); } catch {} finally { setBusy(false); } }}>Đảo chuyển quỹ {money(t.amount)}</Button>
+    </div>
+  );
+}
+
+/** Chuyển tiền giữa các quỹ: một thao tác tạo cặp phiếu chi + phiếu thu liên kết; client gửi khoá chống bấm đúp. */
+function TransferForm({ funds, onClose, onSaved }: { funds: any[]; onClose: () => void; onSaved: () => void }) {
+  const real = funds.filter((f) => f.active !== 0 && !CLEARING.includes(f.type));
+  const [from, setFrom] = useState(""), [to, setTo] = useState(""), [amount, setAmount] = useState(0), [note, setNote] = useState(""), [busy, setBusy] = useState(false);
+  const key = useRef(uuid());
+  const fromId = from || String(real[0]?.id ?? "");
+  const toId = to && to !== fromId ? to : String(real.find((f) => String(f.id) !== fromId)?.id ?? "");
+  const src = real.find((f) => String(f.id) === fromId), dst = real.find((f) => String(f.id) === toId);
+  const over = !!src && amount > src.balance;
+  return (
+    <Sheet open onClose={onClose} title="Chuyển tiền giữa các quỹ" footer={<Button block size="lg" loading={busy} disabled={!src || !dst || amount <= 0 || over || fromId === toId} onClick={async () => {
+      setBusy(true);
+      try { await post("/fund-transfers", { fromFundId: Number(fromId), toFundId: Number(toId), amount, idempotencyKey: key.current, ...(note.trim() ? { note: note.trim() } : {}) }); toast("Đã chuyển quỹ — tạo cặp phiếu chi / thu", "ok"); onSaved(); } catch {} finally { setBusy(false); }
+    }}>Chuyển {amount > 0 ? money(amount) : "quỹ"}</Button>}>
+      <div className="stack">
+        <Banner tone="info">Tạo một phiếu chi ở quỹ nguồn và một phiếu thu ở quỹ đích, liên kết với nhau. Không tính vào lãi lỗ.</Banner>
+        <Select label="Từ quỹ" value={fromId} onChange={(e) => setFrom(e.target.value)}>{real.map((f) => <option key={f.id} value={f.id}>{f.name} — {money(f.balance)}</option>)}</Select>
+        <Select label="Đến quỹ" value={toId} onChange={(e) => setTo(e.target.value)}>{real.filter((f) => String(f.id) !== fromId).map((f) => <option key={f.id} value={f.id}>{f.name} — {money(f.balance)}</option>)}</Select>
+        <MoneyInput label="Số tiền (₫)" value={amount} onChange={setAmount} />
+        {src && <div className="row between small"><span className="muted">Số dư {src.name}: <b className="money" style={{ color: over ? "var(--danger)" : undefined }}>{money(src.balance)}</b></span>{src.balance > 0 && <Button size="sm" variant="ghost" onClick={() => setAmount(src.balance)}>Chuyển hết</Button>}</div>}
+        {over && <Banner tone="danger">Quỹ nguồn không đủ số dư để chuyển.</Banner>}
+        {src && dst && amount > 0 && !over && <div className="card flat" style={{ padding: 12 }}><div className="small muted">Sau khi chuyển</div><div className="row between"><span>{src.name}</span><b className="money">{money(src.balance - amount)}</b></div><div className="row between"><span>{dst.name}</span><b className="money">{money(dst.balance + amount)}</b></div></div>}
+        <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} placeholder="vd: Nộp tiền mặt cuối ngày vào ngân hàng" />
+      </div>
+    </Sheet>
   );
 }
 

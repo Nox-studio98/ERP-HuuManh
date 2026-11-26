@@ -165,8 +165,9 @@ const builders: Record<string, Builder> = {
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='sale' THEN -m.qty_delta_milli END),0) AS sold,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='return' THEN m.qty_delta_milli END),0) AS returned,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli END),0) AS waste,
+           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='internal_use' THEN -m.qty_delta_milli END),0) AS iuse,
            COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS asm,
-           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adj,
+           COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','internal_use','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adj,
            COALESCE(SUM(m.qty_delta_milli),0) AS closing,
            COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS value
            FROM products p JOIN stock_moves m ON (m.product_id = p.id OR m.product_id IN (SELECT id FROM products WHERE merged_into = p.id)) AND m.at < ?2
@@ -177,9 +178,9 @@ const builders: Record<string, Builder> = {
     const q = (v: number) => v / 1000;
     return [{
       name: "Nhập xuất tồn",
-      columns: [{ header: "Mã hàng" }, { header: "Tên hàng", width: 30 }, { header: "ĐVT" }, { header: "Tồn đầu kỳ", type: "qty" }, { header: "Nhập", type: "qty" }, { header: "Bán", type: "qty" }, { header: "Khách trả lại", type: "qty" }, { header: "Hao hụt", type: "qty" }, { header: "Lắp/tháo giỏ quà", type: "qty" }, { header: "Điều chỉnh/kiểm kê/chuyển", type: "qty" }, { header: "Tồn cuối kỳ", type: "qty" }, { header: "Giá trị tồn cuối", type: "money" }],
-      rows: results.map((x) => [x.sku, x.name, x.base_unit, q(x.opening), q(x.qin), q(x.sold), q(x.returned), q(x.waste), q(x.asm), q(x.adj), q(x.closing), Math.round(x.value)]),
-      totalCols: [11],
+      columns: [{ header: "Mã hàng" }, { header: "Tên hàng", width: 30 }, { header: "ĐVT" }, { header: "Tồn đầu kỳ", type: "qty" }, { header: "Nhập", type: "qty" }, { header: "Bán", type: "qty" }, { header: "Khách trả lại", type: "qty" }, { header: "Hao hụt", type: "qty" }, { header: "Xuất dùng nội bộ", type: "qty" }, { header: "Lắp/tháo giỏ quà", type: "qty" }, { header: "Điều chỉnh/kiểm kê/chuyển", type: "qty" }, { header: "Tồn cuối kỳ", type: "qty" }, { header: "Giá trị tồn cuối", type: "money" }],
+      rows: results.map((x) => [x.sku, x.name, x.base_unit, q(x.opening), q(x.qin), q(x.sold), q(x.returned), q(x.waste), q(x.iuse), q(x.asm), q(x.adj), q(x.closing), Math.round(x.value)]),
+      totalCols: [12],
     }];
   },
 

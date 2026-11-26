@@ -764,3 +764,15 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .bd-info { display: grid; grid-template-columns: 96px 1fr; gap: var(--s-2) var(--s-3); align-items: baseline; }
 @media (max-width: 1023px) { .bd-hm { display: none; } .bd-actions .btn { padding: 0 var(--s-3); } .bd-bar { gap: 6px; } }
 @media (max-width: 1023px) { .bd-selbar { flex-wrap: nowrap; gap: var(--s-2); padding: 8px 12px; width: 100%; justify-content: space-between; } .bd-selbar .btn { white-space: nowrap; padding: 0 var(--s-3); } }
+
+/* Nhập Excel hàng loạt (screens/Import.tsx) */
+.imp-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .imp-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.imp-drop { border: 2px dashed var(--border); border-radius: var(--r-lg); padding: var(--s-5) var(--s-4); text-align: center; background: var(--surface-2); transition: border-color .15s, background .15s; }
+.imp-drop.drag { border-color: var(--accent); background: var(--accent-soft); }
+.imp-cols summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.imp-cols ul { list-style: none; margin: var(--s-2) 0; padding: 0; display: grid; gap: var(--s-2); }
+.imp-bar { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: space-between; }
+.imp-mode { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.imp-notes { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.imp-confirm { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); }
