@@ -16,6 +16,7 @@ const ShiftClose = lazy(() => import("./screens/ShiftClose"));
 const ShiftHistory = lazy(() => import("./screens/ShiftHistory"));
 const DailyReport = lazy(() => import("./screens/DailyReport"));
 const Orders = lazy(() => import("./screens/Orders"));
+const RetailCustomers = lazy(() => import("./screens/RetailCustomers"));
 const Inventory = lazy(() => import("./screens/Inventory"));
 const Products = lazy(() => import("./screens/Products"));
 const Prices = lazy(() => import("./screens/Prices"));
@@ -63,6 +64,7 @@ const NAV: Nav[] = [
   { path: "/dashboard", label: "Tổng quan", pri: 5, perms: ["reports.view"], icon: I("M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z"), el: <Dashboard /> },
   { path: "/pos", label: "Bán hàng", group: G.retail, pri: 1, perms: ["pos.sell"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z"), el: <Pos /> },
   { path: "/orders", label: "Đơn hàng", group: G.retail, pri: 3, perms: ["orders.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"), el: <Orders /> },
+  { path: "/retail-customers", label: "Khách lẻ", group: G.retail, perms: ["b2b.view"], icon: I("M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0"), el: <RetailCustomers /> },
   { path: "/inventory", label: "Kho", group: G.stock, pri: 4, perms: ["inventory.view"], icon: I("M3 8l9-5 9 5v10l-9 5-9-5zM3 8l9 5 9-5M12 13v10"), el: <Inventory /> },
   { path: "/products", label: "Hàng hoá", group: G.stock, perms: ["inventory.view"], icon: I("M12 7c-4 0-7 3-7 7s3 7 7 7 7-3 7-7-3-7-7-7zM12 7c0-2 1-4 4-4"), el: <Products /> },
   { path: "/prices", label: "Giá", group: G.stock, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM7.5 7.5h.01"), el: <Prices /> },

@@ -90,7 +90,7 @@ export async function reversalStatements(
   const stmts: D1PreparedStatement[] = [];
   const ord = { sql: "?", bind: order.id };
   if (order.customer_id) {
-    const led = (await db.prepare(`SELECT kind, points FROM loyalty_ledger WHERE order_id = ? AND customer_id = ?`).bind(order.id, order.customer_id).all<{ kind: string; points: number }>()).results;
+    const led = (await db.prepare(`SELECT kind, points FROM loyalty_ledger WHERE order_id = ?`).bind(order.id).all<{ kind: string; points: number }>()).results;
     const earned = led.filter((x) => x.kind === "earn").reduce((s, x) => s + x.points, 0);
     const earnReversed = -led.filter((x) => x.kind === "reverse" && x.points < 0).reduce((s, x) => s + x.points, 0);
     const redeemed = -led.filter((x) => x.kind === "redeem").reduce((s, x) => s + x.points, 0);
