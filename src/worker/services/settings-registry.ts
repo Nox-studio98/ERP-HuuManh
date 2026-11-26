@@ -5,12 +5,13 @@
  * `sensitive: true` / mẫu tên bí mật → giá trị luôn bị che, không bao giờ trả ra API hay ghi vào nhật ký.
  */
 import { VN_BANKS, bankOptionLabel } from "../lib/vn-banks";
+import { parseWorkdayTiers } from "./hr-common";
 
 export type SettingType = "vnd" | "bp" | "int" | "bool" | "enum" | "multi" | "intlist" | "text" | "pit";
 
 export const GROUPS = [
   "Ngưỡng duyệt", "Bán hàng & giá", "Công nợ", "Online/website", "Tích điểm & khuyến mãi",
-  "Thanh toán SePay", "Nhân sự & lương", "Thuế TNCN", "Giá đối thủ", "Hệ thống",
+  "Thanh toán SePay", "Nhân sự & lương", "Chấm công", "Thuế TNCN", "Giá đối thủ", "Hệ thống",
 ] as const;
 export type SettingGroup = (typeof GROUPS)[number];
 
@@ -26,7 +27,9 @@ export interface SettingDef {
   options?: { value: string; label: string }[]; // enum / multi
   maxLen?: number;
   sensitive?: boolean;
-  allowEmpty?: boolean; // intlist: cho phép để trống
+  allowEmpty?: boolean; // intlist / text: cho phép để trống
+  /** Gợi ý cho giao diện khi type = "text": time = giờ HH:MM, tiers = bảng bậc công "phút:công×10,...". */
+  format?: "time" | "tiers";
 }
 
 const o = (...p: [string, string][]) => p.map(([value, label]) => ({ value, label }));
@@ -128,6 +131,20 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: "hr.insurance_cap_vnd", group: "Nhân sự & lương", label: "Trần lương đóng bảo hiểm", help: "20 × lương cơ sở; cập nhật theo năm.", type: "vnd", min: 0, max: 1_000_000_000 },
   { key: "hr.sales_bonus_bp", group: "Nhân sự & lương", label: "Thưởng doanh số", help: "% doanh thu nhân viên bán. 0 = tắt.", type: "bp", min: 0, max: 10000 },
 
+  // ===== Chấm công (bảng chấm công dạng lưới, docs/API-attendance-board.md mục 3) =====
+  { key: "hr.attendance_mode", group: "Chấm công", label: "Cách chấm công", help: "Theo ca làm việc: xếp ca cho từng người. Theo khung giờ: mọi người dùng chung một khung giờ làm việc, không cần xếp ca.", type: "enum", options: o(["shift", "Theo ca làm việc"], ["window", "Theo khung giờ làm việc"]) },
+  { key: "hr.window_start", group: "Chấm công", label: "Khung giờ làm việc: bắt đầu", help: "Giờ Việt Nam, dạng HH:MM. Chỉ dùng khi chấm công theo khung giờ.", type: "text", format: "time", maxLen: 5 },
+  { key: "hr.window_end", group: "Chấm công", label: "Khung giờ làm việc: kết thúc", help: "Giờ Việt Nam, dạng HH:MM. Nhỏ hơn giờ bắt đầu = khung qua đêm.", type: "text", format: "time", maxLen: 5 },
+  { key: "hr.window_break_start", group: "Chấm công", label: "Nghỉ giữa giờ: bắt đầu", help: "HH:MM. Để trống = không có nghỉ giữa giờ. Giờ nghỉ bị trừ khỏi giờ làm và không tính đi muộn / về sớm.", type: "text", format: "time", maxLen: 5, allowEmpty: true },
+  { key: "hr.window_break_end", group: "Chấm công", label: "Nghỉ giữa giờ: kết thúc", help: "HH:MM. Để trống = không có nghỉ giữa giờ.", type: "text", format: "time", maxLen: 5, allowEmpty: true },
+  { key: "hr.early_grace_minutes", group: "Chấm công", label: "Ân hạn về sớm", help: "Về sớm không quá số phút này thì không tính là về sớm (giống ân hạn đi muộn).", type: "int", unit: "phút", min: 0, max: 120 },
+  { key: "hr.ot_auto", group: "Chấm công", label: "Tự tính làm thêm giờ từ giờ chấm", help: "Bật: giờ chấm trước/sau ca được tính là làm thêm, không cần đơn tăng ca (nếu có cả đơn đã duyệt, lấy số lớn hơn, không cộng dồn).", type: "bool" },
+  { key: "hr.ot_min_before_minutes", group: "Chấm công", label: "Làm thêm trước ca: tối thiểu", help: "Chỉ tính làm thêm trước giờ vào ca khi đến sớm từ số phút này trở lên (khi bật tự tính làm thêm).", type: "int", unit: "phút", min: 0, max: 600 },
+  { key: "hr.ot_min_after_minutes", group: "Chấm công", label: "Làm thêm sau ca: tối thiểu", help: "Chỉ tính làm thêm sau giờ hết ca khi ở lại từ số phút này trở lên (khi bật tự tính làm thêm).", type: "int", unit: "phút", min: 0, max: 600 },
+  { key: "hr.workday_tiers", group: "Chấm công", label: "Quy đổi giờ làm trong ngày ra số công", help: "Dạng phút:công×10 cách nhau dấu phẩy, ví dụ 240:5,480:10,600:15 = từ 4 giờ được 0,5 công, từ 8 giờ được 1 công, từ 10 giờ được 1,5 công; dưới mức đầu = 0. Để trống = tắt (giữ cách tính công hiện tại).", type: "text", format: "tiers", maxLen: 200, allowEmpty: true },
+  { key: "hr.auto_attendance", group: "Chấm công", label: "Tự chấm công theo lịch", help: "Bật: ca đã qua (từ hôm qua trở về trước) không có lần chấm nào và không nghỉ phép thì tính đủ giờ theo lịch ca.", type: "bool" },
+  { key: "hr.unscheduled_punch", group: "Chấm công", label: "Chấm công khi không có ca", help: "Không cho chấm / Cho chấm nhưng chờ quản lý duyệt / Ghi nhận ngay. Chỉ áp dụng khi chấm công theo ca.", type: "enum", options: o(["off", "Không cho chấm"], ["approve", "Cho chấm, chờ duyệt"], ["allow", "Ghi nhận ngay"]) },
+
   // ===== Thuế TNCN =====
   { key: "hr.pit_family_deduction", group: "Thuế TNCN", label: "Giảm trừ gia cảnh bản thân", help: "Mỗi tháng, theo quy định hiện hành.", type: "vnd", min: 0, max: 1_000_000_000 },
   { key: "hr.pit_dependent_deduction", group: "Thuế TNCN", label: "Giảm trừ mỗi người phụ thuộc", help: "Mỗi người, mỗi tháng.", type: "vnd", min: 0, max: 1_000_000_000 },
@@ -203,6 +220,16 @@ export function validateSetting(def: SettingDef, raw: unknown): { value: string 
       if (def.key === "payment.bank_account" && s && !/^[0-9A-Za-z]{4,30}$/.test(s)) return { error: "Số tài khoản chỉ gồm chữ số/chữ cái (4–30 ký tự)" };
       if (def.key === "shop.name" && !s) return { error: "Không được để trống" };
       if (def.key === "po.cutoff_time" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return { error: "Giờ chốt dạng HH:MM, ví dụ 03:00" };
+      if (def.format === "time") {
+        if (s === "" && def.allowEmpty) return { value: "" };
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return { error: "Giờ dạng HH:MM, ví dụ 08:00" + (def.allowEmpty ? " (hoặc để trống)" : "") };
+      }
+      if (def.format === "tiers") {
+        if (s === "") return { value: "" };
+        const t = parseWorkdayTiers(s);
+        if (!t) return { error: "Nhập các mức dạng phút:công×10 cách nhau dấu phẩy, phút tăng dần, công không giảm. Ví dụ 240:5,480:10,600:15" };
+        return { value: t.map(([m, u]) => `${m}:${u}`).join(",") };
+      }
       return { value: s };
     }
     case "pit": {

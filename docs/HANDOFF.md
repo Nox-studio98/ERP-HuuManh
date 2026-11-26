@@ -60,6 +60,11 @@ Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sun
 - **Phân quyền (High)**: kế toán từng tạo được tài khoản *chủ* và khoá được tài khoản chủ qua màn nhân sự; nhật ký & danh sách phiếu chi lộ lương cho quản lý; tự duyệt yêu cầu của chính mình; thu ngân dùng lại phiếu duyệt để bán giá 1đ; thu ngân thấy giá vốn — đã chặn.
 - **Bề mặt công khai**: thêm Workers Rate Limiting (`RL_AUTH`, `RATE_LIMITER`), đăng nhập không lộ tài khoản tồn tại/bị khoá, giới hạn đơn COD chưa xác nhận theo SĐT + tự huỷ sau 72h, chống spam email, chống chèn công thức Excel, crawler đọc có giới hạn byte & chặn URL nội bộ, webhook ký cả timestamp.
 
+### 2.6 Bảng chấm công dạng lưới (26/11/2026)
+- Màn **Bảng chấm công** (`/hr/attendance`, `screens/hr/Board.tsx`) thay cho "Lịch ca" và "Duyệt chấm công" trong menu (hai màn cũ vẫn mở được ở `/hr/schedule`, `/hr/approvals`). Lưới ca × ngày (tuần/tháng, theo ca/theo nhân viên), ô tô màu theo trạng thái, chấm công thủ công một ô hoặc hàng loạt, Huỷ ca / Đổi ca, phạt vi phạm và thưởng theo ca (cộng vào lương), xuất file.
+- Tham số mới nhóm **Chấm công**: chế độ theo ca / theo khung giờ, ân hạn về sớm, tự tính làm thêm theo ngưỡng, quy đổi giờ → công, tự chấm công theo lịch, chấm khi không có ca. Mặc định giữ nguyên cách tính cũ.
+- Hợp đồng và quy tắc: `docs/API-attendance-board.md`. Migration `0031_attendance_board.sql`. Test: `test/hr-board-*.test.ts`, E2E `e2e/hr-board.mjs`.
+
 ### Bảo mật đã có (chi tiết `docs/SECOPS.md`)
 CSP/HSTS cho cả API lẫn HTML, cookie `__Host-` + chống CSRF, rate limit/Turnstile cho website, webhook HMAC + chống phát lại, upload ảnh kiểm magic bytes, staging tách hẳn D1/R2/Queue khỏi production, CI có `npm audit` + gitleaks. Đã vá lỗ hổng zod (nâng lên 4.6.7).
 

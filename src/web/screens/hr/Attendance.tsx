@@ -9,7 +9,8 @@ import { Confirm, CORR_TYPE, KIND, PUNCH_METHOD, PUNCH_STATUS, REQ_STATUS, days1
 
 type Tab = "punches" | "corr" | "leave" | "ot" | "dev" | "alerts" | "log";
 
-export default function Attendance() {
+/** Màn Duyệt chấm công cũ; cũng được Bảng chấm công mở trong Sheet (`onChange` báo để tải lại số việc chờ). */
+export default function Attendance({ onChange }: { onChange?: () => void } = {}) {
   const [tab, setTab] = useState<Tab>("punches");
   const counts = useAsync(async () => {
     const q = (p: string, k: any = { status: "pending", limit: 100 }) => get(p, k, { silent: true }).then((r) => items<any>(r).length).catch(() => 0);
@@ -18,6 +19,7 @@ export default function Attendance() {
     return { punches, corr, leave, ot, dev, alerts };
   }, []);
   const c = counts.data;
+  const reload = () => { counts.reload(); onChange?.(); };
   const lab = (t: string, n?: number) => (n ? `${t} (${n})` : t);
   return (
     <div className="stack">
@@ -33,19 +35,19 @@ export default function Attendance() {
           { v: "punches", label: lab("Chấm công chờ duyệt", c?.punches) }, { v: "corr", label: lab("Bổ sung công", c?.corr) }, { v: "leave", label: lab("Nghỉ phép", c?.leave) },
           { v: "ot", label: lab("Tăng ca", c?.ot) }, { v: "dev", label: lab("Thiết bị", c?.dev) }, { v: "alerts", label: lab("Cảnh báo", c?.alerts) }, { v: "log", label: "Nhật ký" }]} />
       </div>
-      {tab === "punches" && <Punches onChange={counts.reload} />}
-      {tab === "corr" && <Corrections onChange={counts.reload} />}
-      {tab === "leave" && <Leaves onChange={counts.reload} />}
-      {tab === "ot" && <Overtime onChange={counts.reload} />}
-      {tab === "dev" && <Devices onChange={counts.reload} />}
-      {tab === "alerts" && <Alerts onChange={counts.reload} />}
+      {tab === "punches" && <Punches onChange={reload} />}
+      {tab === "corr" && <Corrections onChange={reload} />}
+      {tab === "leave" && <Leaves onChange={reload} />}
+      {tab === "ot" && <Overtime onChange={reload} />}
+      {tab === "dev" && <Devices onChange={reload} />}
+      {tab === "alerts" && <Alerts onChange={reload} />}
       {tab === "log" && <Log />}
     </div>
   );
 }
 
 /** Nút duyệt / từ chối (từ chối hỏi ghi chú) */
-function Decide({ onDecide, approveLabel = "Duyệt", disabled }: { onDecide: (d: "approved" | "rejected", note?: string) => Promise<any>; approveLabel?: string; disabled?: boolean }) {
+export function Decide({ onDecide, approveLabel = "Duyệt", disabled }: { onDecide: (d: "approved" | "rejected", note?: string) => Promise<any>; approveLabel?: string; disabled?: boolean }) {
   const [rej, setRej] = useState(false), [note, setNote] = useState(""), [busy, setBusy] = useState(false);
   const run = async (d: "approved" | "rejected", n?: string) => { setBusy(true); try { await onDecide(d, n); setRej(false); } catch { /* toast */ } finally { setBusy(false); } };
   return (

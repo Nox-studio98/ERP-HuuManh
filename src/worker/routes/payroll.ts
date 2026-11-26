@@ -104,13 +104,25 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   for (const s of sales) salesBy.set(s.uid, (salesBy.get(s.uid) ?? 0) + s.t);
   for (const r of returns) salesBy.set(r.uid, (salesBy.get(r.uid) ?? 0) - r.t);
   const hrSettingRows = (await db.prepare(`SELECT key, value FROM settings WHERE key LIKE 'hr.%' ORDER BY key`).all<any>()).results;
-  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows };
+  // Phạt/thưởng theo ca (bảng chấm công) chưa huỷ, theo work_date của kỳ
+  const incidents = (
+    await db
+      .prepare(
+        `SELECT i.id, i.employee_id, i.work_date, i.kind, i.times, i.amount_each, i.amount, t.name AS type_name FROM attendance_incidents i JOIN attendance_incident_types t ON t.id = i.type_id
+          WHERE i.voided_at IS NULL AND i.work_date >= ? AND i.work_date <= ? ORDER BY i.id`,
+      )
+      .bind(first, last)
+      .all<any>()
+  ).results;
+  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows, incidents };
 }
 type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
 
 /** SHA-256 của mọi đầu vào ảnh hưởng phiếu lương (hồ sơ NV, bảng công, điều chỉnh, phụ cấp, thưởng/phạt, tạm ứng, tham số hr.*, doanh số nếu có thưởng doanh số). */
 async function inputsHash(inp: PayrollInputs): Promise<string> {
-  const payload = JSON.stringify([inp.emps, inp.days, inp.adjs, inp.allw, inp.hist, inp.entries, inp.advs, inp.hrSettingRows, inp.settings.salesBonusBp > 0 ? [...inp.salesBy.entries()] : null]);
+  const parts: unknown[] = [inp.emps, inp.days, inp.adjs, inp.allw, inp.hist, inp.entries, inp.advs, inp.hrSettingRows, inp.settings.salesBonusBp > 0 ? [...inp.salesBy.entries()] : null];
+  if (inp.incidents.length) parts.push(inp.incidents); // chỉ thêm khi có → hash các kỳ cũ không đổi
+  const payload = JSON.stringify(parts);
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -128,7 +140,7 @@ async function calculatePeriod(c: Ctx, period: string) {
     pp = await getPeriodRow(db, period);
   }
   const inp = await loadPayrollInputs(db, period);
-  const { first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy } = inp;
+  const { first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, incidents } = inp;
   const hash = await inputsHash(inp);
 
   const stmts: D1PreparedStatement[] = [
@@ -142,7 +154,7 @@ async function calculatePeriod(c: Ctx, period: string) {
       .map((d) => ({
         workDate: d.work_date, workedMinutes: d.worked_minutes, overtimeMinutes: d.overtime_minutes, overtimeMultiplierBp: d.overtime_multiplier_bp,
         shiftsWorked: d.shifts_worked, leavePaidX10: d.leave_paid_x10, holiday: !!d.holiday,
-        holidayPaid: !!d.holiday && d.note === "holiday_paid_off", scheduledMinutes: d.scheduled_minutes,
+        holidayPaid: !!d.holiday && d.note === "holiday_paid_off", scheduledMinutes: d.scheduled_minutes, workUnitsX10: d.work_units_x10 ?? null,
       }));
     const adj = (k: string) => adjs.find((a) => a.employee_id === e.id && a.kind === k)?.m ?? 0;
     const input: PayslipInput = {
@@ -161,7 +173,13 @@ async function calculatePeriod(c: Ctx, period: string) {
       allowances: allw.filter((a) => a.employee_id === e.id)
         .map((a) => ({ name: a.name, amount: periodValue(pick(hist, e.id, "allowance", a.id), a.active ? a.amount : 0, period), taxable: !!a.taxable }))
         .filter((a) => a.amount > 0),
-      entries: entries.filter((x) => x.employee_id === e.id).map((x) => ({ kind: x.kind, amount: x.amount, taxable: !!x.taxable, reason: x.reason, sourcePeriod: x.source_period })),
+      entries: [
+        ...entries.filter((x) => x.employee_id === e.id).map((x) => ({ kind: x.kind, amount: x.amount, taxable: !!x.taxable, reason: x.reason, sourcePeriod: x.source_period })),
+        ...incidents.filter((i) => i.employee_id === e.id && i.amount > 0).map((i) => ({
+          kind: i.kind as "bonus" | "penalty", amount: i.amount as number, taxable: true,
+          reason: `${i.type_name} × ${i.times} = ${(i.amount as number).toLocaleString("en-US").replaceAll(",", ".")} (${i.work_date.slice(8, 10)}/${i.work_date.slice(5, 7)})`,
+        })),
+      ],
       advances: advs.filter((a) => a.employee_id === e.id).map((a) => ({ amount: a.amount, date: a.advance_date })),
       salesRevenue: e.user_id ? Math.max(0, salesBy.get(e.user_id) ?? 0) : 0,
     };
