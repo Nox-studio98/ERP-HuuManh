@@ -176,9 +176,16 @@ describe("Chuyển tiền giữa các quỹ", () => {
 
   it("tạo cặp phiếu chi/thu liên kết, đổi số dư hai quỹ, KHÔNG vào lãi lỗ, có audit", async () => {
     const p0 = await pnl();
+    const day = vnDate();
+    const d0 = (await api("owner", "GET", `${V}/reports/daily?day=${day}`)).body.cashFlow;
     const c0 = await fundBalance(1), b0 = await fundBalance(2);
     const r = await api("accountant", "POST", `${V}/fund-transfers`, { fromFundId: 1, toFundId: 2, amount: 1_000_000, note: "Nộp tiền mặt cuối ngày" });
     expect(r.status).toBe(201);
+    // Báo cáo cuối ngày: chuyển quỹ không làm tăng tổng thu/chi của cửa hàng, báo riêng ở `transfers`
+    const d1 = (await api("owner", "GET", `${V}/reports/daily?day=${day}`)).body.cashFlow;
+    expect(d1.in).toBe(d0.in);
+    expect(d1.out).toBe(d0.out);
+    expect(d1.transfers - (d0.transfers ?? 0)).toBe(1_000_000);
     expect(r.body).toMatchObject({ fromFundId: 1, toFundId: 2, amount: 1_000_000, status: "posted" });
     expect(r.body.code).toMatch(/^CQ-/);
     expect(await fundBalance(1)).toBe(c0 - 1_000_000);

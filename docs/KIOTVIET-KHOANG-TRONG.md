@@ -1,6 +1,6 @@
 # Đối chiếu KiotViet (bán lẻ) với mã nguồn ERP Hữu Mạnh — kiểm chứng 26/11/2026
 
-Phương pháp: đọc `docs/KIOTVIET-DOI-CHIEU.md`, `docs/POS-KV.md`, `docs/HANDOFF.md`; grep route trong `src/worker/routes/*`, bảng trong `migrations/`, màn trong `src/web/screens`, website `src/shop`. POS-KV đợt A (tab hoá đơn, lưới ảnh + nhóm hàng, máy quét, người bán, sao chép, in lại/lọc thêm) = **đang làm** (nhánh `claude/pos-fe`, `claude/pos-be`).
+Phương pháp: đọc `docs/KIOTVIET-DOI-CHIEU.md`, `docs/POS-KV.md`, `docs/HANDOFF.md`; grep route trong `src/worker/routes/*`, bảng trong `migrations/`, màn trong `src/web/screens`, website `src/shop`. POS-KV đợt A (tab hoá đơn, lưới ảnh + nhóm hàng, máy quét, người bán, sao chép, in lại/lọc thêm) = **đã làm (PR #23, E2E `e2e/pos-kv.mjs`)** (nhánh `claude/pos-fe`, `claude/pos-be`).
 
 Chú thích: ĐC = Đã có; MP = Một phần; CC = Chưa có.
 
@@ -135,18 +135,18 @@ Chú thích: ĐC = Đã có; MP = Một phần; CC = Chưa có.
 
 | # | Khoảng trống | Ảnh hưởng | Khối lượng | Phụ thuộc |
 |---|---|---|---|---|
-| 1 | Màn quản lý **khách lẻ** (danh sách, chi tiết, lịch sử mua/điểm, ngày sinh, gộp trùng, ngừng) | Cao | Vừa (cần migration thêm cột ngày sinh/ghi chú; route `customers.ts` đang ép b2b) | không |
-| 2 | **Báo cáo cuối ngày** (màn + in) + tổng kết ca theo hình thức thanh toán + lịch sử ca/phiếu bàn giao ca | Cao (dùng hằng ngày) | Nhỏ (API daily sẵn) -> vừa (lịch sử ca, in) | không |
-| 4 | **Báo cáo hàng hoá/khách/nhân viên/NCC**: bán chạy-chậm, lãi theo SKU, top khách, doanh số theo người bán, mua theo NCC | Cao (quyết định nhập hàng, hao hụt hàng tươi) | Vừa (SQL + màn; người bán phụ thuộc POS-KV A4 đang làm) | A4 cho báo cáo nhân viên |
+| 1 | ✅ **Đã làm (PR #23)** — màn Khách lẻ, gộp khách trùng (migration 0034, 0037). Màn quản lý **khách lẻ** (danh sách, chi tiết, lịch sử mua/điểm, ngày sinh, gộp trùng, ngừng) | Cao | Vừa (cần migration thêm cột ngày sinh/ghi chú; route `customers.ts` đang ép b2b) | không |
+| 2 | ✅ **Đã làm (PR #23)** — màn Báo cáo cuối ngày (in A4/80mm), Lịch sử ca, phiếu bàn giao. **Báo cáo cuối ngày** (màn + in) + tổng kết ca theo hình thức thanh toán + lịch sử ca/phiếu bàn giao ca | Cao (dùng hằng ngày) | Nhỏ (API daily sẵn) -> vừa (lịch sử ca, in) | không |
+| 4 | ✅ **Đã làm (PR #23)** — màn Báo cáo bán hàng (người bán, hàng hoá, khách, NCC). **Báo cáo hàng hoá/khách/nhân viên/NCC**: bán chạy-chậm, lãi theo SKU, top khách, doanh số theo người bán, mua theo NCC | Cao (quyết định nhập hàng, hao hụt hàng tươi) | Vừa (SQL + màn; người bán phụ thuộc POS-KV A4 đang làm) | A4 cho báo cáo nhân viên |
 | 5 | **Hoá đơn điện tử** cho bán lẻ/online (yêu cầu pháp lý hộ kinh doanh) | Cao (pháp lý, khi go-live) | Lớn (dòng chiết khấu, KM, gộp cuối ngày; MISA thật) | **Tài liệu API/tài khoản MISA (hoặc nhà cung cấp khác)**, xác nhận hình thức kinh doanh |
 | 6 | **Bán nợ lẻ + thu khác + giao hàng tại quầy + QR thu nợ lẻ** (POS-KV đợt B) | Trung bình-Cao (khách quen mua nợ) | Lớn (đụng công nợ/chứng từ) | SePay thật cho QR |
-| 7 | **Nhập Excel**: hàng hoá, khách, NCC, kết quả kiểm kho (hiện chỉ xuất); khi go-live cần nạp dữ liệu từ KiotViet/sổ cũ | Trung bình-Cao (lúc chuyển đổi) | Vừa (parser `xlsx.ts` mới có phần xuất) | không |
-| 8 | **Xuất dùng nội bộ** + chuyển quỹ nội bộ (tiền mặt -> ngân hàng) | Trung bình | Nhỏ-vừa mỗi mục (thêm loại phiếu + chi phí/P&L; cặp phiếu thu-chi liên kết, khoá kỳ) | không |
+| 7 | ✅ **Đã làm (PR #23)** — Nhập Excel/CSV hàng hoá, khách sỉ, NCC (chưa có: kết quả kiểm kho). **Nhập Excel**: hàng hoá, khách, NCC, kết quả kiểm kho (hiện chỉ xuất); khi go-live cần nạp dữ liệu từ KiotViet/sổ cũ | Trung bình-Cao (lúc chuyển đổi) | Vừa (parser `xlsx.ts` mới có phần xuất) | không |
+| 8 | ✅ **Đã làm (PR #23)** — Xuất dùng nội bộ, Chuyển tiền giữa các quỹ (migration 0035). **Xuất dùng nội bộ** + chuyển quỹ nội bộ (tiền mặt -> ngân hàng) | Trung bình | Nhỏ-vừa mỗi mục (thêm loại phiếu + chi phí/P&L; cặp phiếu thu-chi liên kết, khoá kỳ) | không |
 | 9 | Trả hàng nhanh không hoá đơn gốc (có duyệt) | Trung bình | Vừa | quy tắc giá trả |
 | 10 | Đánh giá đơn hàng (website), nhóm khách tự động + sinh nhật/hạng thành viên | Trung bình | Vừa | #1 |
 | 11 | Mẫu in tuỳ chỉnh (thông tin cửa hàng, logo, 58/80mm, A4, tem mã vạch hàng loạt/tem lô, tem cân) | Trung bình (tem lô tiện kho; tem cân cần biết loại cân) | Vừa | loại máy in/cân |
 | 12 | Tích hợp vận chuyển (GHN/GHTK/ViettelPost: tạo vận đơn, phí, COD) | Trung bình (nếu giao liên tỉnh; hiện giao nội thành theo khung giờ) | Lớn | hợp đồng + API key hãng |
-| 13 | Hoa hồng theo nhóm hàng/sản phẩm/người bán | Thấp-Trung bình | Vừa | POS-KV A4 (đang làm) |
+| 13 | ✅ **Đã làm (PR #23)** — Hoa hồng theo quy tắc (sản phẩm/nhóm/tất cả, theo nhân viên), vào bảng lương (migration 0036). Hoa hồng theo nhóm hàng/sản phẩm/người bán | Thấp-Trung bình | Vừa | POS-KV A4 (đang làm) |
 | 14 | Sàn TMĐT (Shopee/TikTok Shop/Lazada): đồng bộ đơn, tồn, giá | Thấp-Trung bình (chỉ nếu bán trên sàn; trái cây tươi ít) | Rất lớn | **Tài khoản bán hàng + duyệt API từng sàn** |
 | 15 | Nhiều chi nhánh thực sự (tồn/giá/ca/quyền theo chi nhánh) | Thấp (hiện 1 cửa hàng) | Lớn | quyết định mở thêm điểm bán |
 | 16 | Thuộc tính/biến thể, nhóm hàng phân cấp, nhóm NCC, sao chép phiếu, gộp phiếu kiểm | Thấp | Nhỏ mỗi mục | không |

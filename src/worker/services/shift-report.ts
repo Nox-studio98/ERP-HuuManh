@@ -50,24 +50,27 @@ export async function paymentBreakdown(db: D1Database, where: string, params: un
   return rows.filter((r) => ALWAYS.has(r.method) || r.sold || r.refunded);
 }
 
-/** Phiếu thu/chi đã ghi sổ trong khoảng [from, to) UTC, tính ròng: phiếu đảo trừ vào đúng chiều của phiếu gốc. */
+/** Phiếu thu/chi đã ghi sổ trong khoảng [from, to) UTC, tính ròng: phiếu đảo trừ vào đúng chiều của phiếu gốc. Tổng thu/chi không gồm chuyển quỹ nội bộ (`transfers`). */
 export async function cashFlow(db: D1Database, from: string, to: string) {
   const rows = (
     await db
       .prepare(
         `SELECT CASE WHEN v.reverses_id IS NULL THEN v.direction WHEN v.direction = 'in' THEN 'out' ELSE 'in' END AS direction,
                 COALESCE(cc.name, 'Khác') AS category,
+                CASE WHEN cc.pnl_line = 'transfer' THEN 1 ELSE 0 END AS transfer,
                 COUNT(*) AS count,
                 COALESCE(SUM(CASE WHEN v.reverses_id IS NULL THEN v.amount ELSE -v.amount END),0) AS amount
            FROM cash_vouchers v LEFT JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status = 'posted' AND v.created_at >= ? AND v.created_at < ?
-          GROUP BY 1, 2 ORDER BY 1, amount DESC`,
+          GROUP BY 1, 2, 3 ORDER BY 1, amount DESC`,
       )
       .bind(from, to)
-      .all<{ direction: "in" | "out"; category: string; count: number; amount: number }>()
+      .all<{ direction: "in" | "out"; category: string; transfer: number; count: number; amount: number }>()
   ).results;
-  const sum = (d: string) => rows.filter((r) => r.direction === d).reduce((s, r) => s + r.amount, 0);
-  return { in: sum("in"), out: sum("out"), byCategory: rows };
+  // Chuyển tiền giữa các quỹ (khoản mục dòng P&L 'transfer') không phải thu/chi của cửa hàng → không cộng vào tổng, báo riêng
+  const sum = (d: string) => rows.filter((r) => r.direction === d && !r.transfer).reduce((s, r) => s + r.amount, 0);
+  const transfers = rows.filter((r) => r.transfer && r.direction === "out").reduce((s, r) => s + r.amount, 0);
+  return { in: sum("in"), out: sum("out"), transfers, byCategory: rows.map((r) => ({ ...r, transfer: !!r.transfer })) };
 }
 
 /** Huỷ đơn trong khoảng [from, to) UTC (theo thời điểm huỷ trong nhật ký, không theo ngày tạo đơn). */

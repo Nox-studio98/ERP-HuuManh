@@ -11,11 +11,22 @@ Tài liệu này dành cho **người/tài khoản tiếp nhận** (kể cả m�
 | `main` | Gồm mọi thứ tới PR #22 (Bảng chấm công + tài liệu bàn giao), gộp ngày 26/11/2026 | `origin/main` |
 | **Bảng chấm công dạng lưới (kiểu KiotViet)** | ✅ **Đã gộp** (26/11/2026) | PR [#21](https://github.com/Nox-studio98/ERP-HuuManh/pull/21) |
 | Nhập nhanh đơn sỉ (Zalo + bảng nhiều chi nhánh + đọc ảnh) | ⏸ **Làm sau** — chỉ làm khi mọi phần khác đã sửa chuẩn; hiện có thiết kế + PoC, chưa code | nhánh `claude/zalo-order-design` (`docs/ZALO-ORDER.md`, `docs/concept-nhap-nhanh-don-si.html`, `tools/ocr-poc/`) — chưa có PR |
-| Bán hàng tại quầy theo KiotViet | ⏸ **Tạm dừng** theo yêu cầu, chỉ có kế hoạch | `docs/POS-KV.md` (nhánh này) |
+| **PR #23 (nhánh `claude/dazzling-ptolemy-f44jju`)** | 🟡 **CI xanh, chờ chủ dự án đồng ý gộp** | PR [#23](https://github.com/Nox-studio98/ERP-HuuManh/pull/23) — nội dung ở mục 1b |
+| Bán hàng tại quầy theo KiotViet — đợt A (A1–A6) | ✅ Xong trong PR #23 (E2E `e2e/pos-kv.mjs`); đợt B chưa làm | `docs/POS-KV.md` |
 | Tài liệu bàn giao (file này, hướng dẫn Bảng chấm công, script E2E) | ✅ **Đã gộp** (26/11/2026) | PR [#22](https://github.com/Nox-studio98/ERP-HuuManh/pull/22) |
-| Bản demo | Chưa có PO/NCC, SePay, ngân hàng, Bảng chấm công (PR #18–#22) — cần **tạo release** `demo-2026-11-26` | xem mục 6 |
+| Bản demo | Chưa có PR #18–#23 — sau khi gộp #23 cần **tạo release** `demo-YYYY-MM-DD` | xem mục 6 |
 
 Kiểm thử ở thời điểm gộp #21 (nhánh `claude/hr-board`): `tsc` sạch, **881 test vitest đạt**, E2E `hr`, `hr-swap`, `hr-board` (mới), `settings` đạt trên DB mới.
+
+### 1b. Nội dung PR #23 (26/11/2026)
+- **Sửa lỗi audit còn lại** (migration 0032): phép có lương cho NV lương giờ (theo giờ ca đã xếp; không có ca = 8 giờ) / lương ca (1 ca/ngày phép); ngân sách – thực tế gồm chênh lệch kiểm kê; xoá nợ/chiết khấu công nợ vào lãi lỗ theo ngày duyệt (`debt_adjustments.posted_at`).
+- **POS-KV đợt A** (migration 0033 `orders.seller_id`): tab nhiều hoá đơn, lưới ảnh + chip nhóm hàng, máy quét mã vạch tuỳ chọn, người bán khác thu ngân (quyền mới `orders.edit`), sửa người bán/ghi chú hàng loạt, sao chép đơn, in lại, chia sẻ.
+- **Báo cáo cuối ngày + lịch sử ca + phiếu bàn giao** (in A4/80mm); chốt ca hiện đủ hình thức thanh toán. Công thức tiền mặt dự kiến chỉ còn một chỗ: `services/shift-report.ts` (`cashFormula`).
+- **Khách lẻ** (migration 0034, 0037): danh sách, chi tiết, sửa, ngừng, gộp khách trùng; trigger hoàn/thu hồi điểm tra sổ theo đơn.
+- **Báo cáo bán hàng** (người bán, hàng hoá, khách, NCC) + **hoa hồng theo quy tắc** vào bảng lương (migration 0036; không có quy tắc → giữ thưởng doanh số % cũ).
+- **Nhập Excel/CSV** hàng hoá, khách sỉ, NCC; **xuất dùng nội bộ** (chi phí trong lãi lỗ, cột riêng trong nhập-xuất-tồn); **chuyển tiền giữa các quỹ** (không vào lãi lỗ, không tính vào thu/chi của báo cáo cuối ngày) (migration 0035).
+- Đối chiếu KiotViet trong mã: `docs/KIOTVIET-KHOANG-TRONG.md`.
+- Giả định đã chọn, cần chủ xác nhận: hoa hồng chỉ tính đơn tại quầy; chỉ chủ sửa quy tắc hoa hồng; màn khách lẻ dùng quyền xem khách sỉ (thủ kho thấy danh sách, SĐT bị che); chuyển quỹ không cho quỹ nguồn âm và không dùng quỹ chờ đối soát; nhập Excel tối đa 1000 dòng/lần.
 
 ---
 
@@ -110,7 +121,7 @@ npx tsc --noEmit && npx vitest run
 ---
 
 ## 6. Deploy bản demo
-GitHub → Releases → *Draft a new release* → tag mới `demo-YYYY-MM-DD` (vd `demo-2026-11-26`) từ `main` → Publish. Job `deploy-demo` tự áp migration, tải font, deploy ERP (`huumanh.noxelis.co`) và website (`huumanhfruit.noxelis.co`). Bản demo hiện **chưa** có các PR #18–#22.
+GitHub → Releases → *Draft a new release* → tag mới `demo-YYYY-MM-DD` (vd `demo-2026-11-26`) từ `main` → Publish. Job `deploy-demo` tự áp migration, tải font, deploy ERP (`huumanh.noxelis.co`) và website (`huumanhfruit.noxelis.co`). Bản demo hiện **chưa** có các PR #18–#23.
 
 ---
 

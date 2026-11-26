@@ -39,7 +39,7 @@ export default function DailyReport() {
     { heading: "Theo hình thức thanh toán", table: { head: ["Hình thức", "Bán", "Hoàn", "Ròng"], right: [1, 2, 3], rows: pay.map((p) => [PAY_LABEL[p.method] ?? p.method, money(p.sold), money(p.refunded), money(p.net)]), foot: ["Thu tiền (không gồm điểm/voucher)", money(totals.sold), money(totals.refunded), money(totals.net)] },
       note: "Điểm tích luỹ và voucher là phần giảm trừ, không phải tiền thu." },
     { heading: "Huỷ đơn", kv: [["Số đơn huỷ", d.cancelled?.count ?? 0], ["Giá trị huỷ", money(d.cancelled?.total ?? 0)]] },
-    { heading: "Thu / chi quỹ", kv: [["Tổng thu", money(cashIn)], ["Tổng chi", money(cashOut)], ...(d.cashFlow?.byCategory ?? []).map((c: any) => [`${c.direction === "in" ? "Thu" : "Chi"}: ${c.category}`, money(c.amount)] as [string, string])] },
+    { heading: "Thu / chi quỹ", kv: [["Tổng thu", money(cashIn)], ["Tổng chi", money(cashOut)], ...(d.cashFlow?.transfers ? [["Chuyển giữa các quỹ", money(d.cashFlow.transfers)] as [string, string]] : []), ...(d.cashFlow?.byCategory ?? []).map((c: any) => [`${c.direction === "in" ? "Thu" : "Chi"}: ${c.category}`, money(c.amount)] as [string, string])] },
     { heading: "Ca làm việc", table: { head: ["Ca", "Thu ngân", "Mở", "Chênh lệch"], right: [3], rows: shifts.map((s) => [`#${s.id}`, s.cashierName, fmtTime(s.openedAt), s.status === "closed" ? money(s.diffCash ?? 0) : "đang mở"]) } },
   ];
 
@@ -85,9 +85,10 @@ export default function DailyReport() {
                 <Card title="Thu / chi quỹ trong ngày">
                   <div className="kv-row"><span className="muted">Tổng thu</span><b className="money">{money(cashIn)}</b></div>
                   <div className="kv-row"><span className="muted">Tổng chi</span><b className="money">{money(cashOut)}</b></div>
+                  {d.cashFlow?.transfers ? <div className="kv-row"><span className="muted">Chuyển giữa các quỹ (không tính vào thu/chi)</span><b className="money">{money(d.cashFlow.transfers)}</b></div> : null}
                   {(d.cashFlow?.byCategory ?? []).length === 0 ? <div className="hint">Không có phiếu thu/chi.</div> : (
                     <DataTable rows={d.cashFlow.byCategory} rowKey={(c: any) => c.direction + c.category} cols={[
-                      { key: "c", label: "Khoản mục", title: true, render: (c: any) => <>{c.category} <Badge tone={c.direction === "in" ? "ok" : "warn"}>{c.direction === "in" ? "Thu" : "Chi"}</Badge></> },
+                      { key: "c", label: "Khoản mục", title: true, render: (c: any) => <>{c.category} <Badge tone={c.transfer ? "info" : c.direction === "in" ? "ok" : "warn"}>{c.transfer ? "Chuyển quỹ" : c.direction === "in" ? "Thu" : "Chi"}</Badge></> },
                       { key: "n", label: "Số phiếu", right: true, num: true, render: (c: any) => c.count },
                       { key: "a", label: "Số tiền", right: true, num: true, render: (c: any) => money(c.amount) },
                     ]} />

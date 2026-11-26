@@ -157,7 +157,7 @@ function Transfers({ funds, reloadKey, onNew, onChanged }: { funds: any[]; reloa
             { key: "c", label: "Mã", title: true, sort: (x) => x.code, render: (x) => <b className="nw">{x.code}</b> },
             { key: "t", label: "Thời gian", sort: (x) => x.createdAt, render: (x) => <span className="nw">{fmtDateTime(x.createdAt)}</span> },
             { key: "r", label: "Từ quỹ → Đến quỹ", render: (x) => <span>{x.fromFundName} <span className="muted">→</span> {x.toFundName}</span> },
-            { key: "v", label: "Phiếu", hideBelow: 1280, render: (x) => <span className="small muted nw">{x.outVoucherCode} · {x.inVoucherCode}</span> },
+            { key: "v", label: "Phiếu", hideBelow: 1280, render: (x) => <span className="small muted"><span className="nw">{x.outVoucherCode}</span> · <span className="nw">{x.inVoucherCode}</span></span> },
             { key: "n", label: "Ghi chú", hideBelow: 1440, render: (x) => x.note || "—" },
             { key: "s", label: "TT", render: (x) => <Badge tone={x.status === "posted" ? "ok" : "danger"}>{x.status === "posted" ? "Đã ghi" : "Đã đảo"}</Badge> },
             { key: "a", label: "Số tiền", num: true, sort: (x) => x.amount, render: (x) => <b className="money">{money(x.amount)}</b> },
