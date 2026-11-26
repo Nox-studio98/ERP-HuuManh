@@ -85,6 +85,8 @@ export interface PayslipInput {
   entries: { kind: "bonus" | "penalty" | "allowance" | "adjustment"; amount: number; taxable: boolean; reason: string; sourcePeriod?: string | null }[];
   advances: { amount: number; date?: string }[];
   salesRevenue: number; // doanh thu POS hoàn tất trừ trả hàng
+  /** Có (kể cả rỗng) khi kỳ có quy tắc hoa hồng (services/commission.ts): thưởng doanh số = Σ từng quy tắc, thay cho salesRevenue × salesBonusBp. */
+  commission?: { parts: { name: string; rateBp: number; revenue: number; amount: number }[] };
 }
 
 export interface PayslipLine {
@@ -287,8 +289,16 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       lines.push({ label: `Điều chỉnh${en.sourcePeriod ? ` kỳ ${en.sourcePeriod}` : ""}: ${en.reason}`, amount: en.amount, group: en.amount >= 0 ? "income" : "deduction" });
     }
   }
-  const salesBonus = s.salesBonusBp > 0 ? Math.round((input.salesRevenue * s.salesBonusBp) / 10000) : 0;
-  if (salesBonus !== 0) lines.push({ label: "Thưởng doanh số", amount: salesBonus, group: "income", note: `${fmt(input.salesRevenue)} × ${s.salesBonusBp / 100}%` });
+  let salesBonus = s.salesBonusBp > 0 ? Math.round((input.salesRevenue * s.salesBonusBp) / 10000) : 0;
+  if (input.commission) {
+    const parts = input.commission.parts.filter((p) => p.amount !== 0 || p.revenue !== 0);
+    const total = sum(parts.map((p) => p.amount));
+    salesBonus = Math.max(0, total);
+    for (const p of parts) {
+      lines.push({ label: `Hoa hồng: ${p.name}`, amount: total < 0 ? 0 : p.amount, group: "income", note: `${fmt(p.revenue)} × ${p.rateBp / 100}%${p.revenue < 0 ? " (trả hàng nhiều hơn bán)" : ""}` });
+    }
+    if (total < 0) lines.push({ label: "Hoa hồng âm (trả hàng nhiều hơn bán), tính 0", amount: 0, group: "info" });
+  } else if (salesBonus !== 0) lines.push({ label: "Thưởng doanh số", amount: salesBonus, group: "income", note: `${fmt(input.salesRevenue)} × ${s.salesBonusBp / 100}%` });
 
   const gross = basePay + allowances + overtimePay + bonus + salesBonus - penalties + adjustments;
   lines.push({ label: "Tổng thu nhập (gross)", amount: gross, group: "info" });
