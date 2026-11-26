@@ -1,5 +1,7 @@
 # Thiết kế: Nhập nhanh đơn sỉ từ tin nhắn Zalo và bảng Excel nhiều chi nhánh
 
+> **Trạng thái (26/11/2026): LÀM SAU** — chủ dự án yêu cầu sửa chuẩn mọi phần khác trước. Thiết kế và PoC giữ nguyên ở đây để làm tiếp.
+
 Trạng thái: **bản thiết kế chờ duyệt** (25/11/2026). Chưa có code. Giao diện concept tương tác: https://claude.ai/artifact/Wb176hDxDgJgP18X3XaLb2 (riêng tư, chủ dự án chia sẻ khi cần).
 
 ## 1. Bối cảnh
