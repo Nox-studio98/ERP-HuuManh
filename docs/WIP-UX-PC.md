@@ -73,6 +73,7 @@ Mục tiêu đợt này: mọi màn dùng tốt không gian trên PC, có bộ l
    curl -X POST localhost:8797/api/auth/bootstrap -H 'content-type: application/json' -H "x-bootstrap-token: $BOOTSTRAP_TOKEN" -d '{"username":"chu","password":"<mật khẩu dev>","fullName":"Chủ cửa hàng"}'
    BASE=http://localhost:8797 SHOTS=0 PERSIST=$S node e2e/smoke.mjs     # rồi b2b.mjs trên cùng DB
    ```
+   Bộ `pos-kv` (POS kiểu KiotViet, PC 1440 + ĐT 390; chạy trên DB mới, chuẩn bị dữ liệu qua API): `BASE=http://localhost:8871 PERSIST=.wrangler/e-poskv SHOTS=1 node e2e/pos-kv.mjs` (dựng DB + server bằng `bash scripts/e2e-db.sh .wrangler/e-poskv 8871`).
    Các bộ khác: `hr`, `hr-swap`, `gaps2`, `online` (BASE + PERSIST); `shop`, `shop-b2b`, `d4` (ERP=… SHOP=… PERSIST=…; d4 mặc định cổng 8792/8793); `settings` tự dựng DB + server cổng 8798. Tất cả 10 bộ phải đạt.
 5. Chụp ảnh mọi màn ở 1920×1080, 1440×900 và 390×844, rồi **xem từng ảnh**. Lỗi hay gặp: trang trống nửa màn, nút quá to, tiêu đề lệch, tràn ngang ở điện thoại.
 6. Mở PR vào `main` và chờ CI xanh. Deploy demo bằng cách tạo tag `demo-YYYY-MM-DD` trên GitHub (Releases → Draft a new release).
