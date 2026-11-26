@@ -42,6 +42,7 @@ const HrMe = lazy(() => import("./screens/hr/Me"));
 const HrEmployees = lazy(() => import("./screens/hr/Employees"));
 const HrSchedule = lazy(() => import("./screens/hr/Schedule"));
 const HrAttendance = lazy(() => import("./screens/hr/Attendance"));
+const HrBoard = lazy(() => import("./screens/hr/Board"));
 const HrTimesheets = lazy(() => import("./screens/hr/Timesheets"));
 const HrPayroll = lazy(() => import("./screens/hr/Payroll"));
 const HrQrDisplay = lazy(() => import("./screens/hr/QrDisplay"));
@@ -92,8 +93,9 @@ const NAV: Nav[] = [
   { path: "/fin-reports", label: "Báo cáo tài chính", group: G.fin, perms: ["reports.view"], icon: I("M4 4h16v16H4zM8 15v-3M12 15V9M16 15v-5"), el: <FinReports /> },
   { path: "/me", label: "Chấm công", group: G.hr, pri: 2, perms: ["hr.self"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrMe /> },
   { path: "/hr/employees", label: "Nhân viên", group: G.hr, perms: ["hr.view"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7z"), el: <HrEmployees /> },
-  { path: "/hr/schedule", label: "Lịch ca", group: G.hr, perms: ["hr.view"], icon: I("M4 5h16v15H4zM4 9h16M8 3v4M16 3v4"), el: <HrSchedule /> },
-  { path: "/hr/attendance", label: "Duyệt chấm công", group: G.hr, perms: ["hr.schedule"], icon: I("M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrAttendance /> },
+  { path: "/hr/attendance", label: "Bảng chấm công", group: G.hr, perms: ["hr.view"], icon: I("M4 5h16v15H4zM4 9h16M8 3v4M16 3v4M8 13l2 2 4-4"), el: <HrBoard /> },
+  { path: "/hr/schedule", label: "Lịch ca", perms: ["hr.view"], hidden: true, icon: I("M4 5h16v15H4zM4 9h16M8 3v4M16 3v4"), el: <HrSchedule /> },
+  { path: "/hr/approvals", label: "Duyệt chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrAttendance /> },
   { path: "/hr/timesheets", label: "Bảng công", group: G.hr, perms: ["hr.view"], icon: I("M4 4h16v16H4zM4 10h16M10 4v16"), el: <HrTimesheets /> },
   { path: "/payroll", label: "Bảng lương", group: G.hr, perms: ["hr.sensitive"], icon: I("M3 7h18v10H3zM12 12a2 2 0 100-4 2 2 0 000 4zM6 12h.01M18 12h.01"), el: <HrPayroll /> },
   { path: "/hr/stores", label: "Cửa hàng", group: G.hr, perms: ["hr.manage", "users.manage"], icon: I("M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"), el: <HrStores /> },

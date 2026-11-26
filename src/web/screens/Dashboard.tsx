@@ -52,7 +52,7 @@ export default function Dashboard() {
     rows.push(<TodoRow key="exp" n={t.stock.expiringSoon} tone="warn" label="Lô sắp hết hạn" hint="Hết hạn trong 2 ngày tới" to="/inventory" />);
   }
   if (t.overdueDebt) rows.push(<TodoRow key="debt" n={t.overdueDebt.invoices} tone="danger" label="Công nợ quá hạn" hint={t.overdueDebt.invoices ? `Tổng ${money(t.overdueDebt.amount)}` : undefined} to="/debts" />);
-  if (t.attendanceReview) rows.push(<TodoRow key="att" n={t.attendanceReview.corrections + t.attendanceReview.punches} tone="warn" label="Chấm công cần xem lại" hint="Yêu cầu bổ sung công, chấm offline chờ duyệt" to="/hr/attendance" />);
+  if (t.attendanceReview) rows.push(<TodoRow key="att" n={t.attendanceReview.corrections + t.attendanceReview.punches} tone="warn" label="Chấm công cần xem lại" hint="Yêu cầu bổ sung công, chấm offline chờ duyệt" to="/hr/approvals" />);
   const max = Math.max(1, ...(s?.today.byChannel ?? []).map((c) => c.revenue));
   return (
     <div className="dash">

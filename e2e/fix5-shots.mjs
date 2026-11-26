@@ -71,7 +71,7 @@ for (const tag of want) {
     await shot("luong-dao-chi");
   });
   await section("canh-bao-cham-cong", async () => {
-    await go("/hr/attendance");
+    await go("/hr/approvals");
     await page.getByRole("button", { name: /^Cảnh báo/ }).or(page.getByText(/^Cảnh báo/)).first().click();
     await shot("cham-cong-canh-bao");
   });

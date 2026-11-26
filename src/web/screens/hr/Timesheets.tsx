@@ -109,10 +109,10 @@ function Close({ period, onClose, onDone }: { period: string; onClose: () => voi
         <div className="stack" data-testid="unresolved">
           <Banner>Còn mục chưa xử lý trong kỳ:</Banner>
           <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 4 }}>
-            {L(un.pendingPunches, "lần chấm công chờ duyệt", "/hr/attendance")}
-            {L(un.pendingCorrections, "yêu cầu bổ sung công", "/hr/attendance")}
-            {L(un.pendingLeaves, "đơn nghỉ phép", "/hr/attendance")}
-            {L(un.pendingOvertime, "yêu cầu tăng ca", "/hr/attendance")}
+            {L(un.pendingPunches, "lần chấm công chờ duyệt", "/hr/approvals")}
+            {L(un.pendingCorrections, "yêu cầu bổ sung công", "/hr/approvals")}
+            {L(un.pendingLeaves, "đơn nghỉ phép", "/hr/approvals")}
+            {L(un.pendingOvertime, "yêu cầu tăng ca", "/hr/approvals")}
             {(un.missingPunchDays ?? []).length > 0 && <li><b>{un.missingPunchDays.length}</b> ngày thiếu giờ ra: {un.missingPunchDays.slice(0, 8).map((x: any) => `${x.name} ${dm(x.workDate)}`).join("; ")}{un.missingPunchDays.length > 8 ? "…" : ""}</li>}
           </ul>
           <TextArea label="Lý do chốt cưỡng chế (bắt buộc, ghi vào nhật ký)" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
