@@ -140,3 +140,5 @@ GitHub → Releases → *Draft a new release* → tag mới `demo-YYYY-MM-DD` (v
 - Workers AI: model có suy luận (Gemma 4, Qwen 3.8) mặc định suy nghĩ hết `max_tokens` → trả rỗng; truyền `reasoning_effort: "none"`. Mỗi ảnh bị co về ~440 token ảnh dù phóng to → phải **cắt dải**.
 - Hạn mức Workers AI miễn phí tính chung cả account; một lần thử Clairic tốn ~1,3 triệu token (báo 0 neuron trong response nhưng vẫn trừ hạn mức).
 - Thêm nhóm tham số mới trong `settings-registry.ts` → nhớ sửa số nhóm trong `e2e/settings.mjs`.
+- `.dev.vars` cho E2E phải có `BOOTSTRAP_TOKEN=local-dev-bootstrap` (bộ `settings` gọi bootstrap bằng đúng giá trị này) và `ATTENDANCE_QR_SECRET=<giá trị dev bất kỳ>` (thiếu thì nút "Dùng mã QR" không hiện → bộ `hr` lỗi). Chỉ dùng cho dev local, không commit.
+- Đẩy commit mới khi CI của commit trước đang chạy làm bước gitleaks của lần chạy cũ báo "Invalid revision range" (không phải lộ secret) — xem kết quả CI của commit mới nhất.
