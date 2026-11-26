@@ -6,6 +6,9 @@ import { CHANNELS, METHODS, fmtDateTime, fmtTime, money, qtyText } from "../form
 import { toast } from "../components/toast";
 import { navigate } from "../router";
 import { syncQueue, useQueue } from "../offline";
+import { PayTable } from "../components/pay-breakdown";
+import { PrintButtons, usePrintDoc } from "../components/report-print";
+import { ShiftHandoverDoc } from "../components/shift-detail";
 
 /** Báo cáo cuối ca (backend salesSummary): byChannel[{channel,orders,revenue}], byMethod[{method,amount}], topProducts[{productId,name,qtyMilli,revenue}] */
 type Row = { label: string; value: number; extra?: string };
@@ -17,6 +20,8 @@ export default function ShiftClose() {
   const [counted, setCounted] = useState(0), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   const [report, setReport] = useState<any>(null);
   const [srvExpected, setSrvExpected] = useState<number | undefined>();
+  // Tổng kết theo hình thức thanh toán ngay trên màn chốt ca để đối chiếu máy POS thẻ / sao kê chuyển khoản
+  const sum = useAsync(async () => (cur.data?.id ? get(`/shifts/${cur.data.id}/summary`, undefined, { silent: true }).catch(() => null) : null), [cur.data?.id]);
   if (cur.loading) return <Spinner />;
   const s = cur.data;
   if (report) return <Summary r={report} />;
@@ -44,7 +49,7 @@ export default function ShiftClose() {
         <div className="stack">
           <div className="grid2">
             <div className="kpi"><div className="l">Tiền đầu ca</div><div className="v">{money(s.openingCash)}</div></div>
-            <div className="kpi"><div className="l">Dự kiến trong két</div><div className="v">{expected != null ? money(expected) : "Tính khi chốt"}</div></div>
+            <div className="kpi"><div className="l">Dự kiến trong két</div><div className="v">{expected != null ? money(expected) : sum.data ? money(sum.data.cashFormula.expected) : "Tính khi chốt"}</div></div>
           </div>
           {queue.length > 0 && (
             <Banner tone="danger">
@@ -65,7 +70,16 @@ export default function ShiftClose() {
           <div className="hint">Hệ thống tự tính tiền dự kiến trong két từ các đơn tiền mặt của ca. Đếm tiền thực tế rồi nhập vào ô bên cạnh; nếu lệch cần ghi lý do.</div>
         </div>
       </Card>
+
      </div>
+      {sum.data && (
+        <div style={{ marginTop: "var(--s-4)" }}>
+          <Card title="Bán theo hình thức thanh toán (tính đến lúc này)">
+            <PayTable rows={sum.data.byPayment} />
+            <div className="hint">Đối chiếu số thẻ với máy POS thẻ, số chuyển khoản với sao kê. Chỉ tiền mặt được đếm trong két.</div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
@@ -100,13 +114,15 @@ function NoShift() {
 }
 
 function Summary({ r }: { r: any }) {
+  const { paper, print } = usePrintDoc();
+  const hand = useAsync(async () => (r.shift?.id ? get(`/shifts/${r.shift.id}/summary`, undefined, { silent: true }).catch(() => null) : null), [r.shift?.id]);
   const sh = r.shift ?? r;
   const rep = r.report ?? {};
   const ch = rowsOf(rep.byChannel, "channel"), pm = rowsOf(rep.byMethod, "method"), top = rowsOf(rep.topProducts, "name");
   const diff = sh.diffCash;
   return (
     <div className="stack">
-      <PageHeader subtitle="Tổng kết cuối ca" actions={<Button onClick={() => navigate("/pos")}>Xong</Button>} />
+      <PageHeader subtitle="Tổng kết cuối ca" actions={<><PrintButtons print={print} disabled={!hand.data} /><Button onClick={() => navigate("/pos")}>Xong</Button></>} />
       <div className="kpis">
         <div className="kpi"><div className="l">Dự kiến</div><div className="v">{money(sh.expectedCash)}</div></div>
         <div className="kpi"><div className="l">Kiểm đếm</div><div className="v">{money(sh.countedCash)}</div></div>
@@ -115,9 +131,11 @@ function Summary({ r }: { r: any }) {
       </div>
       <div className="grid3" style={{ alignItems: "start" }}>
         <Card title="Theo kênh"><DataTable rows={ch} rowKey={(x) => x.label} cols={[{ key: "l", label: "Kênh", render: (x) => <>{CHANNELS[x.label] ?? x.label} {x.extra && <Badge>{x.extra}</Badge>}</> }, { key: "v", label: "Doanh thu", right: true, render: (x) => money(x.value) }]} /></Card>
-        <Card title="Theo hình thức TT"><DataTable rows={pm} rowKey={(x) => x.label} cols={[{ key: "l", label: "Hình thức", render: (x) => METHODS[x.label] ?? x.label }, { key: "v", label: "Số tiền", right: true, render: (x) => money(x.value) }]} /></Card>
+        <Card title="Theo hình thức TT">{hand.data ? <PayTable rows={hand.data.byPayment} /> : <DataTable rows={pm} rowKey={(x) => x.label} cols={[{ key: "l", label: "Hình thức", render: (x) => METHODS[x.label] ?? x.label }, { key: "v", label: "Số tiền", right: true, render: (x) => money(x.value) }]} />}</Card>
         <Card title="Top 10 bán chạy"><DataTable rows={top} rowKey={(x) => x.label} cols={[{ key: "l", label: "Hàng", render: (x) => <>{x.label} {x.extra && <Badge>{x.extra}</Badge>}</> }, { key: "v", label: "Doanh thu", right: true, render: (x) => money(x.value) }]} /></Card>
       </div>
+      {hand.data && <ShiftHandoverDoc s={hand.data} paper={paper} />}
+      <div className="hint">Phiếu bàn giao ca có thể in lại bất cứ lúc nào ở Lịch sử ca.</div>
     </div>
   );
 }
