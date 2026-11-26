@@ -105,6 +105,11 @@ Các lỗi trung bình/thấp còn lại (xem `docs/audit/README.md` mục Trạ
 - `loyalty.enabled` mặc định 0 — bật trong Cài đặt khi cửa hàng chốt quy tắc tích điểm.
 - Rủi ro còn lại có chủ đích (ghi trong báo cáo audit): kiểm hạn mức khi xác nhận đơn sỉ đồng thời trả 409 để thử lại (ưu tiên chặn); quỹ chờ đối soát chỉ rút phần tiền đã ghi vào quỹ đó.
 
+### 3.3b Bán hàng tại quầy theo đối chiếu KiotViet — TẠM DỪNG (26/11/2026)
+Kế hoạch đã chốt, chưa code: **`docs/POS-KV.md`**.
+- Đợt A: nhiều hoá đơn cùng lúc (tab), chọn hàng theo ảnh + nhóm hàng, máy quét mã vạch USB/Bluetooth **tuỳ chọn** (bật/tắt theo thiết bị, không phụ thuộc), người bán khác thu ngân, sao chép hoá đơn, lọc thêm + in lại + chia sẻ.
+- Đợt B: bán nợ tại quầy + QR thu nợ hoá đơn bán lẻ, sửa hoá đơn bằng chứng từ đảo, thu khác, bán giao hàng tại quầy, xuất file chi tiết, HĐĐT bán lẻ, import Excel, tem cân điện tử.
+
 ### 3.4 Điểm [Cần xác nhận] với chủ cửa hàng (ảnh hưởng cấu hình)
 Tất cả đã có trên màn **Cài đặt → Tham số** (lọc "chỉ mục cần xác nhận"); chủ cửa hàng lưu/xác nhận là nhãn biến mất.
 Giá vốn theo lô hay bình quân · ngưỡng duyệt (giảm giá, phiếu chi, kiểm kê, xoá nợ) · mốc tuổi nợ · thuế GTGT / hình thức kinh doanh · loại mã vạch · cân điện tử nối điện thoại · thành phố & khu vực giao (đang ví dụ TP.HCM) · số tài khoản nhận tiền VietQR · ngưỡng lệch cân (10%) · ai chịu phí giao khi khách huỷ · mẫu sổ Excel kế toán · danh sách đối thủ & tần suất thu thập · cách tính lương (tháng/giờ/ca), ngày công chuẩn, hệ số tăng ca, quy định phép & đi muộn · cách xác thực chấm công (GPS, QR hay cả hai) · có đóng BHXH cho NV không · bật tích điểm & tỉ lệ đổi điểm · cho cộng dồn khuyến mãi không · % đặt cọc giỏ quà.

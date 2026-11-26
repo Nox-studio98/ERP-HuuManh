@@ -1,5 +1,27 @@
 # Bán hàng tại quầy — bổ sung theo đối chiếu KiotViet (đợt A)
 
+> **Trạng thái (26/11/2026): TẠM DỪNG theo yêu cầu chủ dự án — chưa code.** Tài liệu này là kế hoạch đã chốt để làm sau. Khi làm tiếp: tạo nhánh từ `main` mới nhất, đánh số migration tiếp theo (kiểm tra `migrations/` lúc đó — `0032_pos_seller.sql` dưới đây chỉ là tên dự kiến), rồi làm A1–A6 kèm kiểm thử ở cuối tài liệu.
+
+## Đối chiếu với KiotViet (tóm tắt)
+
+**Đã có, tương đương:** tìm hàng theo tên/mã, quét camera (F4), phím tắt F2/F4/F9, bán theo cân, giảm giá dòng và cả đơn, khuyến mãi tự động, voucher, đổi điểm, thêm nhanh khách, thanh toán kết hợp (tiền mặt, chuyển khoản, QR SePay tự xác nhận, thẻ, ví), bán offline, mở/chốt ca, danh sách hoá đơn có lọc ngày/kênh/trạng thái/thu ngân/hình thức thanh toán, xuất file tổng quan, trả hàng, đổi hàng, huỷ đơn, xem thanh toán và phiếu in trong chi tiết đơn, QR thu nợ tự xác nhận cho hoá đơn sỉ.
+
+**Còn thiếu — đợt A (ưu tiên, chi tiết bên dưới):** nhiều hoá đơn cùng lúc; chọn hàng theo ảnh + nhóm hàng; máy quét mã vạch USB/Bluetooth tuỳ chọn; người bán khác thu ngân (sửa người bán/ghi chú sau khi bán, sửa hàng loạt); sao chép hoá đơn; lọc thêm + in lại + chia sẻ hoá đơn.
+
+**Còn thiếu — đợt B (làm sau, cần thiết kế riêng vì đụng công nợ / chứng từ):**
+1. Bán nợ tại quầy cho khách lẻ có hạn mức; QR thu nợ trên hoá đơn bán lẻ (SePay); in mã QR lên hoá đơn để khách quét trả sau.
+2. Sửa chi tiết hoá đơn đã lập: làm bằng chứng từ đảo + đơn mới (không sửa chứng từ cũ), chuyển phiếu thanh toán sang đơn mới.
+3. Thu khác (phí đóng gói, phí giao…) cộng vào hoá đơn.
+4. Bán giao hàng tại quầy (người nhận, địa chỉ, phí giao).
+5. Xuất file chi tiết từng dòng hàng; chọn cột hiển thị trong danh sách hoá đơn.
+6. Hoá đơn điện tử cho đơn bán lẻ (hiện chỉ có cho hoá đơn sỉ).
+7. Nhập hoá đơn từ Excel.
+8. Tem cân điện tử: đọc mã vạch có sẵn khối lượng/số tiền (EAN bắt đầu bằng 2) — cần biết loại cân của cửa hàng.
+
+**Không cần:** Serial/IMEI (đã quản lý lô FEFO), nối thẳng hãng vận chuyển (Ahamove, KShip…), máy POS Android riêng (PWA chạy trên máy tính bảng/điện thoại).
+
+---
+
 Nguồn đối chiếu: hướng dẫn "Bán hàng" KiotViet (ngành bán lẻ). Chỉ học **luồng thao tác**, giao diện dùng bộ thành phần của dự án (`src/web/components`, `docs/UI-KIT.md`). Quy ước như `CLAUDE.md`: tiền nguyên VND, ghi nhiều dòng trong một `db.batch` + `auditStmt`, `requirePerm` + zod, `assertPeriodOpen` cho chứng từ có ngày, migration mới không sửa file cũ.
 
 Đợt A gồm 6 việc. Đợt B (để sau, cần thiết kế riêng): bán nợ tại quầy + QR thu nợ hoá đơn bán lẻ + mã QR in trên hoá đơn; sửa chi tiết hoá đơn (chứng từ đảo + đơn mới); thu khác; bán giao hàng tại quầy; xuất file chi tiết dòng hàng; HĐĐT cho đơn bán lẻ; import Excel; mã vạch cân điện tử (EAN prefix 2x).
