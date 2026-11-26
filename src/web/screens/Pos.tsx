@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, get, items, post } from "../api";
-import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, MoneyInput, NumberPad, QtyStepper, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
+import { Badge, Banner, Button, Card, DecInput, EmptyState, Input, MoneyInput, NumberPad, QtyStepper, Segmented, Select, Sheet, Spinner, TextArea, useAsync, useDebounced } from "../components/ui";
 import { Scanner } from "../components/Scanner";
 import { Receipt } from "../components/Receipt";
 import { toast } from "../components/toast";
 import { METHODS, fmtDate, fmtDateTime, fmtTime, money, qtyText, unitLabel, uuid, withShown } from "../format";
 import { enqueue, useQueue, syncQueue } from "../offline";
-import { navigate } from "../router";
+import { navigate, setQuery } from "../router";
+import { createScanDetector, loadScannerSettings, saveScannerSettings, type ScannerSettings } from "../scanner";
 import { QrImage } from "../components/QrImage";
 import { useAuth, useCan } from "../store";
 import { reasonText } from "./d4/voucher-text";
@@ -19,7 +20,24 @@ const unitPrice = (p: Product, unit: string) => Math.round((priceOf(p) * factor(
 
 type Line = { key: string; product: Product; unit: string; qty: number; discount: number };
 type Cust = { id: number; name: string; phone?: string | null };
-let saved = { lines: [] as Line[], cartId: uuid(), discount: 0, note: "", customer: null as Cust | null };
+/** Một hoá đơn đang lập (tab). `cartId` là clientUuid khi gửi đơn — mỗi tab một mã riêng nên hàng đợi offline đúng từng tab. */
+type Cart = { id: string; lines: Line[]; cartId: string; discount: number; note: string; customer: Cust | null; sellerId: number | null };
+const MAX_TABS = 10;
+const TABS_KEY = "hm_pos_tabs";
+const newCart = (): Cart => ({ id: uuid(), lines: [], cartId: uuid(), discount: 0, note: "", customer: null, sellerId: null });
+function loadTabs(): { tabs: Cart[]; active: string } {
+  try {
+    const j = JSON.parse(localStorage.getItem(TABS_KEY) ?? "null");
+    const tabs: Cart[] = (Array.isArray(j?.tabs) ? j.tabs : []).filter((t: any) => t && typeof t.id === "string" && typeof t.cartId === "string" && Array.isArray(t.lines)).slice(0, MAX_TABS)
+      .map((t: any) => ({ id: t.id, cartId: t.cartId, lines: t.lines, discount: Number(t.discount) || 0, note: typeof t.note === "string" ? t.note : "", customer: t.customer ?? null, sellerId: typeof t.sellerId === "number" ? t.sellerId : null }));
+    if (tabs.length) return { tabs, active: tabs.some((t) => t.id === j.active) ? j.active : tabs[0].id };
+  } catch { /* hỏng hoặc bị chặn → chạy với 1 tab trống */ }
+  const c = newCart();
+  return { tabs: [c], active: c.id };
+}
+let saved = loadTabs();
+const VIEW_KEY = "hm_pos_view";
+const loadView = (): "list" | "grid" => { try { return localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "list"; } catch { return "list"; } };
 
 export default function Pos() {
   const can = useCan();
@@ -70,7 +88,7 @@ function OpenShift({ onOpened, allowed }: { onOpened: () => void; allowed: boole
             )}
           </Card>
           <Card title="Phím tắt khi bán hàng">
-            <div className="kbd-list"><span><kbd>F2</kbd> Tìm sản phẩm</span><span><kbd>F4</kbd> Quét mã</span><span><kbd>F9</kbd> Thanh toán</span><span><kbd>Esc</kbd> Đóng hộp thoại</span></div>
+            <div className="kbd-list"><span><kbd>F2</kbd> Tìm sản phẩm</span><span><kbd>F3</kbd> Hoá đơn mới</span><span><kbd>Ctrl</kbd>+<kbd>1…9</kbd> Chuyển hoá đơn</span><span><kbd>F4</kbd> Quét mã</span><span><kbd>F9</kbd> Thanh toán</span><span><kbd>Esc</kbd> Đóng hộp thoại</span></div>
           </Card>
         </div>
       </div>
@@ -79,30 +97,77 @@ function OpenShift({ onOpened, allowed }: { onOpened: () => void; allowed: boole
 }
 
 function Sell({ shift }: { shift: any }) {
-  const [lines, setLines] = useState<Line[]>(saved.lines);
-  const [cartId, setCartId] = useState(saved.cartId);
-  const [discount, setDiscount] = useState(saved.discount);
-  const [note, setNote] = useState(saved.note);
-  const [customer, setCustomer] = useState<Cust | null>(saved.customer);
+  const auth = useAuth();
+  const [tabs, setTabs] = useState<Cart[]>(saved.tabs);
+  const [activeId, setActiveId] = useState(saved.active);
+  const tab = tabs.find((t) => t.id === activeId) ?? tabs[0];
+  const { lines, cartId, discount, note, customer, sellerId } = tab;
+  const patch = (f: (t: Cart) => Partial<Cart>) => setTabs((ts) => ts.map((t) => (t.id === tab.id ? { ...t, ...f(t) } : t)));
+  const setLines = (u: Line[] | ((l: Line[]) => Line[])) => patch((t) => ({ lines: typeof u === "function" ? u(t.lines) : u }));
+  const setDiscount = (n: number) => patch(() => ({ discount: n }));
+  const setNote = (v: string) => patch(() => ({ note: v }));
+  const setCustomer = (c: Cust | null) => patch(() => ({ customer: c }));
+  const setSellerId = (id: number | null) => patch(() => ({ sellerId: id }));
+  useEffect(() => {
+    saved = { tabs, active: tab.id };
+    try { localStorage.setItem(TABS_KEY, JSON.stringify(saved)); } catch { /* đầy bộ nhớ / chế độ riêng tư */ }
+  }, [tabs, tab.id]);
   const [pickCustomer, setPickCustomer] = useState(false);
-  useEffect(() => { saved = { lines, cartId, discount, note, customer }; }, [lines, cartId, discount, note, customer]);
   const [q, setQ] = useState("");
   const dq = useDebounced(q);
-  const prods = useAsync(() => get("/products", { q: dq, limit: 60, active: 1 }).then((r) => items<Product>(r)), [dq]);
+  const [groupId, setGroupId] = useState(0);
+  const [pview, setPview] = useState<"list" | "grid">(loadView);
+  const chooseView = (v: "list" | "grid") => { setPview(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* bỏ qua */ } };
+  const groups = useAsync(() => get("/product-groups", undefined, { silent: true }).then((r) => items<{ id: number; name: string }>(r)).catch(() => [] as { id: number; name: string }[]), []);
+  const prods = useAsync(() => get("/products", { q: dq, limit: 60, active: 1, ...(groupId ? { groupId } : {}) }).then((r) => items<Product>(r)), [dq, groupId]);
   const [view, setView] = useState<"products" | "cart">("products");
   const [scan, setScan] = useState(false);
   const [weighing, setWeighing] = useState<{ p: Product; unit?: string } | null>(null);
+  const [asking, setAsking] = useState<{ p: Product; unit?: string } | null>(null);
   const [checkout, setCheckout] = useState(false);
   const [receipt, setReceipt] = useState<{ order: any; names: Record<number, string> } | null>(null);
+  const [settings, setSettings] = useState(false);
+  const [scanCfg, setScanCfg] = useState<ScannerSettings>(loadScannerSettings);
   const queue = useQueue();
   const totalRef = useRef(0);
+
+  // A4: danh sách người bán; endpoint chưa có (404) hoặc lỗi → ẩn ô chọn, không gửi sellerId
+  const sellers = useAsync(() => get("/pos/sellers", undefined, { silent: true }).then((r) => items<{ id: number; name: string }>(r)).catch(() => null), []);
+
+  // A1: thao tác trên tab
+  const live = useRef({ tabs, tab }); live.current = { tabs, tab };
+  const addTab = () => {
+    if (live.current.tabs.length >= MAX_TABS) { toast(`Tối đa ${MAX_TABS} hoá đơn cùng lúc`, "info"); return; }
+    const c = newCart(); setTabs((ts) => [...ts, c]); setActiveId(c.id); setView("products");
+  };
+  const gotoTab = (i: number) => { const t = live.current.tabs[i]; if (t) { setActiveId(t.id); setView("products"); } };
+  const closeTab = (id: string) => {
+    const ts = live.current.tabs, t = ts.find((x) => x.id === id);
+    if (!t) return;
+    if (t.lines.length && !confirm("Hoá đơn này còn hàng trong giỏ. Đóng và bỏ giỏ?")) return;
+    if (ts.length <= 1) { const c = newCart(); setTabs([c]); setActiveId(c.id); return; }
+    const i = ts.findIndex((x) => x.id === id), rest = ts.filter((x) => x.id !== id);
+    setTabs(rest);
+    if (id === live.current.tab.id) setActiveId(rest[Math.min(i, rest.length - 1)].id);
+  };
+  /** Sau khi thanh toán: tab trống lại nếu là tab duy nhất, còn nhiều tab thì đóng tab vừa bán. */
+  const finishTab = (id: string) => {
+    const ts = live.current.tabs;
+    if (ts.length <= 1) { const c = newCart(); setTabs([c]); setActiveId(c.id); return; }
+    const i = ts.findIndex((x) => x.id === id), rest = ts.filter((x) => x.id !== id);
+    setTabs(rest);
+    if (id === live.current.tab.id) setActiveId(rest[Math.min(i, rest.length - 1)].id);
+  };
+  const keyApi = useRef({ addTab, gotoTab }); keyApi.current = { addTab, gotoTab };
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (document.querySelector(".sheet-back")) return;
       if (e.key === "F2") { e.preventDefault(); (document.querySelector("[data-pos-search]") as HTMLInputElement | null)?.focus(); }
+      else if (e.key === "F3") { e.preventDefault(); keyApi.current.addTab(); }
       else if (e.key === "F4") { e.preventDefault(); setScan(true); }
       else if (e.key === "F9" && totalRef.current > 0) { e.preventDefault(); setCheckout(true); }
+      else if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); keyApi.current.gotoTab(Number(e.key) - 1); }
     };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
@@ -149,7 +214,84 @@ function Sell({ shift }: { shift: any }) {
     } catch { /* toast từ api */ }
   };
 
-  const reset = () => { setLines([]); setDiscount(0); setNote(""); setCustomer(null); setCartId(uuid()); setView("products"); };
+  // A3: tra mã từ máy quét USB/Bluetooth — barcode hàng hoặc barcode đơn vị quy đổi (thêm đúng đơn vị)
+  const onHardwareScan = async (code: string) => {
+    let r: any;
+    try { r = await get("/products/lookup", { code, context: "pos" }, { silent: true }); }
+    catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.code === "unknown_code")) toast(`Không có hàng với mã ${code}`, "error");
+      else toast(e instanceof ApiError && e.code === "network" ? "Mất mạng — chưa tra được mã" : e instanceof ApiError ? e.message : "Không tra được mã", "error");
+      return;
+    }
+    if (r.lot?.expired || r.lot?.status === "expired") { toast("Lô này đã hết hạn — không bán", "error"); return; }
+    let p = r.product as Product;
+    if (!p.active) { toast(`${p.name} đã ngừng bán`, "error"); return; }
+    try { const full = items<Product>(await get("/products", { ids: p.id }, { silent: true }))[0]; if (full) p = full; } catch { /* giữ bản rút gọn */ }
+    const unit: string | undefined = r.unit?.unit ?? undefined;
+    const byWeight = !!p.sellByWeight && (unit === undefined || unit === p.baseUnit);
+    if (byWeight) { add(p, unit); return; } // mở ô nhập khối lượng
+    if (scanCfg.mode === "ask") { setAsking({ p, unit }); return; }
+    add(p, unit); toast(`Đã thêm: ${p.name}`, "ok");
+  };
+  const hw = useRef(onHardwareScan); hw.current = onHardwareScan;
+  useEffect(() => {
+    if (!scanCfg.on) return;
+    const det = createScanDetector();
+    const k = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+      if (document.querySelector(".sheet-back")) { det.reset(); return; } // đang mở hộp thoại: không chen vào
+      const sc = det.push({ key: e.key, t: e.timeStamp });
+      if (!sc) return;
+      // Máy quét gõ vào ô đang focus → xoá phần vừa bị gõ vào ô rồi xử lý như quét
+      const el = document.activeElement;
+      if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.value.endsWith(sc.code)) {
+        const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, el.value.slice(0, el.value.length - sc.code.length));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      e.preventDefault(); e.stopPropagation();
+      void hw.current(sc.code);
+    };
+    document.addEventListener("keydown", k, true);
+    return () => document.removeEventListener("keydown", k, true);
+  }, [scanCfg.on]);
+  const changeScanCfg = (c: ScannerSettings) => { setScanCfg(c); saveScannerSettings(c); };
+
+  // A5: sao chép hoá đơn — màn Đơn hàng ghi sessionStorage["hm_pos_copy"] rồi mở /pos?copy=1 → mở TAB MỚI với đúng hàng đó
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("copy") !== "1") return;
+    let req: any = null;
+    try { const raw = sessionStorage.getItem("hm_pos_copy"); sessionStorage.removeItem("hm_pos_copy"); req = raw ? JSON.parse(raw) : null; } catch { req = null; }
+    setQuery({ copy: undefined });
+    const src: { productId: number; unit: string; qtyMilli: number }[] = Array.isArray(req?.lines)
+      ? req.lines.filter((l: any) => l && Number.isInteger(l.productId) && typeof l.unit === "string" && Number.isFinite(l.qtyMilli) && l.qtyMilli > 0) : [];
+    if (!src.length) { toast("Không có dữ liệu hoá đơn để sao chép", "error"); return; }
+    (async () => {
+      let list: Product[] = [];
+      try { list = items<Product>(await get("/products", { ids: [...new Set(src.map((l) => l.productId))].join(","), limit: 100 }, { silent: true })); }
+      catch { toast("Không tải được hàng để sao chép — thử lại", "error"); return; }
+      const byId = new Map(list.map((p) => [p.id, p]));
+      const out: Line[] = [], skipped: string[] = [];
+      for (const l of src) {
+        const p = byId.get(l.productId);
+        if (!p || !p.active) { skipped.push(p?.name ?? `mã #${l.productId}`); continue; }
+        const f = l.unit === p.baseUnit ? 1000 : p.units?.find((u) => u.unit === l.unit)?.factorMilli;
+        if (!f) { skipped.push(p.name); continue; }
+        const raw = l.qtyMilli / f; // qtyMilli tính theo đơn vị chính (như cột order_lines.qty_milli) → quy ra số lượng theo đơn vị của dòng
+        const qty = p.sellByWeight ? Math.round(raw * 1000) / 1000 : Math.max(1, Math.round(raw));
+        const ex = out.find((o) => o.product.id === p.id && o.unit === l.unit);
+        if (ex) ex.qty = Math.round((ex.qty + qty) * 1000) / 1000; else out.push({ key: uuid(), product: p, unit: l.unit, qty, discount: 0 });
+      }
+      if (!out.length) { toast("Không có hàng nào còn bán để sao chép", "error"); return; }
+      const c: Cart = { ...newCart(), lines: out, customer: req.customerId ? { id: Number(req.customerId), name: String(req.customerName ?? `Khách #${req.customerId}`) } : null };
+      if (live.current.tabs.length >= MAX_TABS) { toast(`Đã đủ ${MAX_TABS} hoá đơn — đóng bớt một hoá đơn rồi sao chép lại`, "error"); return; }
+      setTabs((ts) => [...ts, c]); setActiveId(c.id); setView("cart");
+      toast(skipped.length ? `Đã sao chép. Bỏ qua ${skipped.length} hàng không còn bán: ${skipped.join(", ")}` : "Đã sao chép hoá đơn sang hoá đơn mới", skipped.length ? "info" : "ok");
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const reset = () => { patch(() => ({ lines: [], discount: 0, note: "", customer: null, cartId: uuid(), sellerId: null })); setView("products"); };
   const names = Object.fromEntries(lines.map((l) => [l.product.id, l.product.name]));
   const payloadBase = () => ({
     clientUuid: cartId,
@@ -157,6 +299,8 @@ function Sell({ shift }: { shift: any }) {
     ...(customer ? { customerId: customer.id } : {}),
     ...(discount ? { discount } : {}),
     ...(note ? { note } : {}),
+    // A4: chỉ gửi sellerId khi máy chủ có danh sách người bán và người chọn khác người đăng nhập
+    ...(sellers.data && sellerId != null && sellerId !== auth.user?.id && sellers.data.some((x) => x.id === sellerId) ? { sellerId } : {}),
     // A-09: ca đang bán và giá khách đã thấy — để đơn lập offline đồng bộ lại đúng ca / đúng giá
     shiftId: shift.id,
     priceSnapshot: [...new Map(shown.map((l) => [l.product.id, { productId: l.product.id, unitPrice: priceOf(l.product) }])).values()].filter((x) => x.unitPrice > 0),
@@ -164,16 +308,39 @@ function Sell({ shift }: { shift: any }) {
 
   return (
     <div className={"pos" + (view === "cart" ? " show-cart" : "")}>
+      <div className="pos-tabs" role="tablist" aria-label="Hoá đơn đang lập" data-testid="pos-tabs">
+        {tabs.map((t, i) => (
+          <div key={t.id} className={"pos-tab" + (t.id === tab.id ? " on" : "")}>
+            <button role="tab" aria-selected={t.id === tab.id} className="pos-tab-main" data-testid={`pos-tab-${i + 1}`} onClick={() => { setActiveId(t.id); setView("products"); }} title={`Ctrl+${i + 1}`}>
+              <span className="long">Hoá đơn {i + 1}</span><span className="short">HĐ {i + 1}</span>
+              {t.lines.length > 0 && <span className="pos-tab-n">{t.lines.length}</span>}
+            </button>
+            {(tabs.length > 1 || t.lines.length > 0) && <button className="pos-tab-x" aria-label={`Đóng hoá đơn ${i + 1}`} onClick={() => closeTab(t.id)}>×</button>}
+          </div>
+        ))}
+        <button className="pos-tab-add" aria-label="Thêm hoá đơn" title="Thêm hoá đơn (F3)" disabled={tabs.length >= MAX_TABS} data-testid="pos-tab-add" onClick={addTab}>+<span className="kbd-hint"> F3</span></button>
+      </div>
       <div className="pos-products stack">
         <div className="row">
           <div className="grow"><Input label="Tìm sản phẩm" type="search" data-pos-search value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hoặc mã…  (F2)" /></div>
           <Button variant="soft" style={{ alignSelf: "flex-end" }} onClick={() => setScan(true)}>Quét mã<span className="kbd-hint"> F4</span></Button>
+          <Button variant="ghost" style={{ alignSelf: "flex-end" }} aria-label="Cài đặt quầy" title="Cài đặt quầy" data-testid="pos-settings" onClick={() => setSettings(true)}>⚙</Button>
+        </div>
+        <div className="pos-filter">
+          {!!groups.data?.length && (
+            <div className="chips scroll" role="group" aria-label="Nhóm hàng">
+              <button className="chip" aria-pressed={groupId === 0} onClick={() => setGroupId(0)}>Tất cả</button>
+              {groups.data.map((g) => <button key={g.id} className="chip" aria-pressed={groupId === g.id} onClick={() => setGroupId(g.id)}>{g.name}</button>)}
+            </div>
+          )}
+          <Segmented value={pview} onChange={chooseView} fit options={[{ v: "list", label: "Danh sách" }, { v: "grid", label: "Lưới ảnh" }]} />
         </div>
         {queue.length > 0 && <div className="banner">Có {queue.length} đơn chờ đồng bộ. <Button size="sm" variant="ghost" onClick={() => syncQueue(true)}>Đồng bộ ngay</Button></div>}
         {prods.loading ? <Spinner /> : !prods.data?.length ? <EmptyState title="Không có sản phẩm" hint="Thử từ khoá khác hoặc quét mã." /> : (
-          <div className="pgrid">
+          <div className={"pgrid" + (pview === "grid" ? " photos" : "")} data-testid={pview === "grid" ? "pos-photo-grid" : undefined}>
             {prods.data.map((p) => (
-              <button key={p.id} className="ptile" onClick={() => add(p)} aria-label={`Thêm ${p.name}`}>
+              <button key={p.id} className={"ptile" + (pview === "grid" ? " photo" : "")} onClick={() => add(p)} aria-label={`Thêm ${p.name}`}>
+                {pview === "grid" && <ProductThumb p={p} />}
                 <span className="n">{p.name}</span>
                 <span className="small muted">{p.sellByWeight ? "Bán theo cân" : "Bán theo " + unitLabel(p.baseUnit)}{p.availableMilli != null ? ` · tồn ${qtyText(p.availableMilli, p.baseUnit)}` : ""}</span>
                 <span className="p">{priceOf(p) ? `${money(priceOf(p))}/${unitLabel(p.baseUnit)}` : "Chưa có giá"}</span>
@@ -217,6 +384,12 @@ function Sell({ shift }: { shift: any }) {
                   {customer ? <span><b>{customer.name}</b>{customer.phone ? <span className="small muted"> · {customer.phone}</span> : null}</span> : <span className="muted">Khách lẻ</span>}
                   <div className="row"><Button size="sm" variant="soft" onClick={() => setPickCustomer(true)}>{customer ? "Đổi khách" : "Gắn khách"}</Button>{customer && <Button size="sm" variant="ghost" aria-label="Bỏ khách" onClick={() => setCustomer(null)}>✕</Button>}</div>
                 </div>
+                {sellers.data && sellers.data.length > 0 && (
+                  <Select label="Người bán" data-testid="pos-seller" value={String(sellerId ?? auth.user?.id ?? "")} onChange={(e) => setSellerId(Number(e.target.value) === auth.user?.id ? null : Number(e.target.value))}>
+                    {!sellers.data.some((x) => x.id === auth.user?.id) && auth.user && <option value={auth.user.id}>{auth.user.fullName}</option>}
+                    {sellers.data.map((x) => <option key={x.id} value={x.id}>{x.name}{x.id === auth.user?.id ? " (bạn)" : ""}</option>)}
+                  </Select>
+                )}
                 <MoneyInput label="Giảm giá cả đơn (₫)" value={discount} onChange={setDiscount} />
                 <div className="totals">
                   <div><span className="muted">Tạm tính</span><span className="money">{money(subtotal)}</span></div>
@@ -239,17 +412,50 @@ function Sell({ shift }: { shift: any }) {
       )}
 
       <Sheet open={scan} onClose={() => setScan(false)} title="Quét mã sản phẩm"><Scanner onCode={onScan} continuous /><div className="hint" style={{ marginTop: 8 }}>Đã có {count} dòng trong giỏ.</div></Sheet>
+      <Sheet open={settings} onClose={() => setSettings(false)} title="Cài đặt quầy">
+        <div className="stack">
+          <label className="row" style={{ minHeight: 44, alignItems: "flex-start" }}>
+            <input type="checkbox" data-testid="pos-scanner-on" checked={scanCfg.on} onChange={(e) => changeScanCfg({ ...scanCfg, on: e.target.checked })} style={{ width: 22, height: 22, flex: "none", marginTop: 2 }} />
+            <span><b>Dùng máy quét mã vạch</b><span className="small muted"> USB / Bluetooth (loại gõ như bàn phím). Quét được ở mọi chỗ trên màn bán hàng, không cần bấm vào ô tìm.</span></span>
+          </label>
+          {scanCfg.on && <Select label="Sau khi quét" value={scanCfg.mode} onChange={(e) => changeScanCfg({ ...scanCfg, mode: e.target.value === "ask" ? "ask" : "add" })}><option value="add">Cộng 1 vào giỏ</option><option value="ask">Hỏi số lượng</option></Select>}
+          <div className="hint">Cài đặt lưu theo thiết bị này. Không có máy quét thì vẫn gõ tìm hoặc quét bằng camera (F4) như cũ.</div>
+        </div>
+      </Sheet>
+      {asking && <AskQtySheet p={asking.p} unit={asking.unit ?? asking.p.baseUnit} onClose={() => setAsking(null)} onAdd={(n) => { add(asking.p, asking.unit, n); toast(`Đã thêm: ${asking.p.name}`, "ok"); setAsking(null); }} />}
       {weighing && <WeightSheet p={weighing.p} unit={weighing.unit ?? weighing.p.baseUnit} onClose={() => setWeighing(null)} onAdd={(n) => { add(weighing.p, weighing.unit, n); setWeighing(null); }} />}
       {checkout && (
         <CheckoutSheet total={total} payloadBase={payloadBase} customer={customer} onClose={() => setCheckout(false)} noteValue={note} onNote={setNote}
-          onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); reset(); }}
-          onQueued={() => { setCheckout(false); reset(); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
+          onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); finishTab(tab.id); setView("products"); }}
+          onQueued={() => { setCheckout(false); finishTab(tab.id); setView("products"); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
       )}
       {pickCustomer && <CustomerSheet onClose={() => setPickCustomer(false)} onPick={(c) => { setCustomer(c); setPickCustomer(false); }} />}
       <Sheet open={!!receipt} onClose={() => setReceipt(null)} title="Hoá đơn" footer={<Button block onClick={() => setReceipt(null)}>Đơn mới</Button>}>
         {receipt && <Receipt order={receipt.order} names={receipt.names} />}
       </Sheet>
     </div>
+  );
+}
+
+/** Ô ảnh hàng: ảnh đầu tiên; chưa có ảnh (hoặc ảnh lỗi) → chữ cái đầu tên trên nền màu theo mã hàng. */
+function ProductThumb({ p }: { p: Product }) {
+  const [bad, setBad] = useState(false);
+  const hue = (p.id * 47) % 360;
+  if (p.imageUrl && !bad) return <img className="pimg" src={p.imageUrl} alt="" loading="lazy" onError={() => setBad(true)} />;
+  return <span className="pimg ph" aria-hidden style={{ background: `hsl(${hue} 55% 88%)`, color: `hsl(${hue} 45% 28%)` }}>{(p.name.trim()[0] ?? "?").toUpperCase()}</span>;
+}
+
+/** Hỏi số lượng sau khi quét (chế độ “Hỏi số lượng”). */
+function AskQtySheet({ p, unit, onAdd, onClose }: { p: Product; unit: string; onAdd: (n: number) => void; onClose: () => void }) {
+  const [n, setN] = useState<number | "">(1);
+  const v = typeof n === "number" ? n : 0;
+  return (
+    <Sheet open onClose={onClose} title={p.name} footer={<Button block size="lg" disabled={v <= 0} onClick={() => onAdd(p.sellByWeight ? v : Math.round(v))}>Thêm {v > 0 ? `${v.toString().replace(".", ",")} ${unitLabel(unit)}` : ""}</Button>}>
+      <div className="stack">
+        <DecInput label={`Số lượng (${unitLabel(unit)})`} value={n} onChange={setN} autoFocus />
+        <div className="chips">{[1, 2, 5, 10].map((x) => <button key={x} className="chip" onClick={() => setN(x)}>{x}</button>)}</div>
+      </div>
+    </Sheet>
   );
 }
 
