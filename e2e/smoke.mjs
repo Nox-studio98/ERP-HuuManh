@@ -53,7 +53,6 @@ async function newPage(opts, who) {
   page.setDefaultTimeout(8000);
   watch(page, who);
   allowAlways(401, /\/api\/auth\/me$/, "chưa đăng nhập → /me 401 là bình thường");
-  allowAlways(404, /\/pos\/sellers$/, "POS hỏi danh sách người bán; máy chủ chưa có endpoint thì ô chọn tự ẩn");
   return { ctx, page };
 }
 const shot = async (page, name) => {

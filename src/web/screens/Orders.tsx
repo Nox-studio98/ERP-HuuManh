@@ -177,7 +177,8 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
 
 /** A5: đưa hàng của đơn sang một tab mới ở màn POS (hợp đồng với màn POS: sessionStorage["hm_pos_copy"]). */
 function copyToPos(d: any) {
-  const lines = (d.lines ?? []).map((l: any) => ({ productId: l.productId, unit: l.unit, qtyMilli: Math.round(l.qtyShown ?? l.qtyMilli) }));
+  // qtyMilli theo ĐƠN VỊ CHÍNH (như order_lines.qty_milli); màn POS tự quy ra số lượng theo `unit` của dòng
+  const lines = (d.lines ?? []).map((l: any) => ({ productId: l.productId, unit: l.unit, qtyMilli: l.qtyMilli }));
   try {
     sessionStorage.setItem("hm_pos_copy", JSON.stringify({ ...(d.customer ? { customerId: d.customer.id, customerName: d.customer.name } : {}), lines }));
   } catch { toast("Trình duyệt không cho lưu tạm, không sao chép được đơn", "error"); return; }
