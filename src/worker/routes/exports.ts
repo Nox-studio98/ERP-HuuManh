@@ -187,7 +187,8 @@ const builders: Record<string, Builder> = {
   "hoa-don-ban": async (c, r) => {
     const { results } = await c.env.DB
       .prepare(
-        `SELECT i.*, cu.name AS cust_name FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
+        `SELECT i.*, cu.name AS cust_name, o.channel AS order_channel FROM invoices i LEFT JOIN customers cu ON cu.id = i.customer_id
+           LEFT JOIN orders o ON o.id = i.order_id
           WHERE i.issue_date >= ? AND i.issue_date <= ? ORDER BY i.issue_date, i.id`,
       )
       .bind(r.from, r.to)
@@ -196,8 +197,8 @@ const builders: Record<string, Builder> = {
     const es: Record<string, string> = { none: "Chưa phát hành", queued: "Đang chờ", issued: "Đã phát hành", failed: "Lỗi", not_required: "Không cần" };
     return [{
       name: "Hoá đơn bán",
-      columns: [{ header: "Ngày HĐ", type: "date" }, { header: "Số HĐ nội bộ" }, { header: "Loại" }, { header: "Khách hàng", width: 28 }, { header: "Mã số thuế" }, { header: "Tiền hàng", type: "money" }, { header: "Thuế GTGT", type: "money" }, { header: "Tổng cộng", type: "money" }, { header: "Trạng thái HĐĐT" }, { header: "Số HĐĐT" }, { header: "Ký hiệu" }, { header: "Mã tra cứu" }],
-      rows: results.map((i) => [i.issue_date, i.code, kind[i.kind] ?? i.kind, i.buyer_name ?? i.cust_name ?? "Khách lẻ", i.buyer_tax_code ?? "", i.subtotal, i.vat_amount, i.total, i.status === "cancelled" ? "Đã huỷ" : es[i.einvoice_status] ?? i.einvoice_status, i.einvoice_no ?? "", i.einvoice_series ?? "", i.einvoice_lookup_code ?? ""]),
+      columns: [{ header: "Ngày HĐ", type: "date" }, { header: "Số HĐ nội bộ" }, { header: "Loại" }, { header: "Khách hàng", width: 28 }, { header: "Mã số thuế" }, { header: "Tiền hàng", type: "money" }, { header: "Thuế GTGT", type: "money" }, { header: "Tổng cộng", type: "money" }, { header: "Trạng thái HĐĐT" }, { header: "Số HĐĐT" }, { header: "Ký hiệu" }, { header: "Mã tra cứu" }, { header: "Nguồn", width: 22 }],
+      rows: results.map((i) => [i.issue_date, i.code, kind[i.kind] ?? i.kind, i.buyer_name ?? i.cust_name ?? "Khách lẻ", i.buyer_tax_code ?? "", i.subtotal, i.vat_amount, i.total, i.status === "cancelled" ? "Đã huỷ" : es[i.einvoice_status] ?? i.einvoice_status, i.einvoice_no ?? "", i.einvoice_series ?? "", i.einvoice_lookup_code ?? "", i.order_channel === "pos" ? "Ghi nợ tại quầy (nội bộ)" : "Bán sỉ"]),
       totalCols: [5, 6, 7],
     }];
   },
