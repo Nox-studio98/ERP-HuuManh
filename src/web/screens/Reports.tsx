@@ -4,7 +4,7 @@ import { Badge, Button, Card, DataTable, EmptyState, Segmented, Spinner, useAsyn
 import { DateRangeFilter, FilterBar, KpiRow, PageHeader, SearchInput, rangeOf, useWide, type DateRange } from "../components/list";
 import { ExportButton } from "../components/list";
 import { BarChart } from "../components/charts";
-import { CHANNELS, downloadHref, money, qtyText, todayVN } from "../format";
+import { CHANNELS, downloadHref, fmtDay, money, qtyText, todayVN } from "../format";
 
 export default function Reports() {
   const [tab, setTab] = useState<"pnl" | "inv">("pnl");
@@ -31,12 +31,12 @@ function Pnl() {
   const hasData = rows.length > 0 && (rev > 0 || cogs > 0 || exp > 0);
   return (
     <div className="stack">
-      <PageHeader subtitle={`${from === to ? from : `${from} → ${to}`} · nhóm theo ${by === "day" ? "ngày" : by === "channel" ? "kênh bán" : "nhóm hàng"}`} actions={<>
+      <PageHeader subtitle={`${from === to ? fmtDay(from) : `${fmtDay(from)} → ${fmtDay(to)}`} · nhóm theo ${by === "day" ? "ngày" : by === "channel" ? "kênh bán" : "nhóm hàng"}`} actions={<>
         <ExportButton filename={`lai-lo-${from}_${to}`} rows={rows} columns={[{ label: by === "day" ? "Ngày" : by === "channel" ? "Kênh" : "Nhóm", value: (x) => lab(x.label) }, { label: "Doanh thu", value: (x) => x.revenue }, { label: "Giá vốn", value: (x) => x.cogs }, { label: "Lãi gộp", value: (x) => x.gross }]} />
         <a className="btn ghost sm" href={downloadHref(`/reports/export/orders.csv?from=${from}&to=${to}`)} download="orders.csv">Xuất CSV đơn hàng</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/export/pnl.csv?from=${from}&to=${to}&groupBy=${by}`)} download="pnl.csv">Xuất CSV lãi lỗ</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/pnl.pdf?from=${from}&to=${to}&groupBy=${by}`)} download data-testid="pnl-pdf">Tải PDF lãi lỗ</a>
-        <a className="btn ghost sm" href={downloadHref(`/reports/export/daily.csv?day=${to}`)} download="daily.csv">Xuất CSV theo ngày ({to})</a></>} />
+        <a className="btn ghost sm" href={downloadHref(`/reports/export/daily.csv?day=${to}`)} download="daily.csv">Xuất CSV theo ngày ({fmtDay(to)})</a></>} />
       <FilterBar>
         <DateRangeFilter value={range} onChange={setRange} />
         <Segmented value={by} onChange={setBy} options={[{ v: "day", label: "Theo ngày" }, { v: "channel", label: "Theo kênh" }, { v: "group", label: "Theo nhóm hàng" }]} />

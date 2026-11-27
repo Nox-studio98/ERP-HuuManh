@@ -108,7 +108,7 @@ export default function Purchasing() {
             </div>
           </Card>);
       })}
-      <div className="hint">Đề xuất = tốc độ bán × (thời gian giao + số ngày dự trữ) − tồn khả dụng, làm tròn lên theo đơn vị đặt. Hàng sắp hết hạn trước khi hàng mới về không tính vào tồn. Cài đặt: <code>reorder.lookback_days</code>, <code>reorder.cover_days</code>.</div>
+      <div className="hint">Đề xuất = tốc độ bán × (thời gian giao + số ngày dự trữ) − tồn khả dụng, làm tròn lên theo đơn vị đặt. Hàng sắp hết hạn trước khi hàng mới về không tính vào tồn. Chỉnh số ngày tính tốc độ bán và số ngày dự trữ ở Cài đặt → Bán hàng & giá.</div>
       <ProductPicker open={pick} onClose={() => setPick(false)} title="Chọn sản phẩm để cài NCC" onPick={(p) => setPs({ id: p.id, name: p.name })} />
       {ps && <SupplierSettings product={ps} suppliers={sup.data ?? []} canWrite={can("products.write")} onClose={() => setPs(null)} onSaved={() => { setPs(null); sug.reload(); }} />}
     </div>

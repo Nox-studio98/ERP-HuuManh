@@ -50,7 +50,7 @@ export default function Sepay() {
           { label: "Trạng thái", value: (r: any) => STATUS[r.status]?.label ?? r.status }, { label: "Lý do", value: (r: any) => reasonText(r.reason) }, { label: "Mã tham chiếu", value: (r: any) => r.referenceCode ?? "" },
         ]} />} />
       {cfg.data && !cfg.data.enabled && <Banner>SePay đang <b>tắt</b>: giao dịch gửi tới (nếu có) đều được ghi là chưa khớp. Bật ở Cài đặt → Thanh toán SePay sau khi đã tạo webhook (xem docs/SEPAY.md).</Banner>}
-      {cfg.data?.enabled && !cfg.data.webhookSecretSet && <Banner tone="danger">Chưa đặt secret SEPAY_WEBHOOK_SECRET: mọi webhook SePay đều bị từ chối.</Banner>}
+      {cfg.data?.enabled && !cfg.data.webhookSecretSet && <Banner tone="danger">Chưa cài khoá bí mật xác thực webhook SePay: mọi thông báo từ SePay đều bị từ chối. Cần đặt biến SEPAY_WEBHOOK_SECRET khi triển khai (xem docs/SEPAY.md).</Banner>}
       {cfg.data?.bankCheck?.mismatch && (
         <Banner tone="danger">
           Ngân hàng nhận tiền trong Cài đặt là <b>{cfg.data.bankCheck.selected?.shortName ?? `mã ${cfg.data.bank?.bin}`}</b>, nhưng giao dịch SePay gần nhất đến từ <b>{cfg.data.bankCheck.lastGateway}</b>.

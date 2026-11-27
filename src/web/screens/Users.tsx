@@ -6,8 +6,10 @@ import { toast } from "../components/toast";
 import { ROLES, fmtDateTime } from "../format";
 import { Banner } from "../components/ui";
 
+/** Tài khoản nội bộ của hệ thống (không đăng nhập được): ẩn khỏi danh sách để tránh sửa nhầm. */
+const SYSTEM_USERS = ["system", "he-thong-sepay"];
 export default function Users() {
-  const u = useAsync(() => get("/users").then((r) => items<any>(r)), []);
+  const u = useAsync(() => get("/users").then((r) => items<any>(r).filter((x: any) => !SYSTEM_USERS.includes(x.username))), []);
   const [edit, setEdit] = useState<any>(null);
   const [temp, setTemp] = useState<{ username: string; pw: string } | null>(null);
   const [q, setQ] = useState(""), [role, setRole] = useState(""), [st, setSt] = useState("");

@@ -128,7 +128,7 @@ function Bulk({ canWrite, canCost }: { canWrite: boolean; canCost: boolean }) {
           { key: "o", label: "Giá hiện tại", num: true, sort: (p) => priceOf(p), render: (p) => (priceOf(p) ? `${money(priceOf(p))}/${unitLabel(p.baseUnit)}` : "—") },
           { key: "w", label: "Giá mới", right: true, render: (p) => (
             <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", minWidth: 130 }}>
-              <input className="input num" style={{ textAlign: "right", maxWidth: 140 }} inputMode="numeric" disabled={!canWrite} aria-label={`Giá mới ${p.name}`} placeholder={String(priceOf(p) || "")}
+              <input className="input num" style={{ textAlign: "right", maxWidth: 140 }} inputMode="numeric" disabled={!canWrite} aria-label={`Giá mới ${p.name}`} placeholder={priceOf(p) ? new Intl.NumberFormat("vi-VN").format(priceOf(p)) : ""}
                 value={edits[p.id] ? new Intl.NumberFormat("vi-VN").format(edits[p.id]) : ""} onChange={(e) => setEdits({ ...edits, [p.id]: parseInt(e.target.value.replace(/\D/g, "") || "0", 10) })} />
               {edits[p.id] > 0 && p.avgCost ? <span className="small" style={{ color: edits[p.id] < p.avgCost ? "var(--danger)" : "var(--muted)" }}>{edits[p.id] < p.avgCost ? "Dưới giá vốn! " : "Biên "}{Math.round(((edits[p.id] - p.avgCost) / edits[p.id]) * 100)}%</span> : null}
             </div>) },
