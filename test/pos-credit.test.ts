@@ -258,7 +258,9 @@ describe("B1: thu nợ tại quầy", () => {
     expect(v).toEqual({ fund_id: 1, direction: "in", amount: 120000 });
 
     // chuyển khoản vào quỹ ngân hàng — không vào tiền mặt ca
-    const tf = await api("cashier", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 80000, method: "transfer", ref: "FT-ABC", idempotencyKey: uid() });
+    // C2-07: thu ngân không tự khai chuyển khoản; kế toán/chủ (finance.write) ghi được
+    expect((await api("cashier", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 80000, method: "transfer", ref: "FT-ABC", idempotencyKey: uid() })).status).toBe(403);
+    const tf = await api("owner", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 80000, method: "transfer", ref: "FT-ABC", idempotencyKey: uid() });
     expect(tf.status).toBe(201);
     expect(await outstanding(inv.id)).toBe(0);
     expect((await api("cashier", "GET", `${V}/shifts/${cashierShift}/summary`)).body.cashFormula.expected).toBe(after.expected);

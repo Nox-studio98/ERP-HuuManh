@@ -161,7 +161,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
             {(d.payments ?? []).map((p: any, i: number) => <div key={i}><span className="muted">{METHODS[p.method] ?? p.method}</span><span className="money">{money(p.amount)}</span></div>)}
           </div>
           <div className="row wrap">
-            <Button variant="soft" onClick={() => setMode("receipt")}>In lại</Button>
+            <Button variant="soft" onClick={() => { o.reload(); setMode("receipt"); }}>In lại</Button>{/* tải lại để QR/số còn nợ trên phiếu là số hiện tại */}
             <Button variant="ghost" onClick={() => shareReceipt(d)}>Chia sẻ</Button>
             {can("pos.sell") && d.kind === "sale" && d.channel === "pos" && <Button variant="ghost" onClick={() => copyToPos(d)}>Sao chép</Button>}
             {can("orders.edit") && d.kind === "sale" && <Button variant="ghost" onClick={() => setMode("meta")}>Sửa thông tin</Button>}

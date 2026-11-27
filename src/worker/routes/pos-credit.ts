@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppBindings } from "../env";
 import { can, maskPhone, requirePerm } from "../lib/rbac";
-import { AppError, conflict, notFound } from "../lib/errors";
+import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { vnDate } from "../lib/time";
 import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
@@ -97,11 +97,17 @@ const debtPaySchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(100),
 });
 
-/** Thu nợ khách lẻ: tiền mặt vào quỹ của ca (nên có trong tiền mặt dự kiến khi chốt ca); chuyển khoản vào quỹ ngân hàng. Gọi lại cùng idempotencyKey → 409 already_done. */
+/**
+ * Thu nợ khách lẻ: tiền mặt vào quỹ của ca (nên có trong tiền mặt dự kiến khi chốt ca). Gọi lại cùng idempotencyKey → 409 already_done.
+ * Chuyển khoản "tự khai" KHÔNG phải việc của thu ngân (không có giao dịch thật đối chiếu): thu ngân chỉ dùng tiền mặt hoặc quét mã QR HDS (SePay tự xác nhận);
+ * ghi nhận chuyển khoản thủ công cần quyền `finance.write`.
+ */
 posCreditRoutes.post("/pos/debt-payments", requirePerm("pos.sell"), async (c) => {
   const body = await parseBody(c, debtPaySchema);
   const db = c.env.DB;
   const user = c.get("user");
+  if (body.method === "transfer" && !can(user.role, "finance.write"))
+    throw forbidden("forbidden", "Ghi nhận chuyển khoản thủ công cần quyền kế toán. Khách chuyển khoản: cho quét mã QR thu nợ để hệ thống tự xác nhận.");
   const cu = await retailCustomer(db, body.customerId);
   const invoices = await openInvoices(db, cu.id);
   const owed = invoices.reduce((s, i) => s + i.outstanding, 0);
@@ -112,39 +118,52 @@ posCreditRoutes.post("/pos/debt-payments", requirePerm("pos.sell"), async (c) =>
   if (body.amount > cap) throw new AppError(422, "amount_exceeds_debt", `Số thu vượt số còn nợ (${cap}đ)`, { outstanding: cap });
 
   let fundId: number;
+  let shiftId: number | null = null;
   if (body.method === "cash") {
-    const shift = await db.prepare(`SELECT fund_id FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1`).bind(user.id).first<{ fund_id: number }>();
+    const shift = await db.prepare(`SELECT id, fund_id FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1`).bind(user.id).first<{ id: number; fund_id: number }>();
     if (!shift) throw conflict("no_open_shift", "Cần mở ca để thu tiền mặt");
     fundId = shift.fund_id;
+    shiftId = shift.id;
   } else {
     const f = await db.prepare(`SELECT id FROM funds WHERE type = 'bank' AND active = 1 ORDER BY id LIMIT 1`).first<{ id: number }>();
     if (!f) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ ngân hàng");
     fundId = f.id;
   }
-  const res = await createPayment(c, {
-    direction: "in", partnerType: "customer", partnerId: cu.id, fundId, amount: body.amount, method: body.method,
-    ref: body.ref ?? null, note: `Thu nợ tại quầy — ${cu.name}`, idempotencyKey: body.idempotencyKey,
-    allocations: target ? [{ invoiceId: target.id, amount: body.amount }] : undefined,
-  });
+  let res;
+  try {
+    res = await createPayment(c, {
+      direction: "in", partnerType: "customer", partnerId: cu.id, fundId, amount: body.amount, method: body.method,
+      ref: body.ref ?? null, note: `Thu nợ tại quầy — ${cu.name}`, idempotencyKey: body.idempotencyKey,
+      allocations: target ? [{ invoiceId: target.id, amount: body.amount }] : undefined,
+      // Tiền mặt: ca phải CÒN MỞ lúc ghi (chốt ca chạy song song → phiếu thu không rơi ra ngoài mọi ca) — kiểm trong cùng batch
+      extra: shiftId ? [assertStmt(db, "pos.debt_shift_open", `SELECT status = 'open' FROM shifts WHERE id = ?`, [shiftId])] : undefined,
+    });
+  } catch (e) {
+    if (shiftId && /state_changed/.test(String((e as Error)?.message)) && !(await db.prepare(`SELECT 1 AS x FROM shifts WHERE id = ? AND status = 'open'`).bind(shiftId).first()))
+      throw conflict("shift_closed", "Ca vừa được chốt, không thu tiền mặt vào ca này được");
+    throw e;
+  }
   return c.json({ ...res, debt: { outstanding: owed - body.amount + Math.max(0, res.unapplied) } }, 201);
 });
 
 // ---------------------------------------------------------------- B1: mã QR thu nợ của một hoá đơn nợ khách lẻ (không cần quyền debt.view)
-posCreditRoutes.get("/pos/invoices/:id/pay-info", requirePerm("pos.sell"), async (c) => {
+// POST (không phải GET): lần đầu có thể phát hành mã thanh toán (ghi `pay_codes`) — việc xem không được ghi dữ liệu.
+// Chỉ trả hoá đơn bán của khách lẻ ĐANG CÓ NỢ; hoá đơn khác (đã trả hết, của khách sỉ, điều chỉnh) trả 404 để thu ngân không dò được theo id.
+posCreditRoutes.post("/pos/invoices/:id/pay-info", requirePerm("pos.sell"), async (c) => {
   const db = c.env.DB;
   const id = idParam(c.req.param("id"));
   const inv = await db
     .prepare(`SELECT i.id, i.code, i.status, i.kind, i.customer_id, ${INVOICE_OUTSTANDING_SQL} AS os FROM invoices i JOIN customers cu ON cu.id = i.customer_id AND cu.type = 'retail' WHERE i.id = ?`)
     .bind(id)
     .first<{ id: number; code: string; status: string; kind: string; customer_id: number; os: number }>();
-  if (!inv || inv.kind === "adjustment") throw notFound("invoice_not_found", "Không tìm thấy hoá đơn nợ");
+  if (!inv || inv.kind === "adjustment" || inv.status !== "open" || !(inv.os > 0)) throw notFound("invoice_not_found", "Không tìm thấy hoá đơn nợ");
   const cfg = await sepayConfig(db);
   if (!cfg.enabled || !cfg.flow.b2b || !cfg.bank.account) return c.json({ available: false });
-  const amount = Math.max(0, inv.os);
+  const amount = inv.os;
   const code = await ensurePayCode(db, "b2b", inv.id);
   return c.json({
-    available: inv.status === "open" && amount > 0, code, amount, invoiceCode: inv.code,
-    qrPayload: amount > 0 ? buildVietQr({ bankBin: cfg.bank.bin, accountNo: cfg.bank.account, amount, content: code }) : null,
+    available: true, code, amount, invoiceCode: inv.code,
+    qrPayload: buildVietQr({ bankBin: cfg.bank.bin, accountNo: cfg.bank.account, amount, content: code }),
   });
 });
 

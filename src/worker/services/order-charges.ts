@@ -19,7 +19,7 @@ export type ResolvedCharge = { chargeTypeId: number | null; name: string; amount
 
 /**
  * Kiểm và chuẩn hoá các khoản thu khác.
- *  - Loại có sẵn (chargeTypeId): phải còn hoạt động; số tiền khác mặc định (khi mặc định > 0) cần quyền `pos.other_charge`.
+ *  - Loại có sẵn (chargeTypeId): phải còn hoạt động; số tiền khác mặc định cần quyền `pos.other_charge` (loại mặc định 0 = nhập số tiền tuỳ ý → cũng cần quyền).
  *  - Nhập tay (không có chargeTypeId): cần quyền `pos.other_charge` và phải có tên.
  */
 export async function resolveCharges(db: D1Database, role: Role, input: ChargeInput[] | undefined): Promise<ResolvedCharge[]> {
@@ -28,7 +28,7 @@ export async function resolveCharges(db: D1Database, role: Role, input: ChargeIn
     if (ch.chargeTypeId) {
       const t = await db.prepare(`SELECT id, name, default_amount, active FROM charge_types WHERE id = ?`).bind(ch.chargeTypeId).first<{ id: number; name: string; default_amount: number; active: number }>();
       if (!t || !t.active) throw new AppError(422, "charge_type_not_found", "Loại thu khác không tồn tại hoặc đã ngừng", { chargeTypeId: ch.chargeTypeId });
-      if (t.default_amount > 0 && ch.amount !== t.default_amount && !can(role, "pos.other_charge")) throw forbidden("forbidden", "Sửa số tiền thu khác cần quyền quản lý");
+      if (ch.amount !== t.default_amount && !can(role, "pos.other_charge")) throw forbidden("forbidden", "Sửa số tiền thu khác cần quyền quản lý");
       out.push({ chargeTypeId: t.id, name: t.name, amount: ch.amount });
     } else {
       if (!can(role, "pos.other_charge")) throw forbidden("forbidden", "Nhập tay khoản thu khác cần quyền quản lý");

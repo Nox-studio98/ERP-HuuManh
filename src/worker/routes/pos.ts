@@ -153,7 +153,10 @@ posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
   if (diff !== 0 && !body.diffReason) {
     throw new AppError(422, "diff_reason_required", "Tiền kiểm đếm chênh lệch so với dự kiến, vui lòng nhập lý do", { expectedCash: expected, diff });
   }
+  try {
   await db.batch([
+    // Chốt ca bấm 2 lần / hai người cùng chốt: chỉ một lần chạy (lần sau 409), không ghi 2 audit
+    assertStmt(db, "shift.close", `SELECT status = 'open' FROM shifts WHERE id = ?`, [id]),
     db
       .prepare(
         `UPDATE shifts SET status='closed', closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), expected_cash=?, counted_cash=?, diff_cash=?, diff_reason=?
@@ -169,6 +172,10 @@ posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
       reason: body.diffReason,
     }),
   ]);
+  } catch (e) {
+    if (/state_changed/.test(String((e as Error)?.message))) throw conflict("shift_closed", "Ca đã được chốt");
+    throw e;
+  }
   const closed = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
   const report = await salesSummary(db, `o.shift_id = ?`, [id]);
   return c.json({ shift: closed, report });
@@ -269,7 +276,8 @@ async function getOrderFull(c: Ctx, orderId: number) {
   const charges = (await db.prepare(`SELECT id, charge_type_id, name, amount, refunded_amount FROM order_charges WHERE order_id = ? ORDER BY id`).bind(orderId).all()).results;
   const credit = o.kind === "sale" && o.channel === "pos" ? await creditReceiptInfo(db, orderId) : null;
   const canCost = can(role, "prices.view_cost");
-  const { customer_phone, cost_total, ...rest } = o;
+  const { customer_phone, cost_total, receiver_phone, ship_address, ...rest } = o;
+  const pii = can(role, "customers.view_pii");
   // A-13: liên kết đơn đổi hàng (đơn bán mới ↔ đơn gốc ↔ phiếu trả cùng lần đổi)
   const exchange = o.exchange_of_order_id
     ? await db.prepare(`SELECT id, code FROM orders WHERE id = ?`).bind(o.exchange_of_order_id).first<{ id: number; code: string }>()
@@ -278,6 +286,9 @@ async function getOrderFull(c: Ctx, orderId: number) {
       : null;
   return {
     ...rest,
+    // C2-01: SĐT / địa chỉ người nhận che như danh sách khi thiếu customers.view_pii
+    receiver_phone: maskPhone(receiver_phone, role),
+    ship_address: pii || !ship_address ? ship_address : "***",
     metaVersion,
     exchange: exchange ? { role: o.exchange_of_order_id ? "new_sale" : "return", linkedId: exchange.id, linkedCode: exchange.code } : null,
     ...(canCost ? { cost_total } : {}),
@@ -407,12 +418,14 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const creditAmount = body.credit?.amount ?? 0;
   const creditCfg = await creditSettings(db);
   let overLimit = false;
+  let outstandingNow = 0; // dư nợ lúc xin duyệt — ghi vào phiếu duyệt để phiếu không còn hiệu lực khi dư nợ tăng thêm (PA-2)
   if (body.credit) {
     if (soldAt) throw new AppError(422, "credit_offline_not_allowed", "Đơn lập khi offline không được ghi nợ (không kiểm được hạn mức)");
     if (!creditCfg.enabled) throw conflict("credit_disabled", "Chưa bật bán nợ khách lẻ (Cài đặt → Công nợ)");
     if (!customer || customer.type !== "retail" || !customer.phone) throw new AppError(422, "credit_needs_customer", "Ghi nợ cần gắn khách lẻ có số điện thoại");
     if (creditAmount + paid !== total) throw new AppError(422, "credit_mismatch", "Số ghi nợ phải bằng đúng tổng đơn trừ các khoản đã thu", { total, paid, credit: creditAmount });
     const outstanding = await openDebtOf(db, customer.id);
+    outstandingNow = outstanding;
     // Hạn mức 0 = khách chưa được bán nợ (chặn cứng). Vượt hạn mức > 0 → cần approval order.credit đã duyệt (kiểm ở plan(), guard trong batch cho vượt khi có duyệt)
     if (!(customer.credit_limit > 0))
       throw conflict("credit_limit_exceeded", "Khách chưa được đặt hạn mức nợ", { creditLimit: 0, outstanding, available: 0 });
@@ -479,7 +492,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const allReasons = needCreditApproval || overLimit ? [...reasons, ...(overLimit ? ["credit_limit"] : ["credit"])] : reasons;
     // vượt hạn mức luôn cần phiếu duyệt (kể cả quản lý/chủ — không tự bỏ qua)
     if (allReasons.length && (overLimit || !can(user.role, "approvals.decide"))) {
-      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount } : {}) }, await cartHash(body));
+      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount, outstanding: outstandingNow, creditLimit: customer?.credit_limit ?? 0 } : {}) }, await cartHash(body));
     } else if (reasons.length) {
       // A-29: người có quyền tự duyệt không cần phiếu, nhưng phải ghi lý do (audit)
       if (!body.overrideReason) throw new AppError(422, "override_reason_required", "Bán dưới giá vốn hoặc giảm giá vượt ngưỡng cần nhập lý do", { reasons });
@@ -528,10 +541,13 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
       lineIds.push(r!.id);
     }
     const costTotal = p.costs.reduce((s, x) => s + x, 0);
-    const stmts: D1PreparedStatement[] = [];
+    const stmts: D1PreparedStatement[] = [
+      // Ca phải CÒN MỞ lúc ghi (chốt ca chạy song song → đơn không rơi ra ngoài mọi ca / ngoài tiền mặt dự kiến)
+      assertStmt(db, "pos.shift_open", `SELECT status = 'open' FROM shifts WHERE id = ?`, [shift.id]),
+    ];
     // B1: chốt chặn hạn mức đặt ĐẦU batch — hai quầy ghi nợ đồng thời chỉ một quầy qua (quầy kia 409)
     if (body.credit && customer) {
-      const g = creditLimitGuard(customer.id, creditAmount, overLimit && approvalUsed != null);
+      const g = creditLimitGuard(customer.id, creditAmount, overLimit && approvalUsed != null ? approvalUsed : null);
       stmts.push(assertStmt(db, "pos.credit_limit", g.sql, g.binds));
       if (overLimit && approvalUsed) stmts.push(onceStmt(db, "pos.credit_limit_approval", approvalUsed)); // phiếu duyệt vượt hạn mức dùng một lần
     }
@@ -600,6 +616,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     }
   } catch (e) {
     await cancelDraft();
+    if (/state_changed/.test(String((e as Error)?.message)) && !(await db.prepare(`SELECT 1 AS x FROM shifts WHERE id = ? AND status = 'open'`).bind(shift.id).first()))
+      throw conflict("shift_closed", "Ca bán hàng vừa được chốt — mở ca mới để bán");
     if (body.credit && customer && /state_changed/.test(String((e as Error)?.message))) {
       const outstanding = await openDebtOf(db, customer.id);
       if (outstanding + creditAmount > customer.credit_limit) throw conflict("credit_limit_exceeded", "Vượt hạn mức nợ của khách (vừa có đơn nợ khác)", { creditLimit: customer.credit_limit, outstanding, available: Math.max(0, customer.credit_limit - outstanding) });
@@ -635,7 +653,15 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
     const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
     // Duyệt gắn với đúng giỏ hàng (hash dòng + giảm giá) và đúng loại lý do, không chỉ clientUuid
     const okUuid = a && (() => { try { const j = JSON.parse(a.payload_json ?? "{}"); return j.clientUuid === clientUuid && j.hash === hash; } catch { return false; } })();
-    if (a && okUuid && a.requested_by === user.id && a.type === type) {
+    // C2-04: lý do hiện tại phải nằm trong lý do người duyệt đã thấy (duyệt "vượt ngưỡng" không dùng được cho "vượt hạn mức"); duyệt vượt hạn mức bao cả vượt ngưỡng
+    const okReasons = a && (() => {
+      try {
+        const approved = new Set<string>(JSON.parse(a.payload_json ?? "{}").reasons ?? []);
+        if (approved.has("credit_limit")) approved.add("credit");
+        return reasons.every((r) => approved.has(r));
+      } catch { return false; }
+    })();
+    if (a && okUuid && okReasons && a.requested_by === user.id && a.type === type) {
       if (a.status === "approved" && !a.ref_id) return a.id;
       if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt đã bị từ chối", { approvalId: a.id });
       if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt", { approvalId: a.id, reasons });
@@ -643,8 +669,8 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
     throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId });
   }
   const pending = await db
-    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=? AND json_extract(payload_json,'$.hash')=? AND type=?`)
-    .bind(user.id, clientUuid, hash, type)
+    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=? AND json_extract(payload_json,'$.hash')=? AND type=? AND json_extract(payload_json,'$.reasons')=?`)
+    .bind(user.id, clientUuid, hash, type, JSON.stringify(reasons))
     .first<{ id: number }>();
   let id = pending?.id;
   if (!id) {
@@ -773,12 +799,26 @@ const metaFields = {
 const metaPatchSchema = z.object({ ...metaFields, version: z.number().int().min(0).optional() }).refine((b) => b.sellerId !== undefined || b.note !== undefined, { message: "Cần sellerId hoặc note" });
 const metaBulkSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(100), ...metaFields }).refine((b) => b.sellerId !== undefined || b.note !== undefined, { message: "Cần sellerId hoặc note" });
 
+/** Kỳ lương (theo giờ VN) chứa ngày hoàn tất đơn — cơ sở hoa hồng / thưởng doanh số của người bán. */
+const payrollPeriodOf = (o: { completed_at?: string | null; created_at: string }) => vnPeriod(new Date(o.completed_at ?? o.created_at));
+
+/** C2-06: đổi người bán làm dịch doanh số/hoa hồng giữa các người → không cho khi kỳ lương chứa ngày hoàn tất đã duyệt/đã chi (kỳ mới tính chưa duyệt vẫn cho; hash đầu vào báo payroll_stale). */
+async function assertPayrollOpenForSeller(db: D1Database, o: any, patch: { sellerId?: number | null }) {
+  if (patch.sellerId === undefined) return;
+  const next = patch.sellerId === o.created_by ? null : patch.sellerId;
+  if (next === (o.seller_id ?? null)) return;
+  const locked = await db.prepare(`SELECT 1 AS x FROM payroll_periods WHERE period = ? AND status IN ('approved','paid')`).bind(payrollPeriodOf(o)).first();
+  if (locked) throw conflict("payroll_locked", `Kỳ lương của đơn ${o.code} đã duyệt/đã chi — không đổi người bán được (dùng điều chỉnh lương kỳ sau)`, { orderId: o.id });
+}
+
 /** Câu lệnh sửa một đơn: kiểm tra còn là đơn bán, (tuỳ chọn) đúng version, cập nhật, ghi audit. Không đụng tiền/hàng. */
 function metaStatements(c: Ctx, o: any, patch: { sellerId?: number | null; note?: string | null }, version?: number) {
   const db = c.env.DB;
   const nextSeller = patch.sellerId === undefined ? o.seller_id : patch.sellerId === o.created_by ? null : patch.sellerId;
   const nextNote = patch.note === undefined ? o.note : patch.note ? patch.note : null;
+  const sellerChanged = nextSeller !== (o.seller_id ?? null);
   const stmts = [
+    ...(sellerChanged ? [assertStmt(db, "order.meta.payroll", `SELECT NOT EXISTS (SELECT 1 FROM payroll_periods WHERE period = ? AND status IN ('approved','paid'))`, [payrollPeriodOf(o)])] : []),
     assertStmt(db, "order.meta", `SELECT kind = 'sale' AND status <> 'draft' AND ${version === undefined ? "1" : `${metaVersionSql} = ?`} FROM orders WHERE id = ?`, version === undefined ? [o.id] : [String(o.id), version, o.id]),
     db.prepare(`UPDATE orders SET seller_id = ?, note = ? WHERE id = ?`).bind(nextSeller, nextNote, o.id),
     auditStmt(c, { action: "order.meta", entity: "order", entityId: o.id, before: { sellerId: o.seller_id, note: o.note }, after: { sellerId: nextSeller, note: nextNote } }),
@@ -787,7 +827,7 @@ function metaStatements(c: Ctx, o: any, patch: { sellerId?: number | null; note?
 }
 
 async function loadMetaOrder(db: D1Database, id: number) {
-  const o = await db.prepare(`SELECT id, code, kind, status, seller_id, created_by, note, created_at FROM orders WHERE id = ?`).bind(id).first<any>();
+  const o = await db.prepare(`SELECT id, code, kind, status, seller_id, created_by, note, created_at, completed_at FROM orders WHERE id = ?`).bind(id).first<any>();
   if (!o) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   if (o.kind !== "sale" || o.status === "draft") throw new AppError(422, "not_editable", `Chỉ sửa thông tin được với đơn bán (${o.code})`, { orderId: id });
   await assertPeriodOpen(db, o.created_at, "thay đổi đơn hàng");
@@ -801,6 +841,7 @@ posRoutes.patch("/orders/:id/meta", requirePerm("orders.edit"), async (c) => {
   if (!Number.isInteger(id) || id <= 0) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   const o = await loadMetaOrder(db, id);
   if (body.sellerId) await assertSeller(db, body.sellerId);
+  await assertPayrollOpenForSeller(db, o, body);
   await db.batch(metaStatements(c, o, body, body.version));
   return c.json(await getOrderFull(c, id));
 });
@@ -812,6 +853,7 @@ posRoutes.post("/orders/meta/bulk", requirePerm("orders.edit"), async (c) => {
   if (body.sellerId) await assertSeller(db, body.sellerId);
   const orders = [];
   for (const id of ids) orders.push(await loadMetaOrder(db, id));
+  for (const o of orders) await assertPayrollOpenForSeller(db, o, body);
   await db.batch(orders.flatMap((o) => metaStatements(c, o, body)));
   return c.json({ updated: ids.length, ids });
 });
@@ -1012,7 +1054,7 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
 
   const { prepared, claimed, total: linesTotal, costTotal } = await prepareReturnLines(db, origId, body.lines);
   const chargesRefund = await chargesRefundOf(db, origId, claimed, body);
-  const total = linesTotal + chargesRefund; // tổng giá trị phiếu trả (hàng + thu khác được hoàn)
+  const total = linesTotal + chargesRefund; // tổng giá trị phiếu trả (hàng + thu khác được hoàn) — cũng là cơ sở của ngưỡng duyệt (PA-6)
   // B1: đơn có ghi nợ → giá trị trả trừ vào nợ còn lại của hoá đơn trước, phần vượt mới hoàn tiền
   const credInv = orig.channel === "pos" ? await creditInvoiceOf(db, origId) : null;
   const debtReduction = credInv && credInv.os > 0 ? Math.min(total, credInv.os) : 0;
@@ -1024,7 +1066,7 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
   // Còn lại cần quản lý (approvals.decide) tự làm hoặc duyệt qua approvals (gắn băm yêu cầu trả như duyệt giảm giá POS).
   let approvalUsed: number | null = null;
   if (!can(user.role, "approvals.decide")) {
-    const reasons = await returnApprovalReasons(db, orig, shift, prepared, linesTotal);
+    const reasons = await returnApprovalReasons(db, orig, shift, prepared, total);
     if (reasons.length) approvalUsed = await requireReturnApproval(c, origId, body, reasons, total);
   }
   const fundId = cashRefund > 0 ? await fundFor(db, orig.store_id, body.refundMethod, shift) : null;

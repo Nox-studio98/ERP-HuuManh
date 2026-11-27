@@ -480,7 +480,7 @@ function ChargesSheet({ charges, onChange, onClose }: { charges: Charge[]; onCha
     onChange((cs) => [...cs, { key: uuid(), name: name.trim(), amount }]);
     toast(`Đã thêm ${name.trim()}`, "ok"); setName(""); setAmount(0);
   };
-  const editable = !!chosen && (chosen.defaultAmount === 0 || manual);
+  const editable = !!chosen && manual; // số tiền khác mặc định (kể cả loại mặc định 0) cần quyền pos.other_charge
   return (
     <Sheet open onClose={onClose} title="Thu khác" footer={<Button block onClick={onClose}>Xong</Button>}>
       <div className="stack" data-testid="pos-charges-sheet">
@@ -492,10 +492,10 @@ function ChargesSheet({ charges, onChange, onClose }: { charges: Charge[]; onCha
             ))}
           </div>
         )}
-        {types.loading ? <Spinner /> : !!types.data?.length && (
+        {types.loading ? <Spinner /> : !!types.data?.some((t) => manual || t.defaultAmount > 0) && (
           <div className="stack" style={{ gap: 8 }}>
             <div className="chips" role="group" aria-label="Loại thu khác">
-              {types.data.map((t) => <button key={t.id} className="chip" data-testid="pos-charge-type" aria-pressed={typeId === t.id} onClick={() => pickType(t)}>{t.name}{t.defaultAmount > 0 ? ` · ${money(t.defaultAmount)}` : ""}</button>)}
+              {types.data.filter((t) => manual || t.defaultAmount > 0).map((t) => <button key={t.id} className="chip" data-testid="pos-charge-type" aria-pressed={typeId === t.id} onClick={() => pickType(t)}>{t.name}{t.defaultAmount > 0 ? ` · ${money(t.defaultAmount)}` : ""}</button>)}
             </div>
             {chosen && (
               <div className="row" style={{ alignItems: "flex-end" }}>

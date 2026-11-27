@@ -4,10 +4,11 @@ import { Badge, Banner, Button, EmptyState, Input, MoneyInput, Segmented, Sheet,
 import { QrImage } from "./QrImage";
 import { toast } from "./toast";
 import { fmtDate, money, uuid } from "../format";
+import { useCan } from "../store";
 
 type Cust = { id: number; name: string; phone?: string | null; code?: string };
 
-/** POS-KV B1: "Thu nợ" tại quầy — chọn khách lẻ → hoá đơn đang nợ → thu tiền mặt (vào két của ca) hoặc chuyển khoản / quét mã QR HDS. */
+/** POS-KV B1: "Thu nợ" tại quầy — chọn khách lẻ → hoá đơn đang nợ → thu tiền mặt (vào két của ca) hoặc quét mã QR HDS (tự xác nhận). Ghi chuyển khoản thủ công chỉ có khi có quyền finance.write. */
 export function PosDebtSheet({ onClose }: { onClose: () => void }) {
   const [cust, setCust] = useState<Cust | null>(null);
   return (
@@ -41,6 +42,8 @@ function Pick({ onPick }: { onPick: (c: Cust) => void }) {
 }
 
 function DebtBody({ cust, onBack }: { cust: Cust; onBack: () => void }) {
+  const can = useCan();
+  const canTransfer = can("finance.write"); // thu ngân không tự khai chuyển khoản — khách chuyển khoản thì quét QR để hệ thống tự xác nhận
   const d = useAsync(() => get(`/pos/customers/${cust.id}/debts`), [cust.id]);
   const [sel, setSel] = useState<number | 0>(0); // 0 = cũ nhất trước
   const [amount, setAmount] = useState<number | null>(null);
@@ -69,7 +72,7 @@ function DebtBody({ cust, onBack }: { cust: Cust; onBack: () => void }) {
     } finally { setBusy(false); }
   };
   const showQr = async (id: number) => {
-    try { const r = await get(`/pos/invoices/${id}/pay-info`, undefined, { silent: true }); setQr(r?.available ? r : { unavailable: true }); } catch { setQr({ unavailable: true }); }
+    try { const r = await post(`/pos/invoices/${id}/pay-info`, {}, { silent: true }); setQr(r?.available ? r : { unavailable: true }); } catch { setQr({ unavailable: true }); }
   };
   return (
     <div className="stack" data-testid="debt-body">
@@ -94,7 +97,9 @@ function DebtBody({ cust, onBack }: { cust: Cust; onBack: () => void }) {
               </button>
             ))}
           </div>
-          <Segmented value={method} onChange={setMethod} fit options={[{ v: "cash", label: "Tiền mặt" }, { v: "transfer", label: "Chuyển khoản" }]} />
+          {canTransfer
+            ? <Segmented value={method} onChange={setMethod} fit options={[{ v: "cash", label: "Tiền mặt" }, { v: "transfer", label: "Chuyển khoản" }]} />
+            : <div className="hint">Thu tiền mặt tại quầy. Khách chuyển khoản: bấm “Hiện mã QR thu nợ” để khách quét, hệ thống tự gạch nợ khi tiền về.</div>}
           <MoneyInput label="Số tiền thu (₫)" value={amt} onChange={(n) => setAmount(n)} hint={`Tối đa ${money(cap)}`} />
           {method === "cash" && <div className="hint">Tiền mặt vào két của ca đang mở và được tính vào tiền mặt dự kiến khi chốt ca.</div>}
           {target && (

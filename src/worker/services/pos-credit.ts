@@ -30,12 +30,17 @@ export async function openDebtOf(db: D1Database, customerId: number): Promise<nu
   return r?.d ?? 0;
 }
 
-/** Điều kiện (assertStmt, đặt ĐẦU batch): khách có hạn mức > 0 và nợ đang mở + phần ghi nợ ≤ hạn mức → hai quầy ghi nợ đồng thời chỉ một quầy qua. */
-export function creditLimitGuard(customerId: number, amount: number, allowOver = false) {
-  // allowOver: đơn có phiếu duyệt vượt hạn mức (đã kiểm ở route) → chỉ cần khách còn hạn mức > 0
+/**
+ * Điều kiện (assertStmt, đặt ĐẦU batch): khách có hạn mức > 0 và nợ đang mở + phần ghi nợ ≤ hạn mức → hai quầy ghi nợ đồng thời chỉ một quầy qua.
+ * `overApprovalId`: đơn có phiếu duyệt vượt hạn mức → được vượt, nhưng dư nợ sau ghi nợ không quá dư nợ lúc duyệt + số ghi nợ đã duyệt
+ * (dư nợ tăng do đơn khác sau lúc duyệt → phiếu hết hiệu lực). Phiếu cũ không có dư nợ lúc duyệt thì chỉ cần hạn mức > 0.
+ */
+export function creditLimitGuard(customerId: number, amount: number, overApprovalId: number | null = null) {
+  if (overApprovalId == null)
+    return { sql: `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? <= c.credit_limit FROM customers c WHERE c.id = ?`, binds: [customerId, amount, customerId] as unknown[] };
   return {
-    sql: allowOver ? `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? >= 0 FROM customers c WHERE c.id = ?` : `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? <= c.credit_limit FROM customers c WHERE c.id = ?`,
-    binds: [customerId, amount, customerId] as unknown[],
+    sql: `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? <= COALESCE((SELECT json_extract(a.payload_json, '$.outstanding') FROM approvals a WHERE a.id = ?), ${OPEN_DEBT_SQL}) + ? FROM customers c WHERE c.id = ?`,
+    binds: [customerId, amount, overApprovalId, customerId, amount, customerId] as unknown[],
   };
 }
 
