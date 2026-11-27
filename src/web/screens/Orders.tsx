@@ -97,11 +97,11 @@ export default function Orders() {
                     <b>{o.code}</b>
                   </span>) },
                 { key: "t", label: "Thời gian", sort: (o) => o.createdAt, render: (o) => (range.from === range.to ? fmtTime(o.createdAt) : `${fmtDayShort(o.createdAt)} ${fmtTime(o.createdAt)}`) },
-                { key: "ch", label: "Kênh", sort: (o) => CHANNELS[o.channel] ?? o.channel, render: (o) => CHANNELS[o.channel] ?? o.channel },
+                { key: "ch", label: "Kênh", sort: (o) => CHANNELS[o.channel] ?? o.channel, render: (o) => <span className="nw">{CHANNELS[o.channel] ?? o.channel}</span> },
                 { key: "cu", label: "Khách", sort: (o) => o.customerName ?? "", render: (o) => o.customerName ? <span>{o.customerName}{o.customerPhone && <div className="small muted">{o.customerPhone}</div>}</span> : <span className="muted">Khách lẻ</span> },
-                { key: "sl", label: "Người bán", hideBelow: 1024, sort: (o) => o.sellerName ?? "", render: (o) => o.sellerName ?? "—" },
-                { key: "ca", label: "Thu ngân", hideBelow: 1280, sort: (o) => o.cashierName ?? "", render: (o) => o.cashierName ?? "—" },
-                { key: "pm", label: "Thanh toán", hideBelow: 1440, render: (o) => (o.methods?.length ? o.methods.map((m: string) => METHODS[m] ?? m).join(" + ") : "—") },
+                { key: "sl", label: "Người bán", hideBelow: 1024, sort: (o) => o.sellerName ?? "", render: (o) => <span className="nw">{o.sellerName ?? "—"}</span> },
+                { key: "ca", label: "Thu ngân", hideBelow: 1280, sort: (o) => o.cashierName ?? "", render: (o) => <span className="nw">{o.cashierName ?? "—"}</span> },
+                { key: "pm", label: "Thanh toán", hideBelow: 1600, render: (o) => (o.methods?.length ? o.methods.map((m: string) => METHODS[m] ?? m).join(" + ") : "—") },
                 { key: "st", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={tone(o.status)}>{o.kind === "return" ? "Trả hàng" : ORDER_STATUS[o.status] ?? o.status}</Badge> },
                 { key: "tt", label: "Tổng", num: true, sort: signed, render: (o) => <span className="money">{o.kind === "return" ? "-" : ""}{money(o.total)}</span> },
               ]} />

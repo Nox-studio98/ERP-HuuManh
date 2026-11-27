@@ -681,6 +681,9 @@ async function checkDevice(c: Ctx, deviceId: string) {
 
 hrRoutes.get("/me/attendance/today", requirePerm("hr.self"), async (c) => {
   const db = c.env.DB;
+  // Tài khoản không có hồ sơ nhân viên (vd chủ cửa hàng): trả 200 { employee: null } thay vì 404 để màn Chấm công không phát sinh lỗi console.
+  const linked = await db.prepare(`SELECT id FROM employees WHERE user_id = ?`).bind(c.get("user").id).first<{ id: number }>();
+  if (!linked) return c.json({ employee: null });
   const me = await employeeOfUser(db, c.get("user").id);
   const now = nowIso();
   const today = vnDate();

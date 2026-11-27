@@ -36,7 +36,7 @@ export default function Me() {
   const [linked, setLinked] = useState<"loading" | "yes" | "no">("loading");
   useEffect(() => {
     get("/me/attendance/today", undefined, { silent: true })
-      .then(() => setLinked("yes"))
+      .then((r) => setLinked(r && r.employee === null ? "no" : "yes"))
       .catch((e) => setLinked(e instanceof ApiError && e.code === "employee_not_linked" ? "no" : "yes")); // lỗi khác: để các tab tự báo
   }, []);
   if (linked === "loading") return <Spinner />;
@@ -84,7 +84,7 @@ function Today({ onCorrection }: { onCorrection: (p: any) => void }) {
   const flushing = useRef(false);
 
   const load = useCallback(async () => {
-    try { setD(await get("/me/attendance/today", undefined, { silent: true })); setNoEmp(false); }
+    try { const r = await get("/me/attendance/today", undefined, { silent: true }); if (r && r.employee === null) setNoEmp(true); else { setD(r); setNoEmp(false); } }
     catch (e) { if (e instanceof ApiError && e.code === "employee_not_linked") setNoEmp(true); else if (!(e instanceof ApiError && e.status === 0)) toast((e as Error).message, "error"); }
     finally { setLoading(false); }
   }, []);

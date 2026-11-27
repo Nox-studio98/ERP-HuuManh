@@ -866,3 +866,20 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
   .sheet .stmt th, .sheet .stmt td { padding: 6px 4px; }
   .sheet .stmt .code .muted { display: none; }
 }
+/* ===== UX rest: POS 390px ===== */
+/* Nút Thanh toán dính đáy, nằm trên tab bar (chừa chiều cao tab bar + safe-area) */
+.pos-paybar { position: sticky; bottom: calc(var(--tab-h) + env(safe-area-inset-bottom)); z-index: 5; background: var(--surface); padding: var(--s-2) 0 var(--s-1); margin-top: var(--s-1); }
+@media (min-width: 900px) { .pos-paybar { position: static; padding: 0; margin: 0; } }
+/* Giỏ gọn trên điện thoại: bước số lượng, ô đơn vị và ô Giảm không xuống dòng */
+@media (max-width: 899px) {
+  .pos-cart .cartline .row.wrap { flex-wrap: nowrap; gap: var(--s-1); }
+  .pos-cart .qty button { width: 38px; height: 38px; }
+  .pos-cart .qty input { width: 44px; height: 38px; }
+  .pos-cart .cartline select.input { width: 66px !important; min-height: 38px; padding: 0 4px; }
+  .pos-cart .cartline .input[placeholder^="Giảm"] { width: 76px !important; min-height: 38px !important; }
+  .pos-cart .cartline .btn.sm { padding: 0 var(--s-2); min-height: 38px; }
+}
+/* Hình thức thanh toán: lưới đều 2×2 trên màn hẹp, không để "Thẻ" rơi lẻ */
+.chips.pay-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chips.pay-methods .chip { padding: 0 var(--s-2); white-space: nowrap; }
+@media (min-width: 560px) { .chips.pay-methods { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

@@ -415,8 +415,10 @@ function Sell({ shift }: { shift: any }) {
                   ))}
                   <div className="grand"><span>Tổng</span><span className="money">{money(total)}</span></div>
                 </div>
-                <Button size="lg" block disabled={total <= 0} onClick={() => setCheckout(true)}>Thanh toán {money(total)}<span className="kbd-hint"> F9</span></Button>
-                <Button block variant="soft" data-testid="pos-delivery" disabled={count <= 0} onClick={() => setDelivery(true)}>Giao hàng</Button>
+                <div className="pos-paybar stack">
+                  <Button size="lg" block disabled={total <= 0} onClick={() => setCheckout(true)}>Thanh toán {money(total)}<span className="kbd-hint"> F9</span></Button>
+                  <Button block variant="soft" data-testid="pos-delivery" disabled={count <= 0} onClick={() => setDelivery(true)}>Giao hàng</Button>
+                </div>
               </div>
             </>
           )}
@@ -808,7 +810,7 @@ function CheckoutSheet({ total: localTotal, charges, payloadBase, customer, onCl
         {pays.map((p, i) => (
           <div key={i} className="card flat" style={{ padding: 12, outline: active === i ? "2px solid var(--accent)" : undefined }} onClick={() => setActive(i)}>
             <div className="row">
-              <div className="chips grow" role="radiogroup" aria-label="Hình thức thanh toán">
+              <div className="chips pay-methods grow" role="radiogroup" aria-label="Hình thức thanh toán">
                 {[["cash", "Tiền mặt"], ["transfer", "Chuyển khoản"], ["qr", "QR"], ["card", "Thẻ"]].map(([m, l]) => (
                   <button key={m} className="chip" role="radio" aria-checked={p.method === m} aria-pressed={p.method === m} onClick={() => setPays((ps) => ps.map((x, j) => (j === i ? { ...x, method: m } : x)))}>{l}</button>
                 ))}
