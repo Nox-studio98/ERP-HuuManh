@@ -111,14 +111,14 @@ Khoảng 81 phát hiện sau khi gộp trùng: 1 nghiêm trọng, ~15 cao, ~35 t
   - A-27 (giao diện): màn Soạn & giao hiện ô "Tạo đơn bổ sung cho phần thiếu" khi giao thiếu (mặc định theo `b2b.backorder_on_short`).
 - **Còn tồn sau đợt 5** (cần quyết định nghiệp vụ hoặc là tính năng mới): A-13 (tách đơn/đổi hàng), A-25 (cơ sở VAT cho hạn mức), A-26 (cổng thanh toán), A-28 (phí giao khi huỷ), C-21 (quyền `hr.manage` của kế toán), C-27 (thông báo người duyệt), C-28 (PDF báo cáo/phiếu lương), C-29 (chính sách lưu giữ dữ liệu). *(Cập nhật: A-13 đổi hàng, A-25, A-28 xong ở đợt 6a; C-21, C-26, C-29 ở đợt 6b; C-27, C-28 ở đợt 6c — PR #18.)* Phần còn lại nhỏ: B-18 (đơn giá lô milli-đồng), phép có lương cho NV giờ/ca (C-24), đơn nháp khi cho nghỉ việc (C-26), giao diện chọn đơn bổ sung khi giao thiếu (A-27).
 
-- **Đợt 6b** (migration 0026): C-21 chủ đã chốt thu hẹp quyền kế toán (bỏ `hr.manage`; thêm `timesheet.close` cho chốt/điều chỉnh công); C-26 nghỉ việc/khoá tài khoản kiểm cả chứng từ nháp; C-29 chính sách lưu giữ (GPS 12 tháng, PII nhân viên nghỉ 24 tháng, sao lưu R2 90 ngày, audit 10 năm không xoá) — xem `docs/SECOPS.md` mục 11. Tồn: màn "chuyển việc đang làm cho người khác" (EC-39).
+- **Đợt 6b** (migration 0026): C-21 chủ đã chốt thu hẹp quyền kế toán (bỏ `hr.manage`; thêm `timesheet.close` cho chốt/điều chỉnh công); C-26 nghỉ việc/khoá tài khoản kiểm cả chứng từ nháp; C-29 chính sách lưu giữ (GPS 12 tháng, PII nhân viên nghỉ 24 tháng, sao lưu R2 90 ngày, audit 10 năm không xoá) — xem `docs/SECOPS.md` mục 11. EC-39 (màn chuyển việc cho người khác) xong ở đợt 9 — xem `docs/API-dot4.md`.
 
 - **Đợt 6c** (PR #18): C-27 thông báo cho người duyệt (phiếu chi, giảm giá, hạn mức, nghỉ phép, đổi ca…); C-28 PDF báo cáo lãi lỗ và phiếu lương (`test/fix6c-*.test.ts`).
 - **Đợt 7 (26/11/2026, migration 0032) — đã sửa** (`test/fix7-*.test.ts`):
   - C-24 (phần còn lại): NV lương giờ được trả phép có lương theo **số giờ ca đã xếp** của ngày phép (không có ca → 8 giờ; nửa ngày = nửa số giờ); NV lương ca được 1 ca mỗi ngày phép (nửa ngày = 0,5 ca). Dòng "Phép có lương" riêng trong phiếu lương.
   - Ngân sách – thực tế: dòng "Hao hụt" gồm cả chênh lệch kiểm kê/điều chỉnh tồn, khớp báo cáo lãi lỗ (`lineActuals.stockCount`).
   - Điều chỉnh công nợ (xoá nợ, chiết khấu) vào lãi lỗ theo **ngày ghi sổ** `posted_at` (ngày duyệt), không theo ngày lập; sao kê khách/NCC dùng cùng ngày. Dòng cũ được điền `posted_at` từ ngày duyệt (hoặc ngày lập).
-- **Còn lại có chủ đích**: B-18 (đơn giá lô chưa đổi sang milli-đồng — đã ghi nhận lệch làm tròn, đổi kiểu dữ liệu giá vốn rủi ro cao); EC-39 màn chuyển việc cho người khác; A-13 tách đơn con; A-26 cổng thẻ/NAPAS (đã chọn SePay).
+- **Còn lại có chủ đích**: B-18 (đơn giá lô chưa đổi sang milli-đồng — đã ghi nhận lệch làm tròn, đổi kiểu dữ liệu giá vốn rủi ro cao); A-13 tách đơn con; A-26 cổng thẻ/NAPAS (đã chọn SePay).
 
 ## Đợt 8 — audit lại sau PR #23 (27/11/2026)
 Audit nghiệp vụ 3 mảng + UX/UI toàn bộ màn trên mã của PR #23 (POS-KV A+B, khách lẻ, hoa hồng, báo cáo cuối ngày, nhập Excel, xuất dùng nội bộ, chuyển quỹ). Báo cáo gốc: `dot8-A-tien-cong-no.md`, `dot8-B-kho-don.md`, `dot8-C-luong-khach-quyen.md`, `dot8-UX.md`.

@@ -862,7 +862,10 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
   .btn.sm.ghost[aria-label], .btn.ghost.sm[aria-label] { min-width: 40px; }
   .bd-nav .btn { min-height: 40px; min-width: 40px; }
   input[type="checkbox"], input[type="radio"] { min-width: 22px; min-height: 22px; }
-  label:has(> input[type="checkbox"]), label.check, .check-row { min-height: 40px; display: inline-flex; align-items: center; gap: 8px; }
+  label:has(> input[type="checkbox"]), label.check, .check-row { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; gap: 8px; }
+  /* Checkbox trần trong bảng/danh sách: bọc label .check-hit để vùng chạm >= 40x40 (không đổi bố cục PC) */
+  .check-hit { min-width: 40px; min-height: 40px; }
+  .check-hit > input[type="checkbox"] { width: 22px; height: 22px; }
   .pos-tab-x { min-width: 40px; }
 }
 @media (max-width: 480px) {
@@ -888,3 +891,6 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .chips.pay-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .chips.pay-methods .chip { padding: 0 var(--s-2); white-space: nowrap; }
 @media (min-width: 560px) { .chips.pay-methods { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* Checkbox trần trong bảng: label bọc làm vùng chạm (kích thước tối thiểu ở @media 767px) */
+.check-hit { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; vertical-align: middle; }
