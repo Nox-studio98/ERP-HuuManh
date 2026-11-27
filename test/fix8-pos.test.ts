@@ -104,13 +104,15 @@ describe("PA-2 + C2-04: phiếu duyệt ghi nợ gắn lý do và dư nợ lúc 
 });
 
 describe("C2-07: thu nợ tại quầy bằng chuyển khoản tự khai", () => {
-  it("thu ngân → 403; tiền mặt vẫn được; kế toán/chủ (finance.write) ghi được", async () => {
+  it("thu ngân → 403; tiền mặt vẫn được; chủ/quản lý/kế toán (debt.write) ghi được", async () => {
     const cu = await retail();
     expect((await sell("cashier", { customerId: cu, credit: { amount: 200000 } })).status).toBe(201);
     const tf = await api("cashier", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 80000, method: "transfer", idempotencyKey: uid() });
     expect(tf.status).toBe(403);
     expect((await api("cashier", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 50000, method: "cash", idempotencyKey: uid() })).status).toBe(201);
     expect((await api("owner", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 80000, method: "transfer", idempotencyKey: uid() })).status).toBe(201);
+    // quản lý có debt.write (như thu nợ ở màn Công nợ) → ghi được chuyển khoản thủ công
+    expect((await api("manager", "POST", `${V}/pos/debt-payments`, { customerId: cu, amount: 20000, method: "transfer", idempotencyKey: uid() })).status).toBe(201);
   });
 });
 

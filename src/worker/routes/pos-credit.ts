@@ -100,13 +100,13 @@ const debtPaySchema = z.object({
 /**
  * Thu nợ khách lẻ: tiền mặt vào quỹ của ca (nên có trong tiền mặt dự kiến khi chốt ca). Gọi lại cùng idempotencyKey → 409 already_done.
  * Chuyển khoản "tự khai" KHÔNG phải việc của thu ngân (không có giao dịch thật đối chiếu): thu ngân chỉ dùng tiền mặt hoặc quét mã QR HDS (SePay tự xác nhận);
- * ghi nhận chuyển khoản thủ công cần quyền `finance.write`.
+ * ghi nhận chuyển khoản thủ công cần quyền `debt.write` (như thu nợ ở màn Công nợ).
  */
 posCreditRoutes.post("/pos/debt-payments", requirePerm("pos.sell"), async (c) => {
   const body = await parseBody(c, debtPaySchema);
   const db = c.env.DB;
   const user = c.get("user");
-  if (body.method === "transfer" && !can(user.role, "finance.write"))
+  if (body.method === "transfer" && !can(user.role, "debt.write"))
     throw forbidden("forbidden", "Ghi nhận chuyển khoản thủ công cần quyền kế toán. Khách chuyển khoản: cho quét mã QR thu nợ để hệ thống tự xác nhận.");
   const cu = await retailCustomer(db, body.customerId);
   const invoices = await openInvoices(db, cu.id);

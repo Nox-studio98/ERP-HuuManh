@@ -8,7 +8,7 @@ import { useCan } from "../store";
 
 type Cust = { id: number; name: string; phone?: string | null; code?: string };
 
-/** POS-KV B1: "Thu nợ" tại quầy — chọn khách lẻ → hoá đơn đang nợ → thu tiền mặt (vào két của ca) hoặc quét mã QR HDS (tự xác nhận). Ghi chuyển khoản thủ công chỉ có khi có quyền finance.write. */
+/** POS-KV B1: "Thu nợ" tại quầy — chọn khách lẻ → hoá đơn đang nợ → thu tiền mặt (vào két của ca) hoặc quét mã QR HDS (tự xác nhận). Ghi chuyển khoản thủ công chỉ có khi có quyền debt.write. */
 export function PosDebtSheet({ onClose }: { onClose: () => void }) {
   const [cust, setCust] = useState<Cust | null>(null);
   return (
@@ -43,7 +43,7 @@ function Pick({ onPick }: { onPick: (c: Cust) => void }) {
 
 function DebtBody({ cust, onBack }: { cust: Cust; onBack: () => void }) {
   const can = useCan();
-  const canTransfer = can("finance.write"); // thu ngân không tự khai chuyển khoản — khách chuyển khoản thì quét QR để hệ thống tự xác nhận
+  const canTransfer = can("debt.write"); // thu ngân không tự khai chuyển khoản — khách chuyển khoản thì quét QR để hệ thống tự xác nhận
   const d = useAsync(() => get(`/pos/customers/${cust.id}/debts`), [cust.id]);
   const [sel, setSel] = useState<number | 0>(0); // 0 = cũ nhất trước
   const [amount, setAmount] = useState<number | null>(null);
