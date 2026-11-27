@@ -19,6 +19,9 @@ import { retireStaleDraft } from "../services/online-ops";
 import { sepayConfig } from "../services/sepay";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 import { cashFormula } from "../services/shift-report";
+import { chargeInputSchema, chargeStmts, MAX_CHARGES, resolveCharges } from "../services/order-charges";
+import { creditAdjustmentStmt, creditInvoiceOf, creditInvoiceStmt, creditLimitGuard, creditReceiptInfo, creditSettings, creditTermsDays, openDebtOf } from "../services/pos-credit";
+import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
 
 export const posRoutes = new Hono<AppBindings>();
 
@@ -201,6 +204,10 @@ const checkoutSchema = z.object({
   priceSnapshot: z.array(z.object({ productId: z.number().int().positive(), unitPrice: z.number().int().min(0).max(MAX_VND) })).max(200).optional(), // VND / đơn vị chính
   // A-29: người tự duyệt (quản lý/chủ) bán dưới vốn hoặc giảm sâu phải ghi lý do
   overrideReason: z.string().trim().min(3).max(300).optional(),
+  // POS-KV B2: thu khác (phí đóng gói, giỏ quà...) cộng vào tổng đơn
+  charges: z.array(chargeInputSchema).max(MAX_CHARGES).optional(),
+  // POS-KV B1: phần ghi nợ khách lẻ — phải bằng đúng tổng đơn − Σ payments
+  credit: z.object({ amount: z.number().int().positive().max(MAX_VND) }).optional(),
 });
 
 /** Người có thể là "người bán": tài khoản đang hoạt động có quyền pos.sell hoặc có hồ sơ nhân viên đang làm. */
@@ -259,6 +266,8 @@ async function getOrderFull(c: Ctx, orderId: number) {
   const discounts = (
     await db.prepare(`SELECT id, promotion_id, voucher_id, points_redeemed, amount, description FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(orderId).all()
   ).results;
+  const charges = (await db.prepare(`SELECT id, charge_type_id, name, amount, refunded_amount FROM order_charges WHERE order_id = ? ORDER BY id`).bind(orderId).all()).results;
+  const credit = o.kind === "sale" && o.channel === "pos" ? await creditReceiptInfo(db, orderId) : null;
   const canCost = can(role, "prices.view_cost");
   const { customer_phone, cost_total, ...rest } = o;
   // A-13: liên kết đơn đổi hàng (đơn bán mới ↔ đơn gốc ↔ phiếu trả cùng lần đổi)
@@ -279,6 +288,8 @@ async function getOrderFull(c: Ctx, orderId: number) {
     }),
     payments,
     discounts,
+    charges,
+    credit,
   };
 }
 
@@ -320,9 +331,9 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   const snapUsed: number[] = [];
 
   // khách hàng → nhóm giá
-  let customer: { id: number; customer_group_id: number | null } | null = null;
+  let customer: { id: number; customer_group_id: number | null; type: string; name: string; phone: string | null; credit_limit: number; payment_terms_days: number } | null = null;
   if (body.customerId) {
-    customer = await db.prepare(`SELECT id, customer_group_id FROM customers WHERE id = ? AND active = 1`).bind(body.customerId).first<any>();
+    customer = await db.prepare(`SELECT id, customer_group_id, type, name, phone, credit_limit, payment_terms_days FROM customers WHERE id = ? AND active = 1`).bind(body.customerId).first<any>();
     if (!customer) throw new AppError(422, "customer_not_found", "Không tìm thấy khách hàng");
   }
 
@@ -384,13 +395,29 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   });
   const subtotal = items.reduce((s, i) => s + i.gross, 0);
   const totalDiscount = items.reduce((s, i) => s + i.discount, 0);
-  const total = subtotal - totalDiscount;
+  // B2: thu khác cộng sau khi đã tính khuyến mãi — không bị giảm giá / voucher / điểm, không tích điểm
+  const charges = await resolveCharges(db, user.role, body.charges);
+  const chargesTotal = charges.reduce((s, ch) => s + ch.amount, 0);
+  const goodsTotal = subtotal - totalDiscount;
+  const total = goodsTotal + chargesTotal;
 
   // Thanh toán
   const paid = body.payments.reduce((s, p) => s + p.amount, 0);
-  if (paid < total) throw new AppError(422, "payment_mismatch", "Tổng thanh toán chưa đủ tổng tiền đơn", { total, paid });
+  // B1: bán nợ khách lẻ
+  const creditAmount = body.credit?.amount ?? 0;
+  const creditCfg = await creditSettings(db);
+  if (body.credit) {
+    if (soldAt) throw new AppError(422, "credit_offline_not_allowed", "Đơn lập khi offline không được ghi nợ (không kiểm được hạn mức)");
+    if (!creditCfg.enabled) throw conflict("credit_disabled", "Chưa bật bán nợ khách lẻ (Cài đặt → Công nợ)");
+    if (!customer || customer.type !== "retail" || !customer.phone) throw new AppError(422, "credit_needs_customer", "Ghi nợ cần gắn khách lẻ có số điện thoại");
+    if (creditAmount + paid !== total) throw new AppError(422, "credit_mismatch", "Số ghi nợ phải bằng đúng tổng đơn trừ các khoản đã thu", { total, paid, credit: creditAmount });
+    const outstanding = await openDebtOf(db, customer.id);
+    if (!(customer.credit_limit > 0) || outstanding + creditAmount > customer.credit_limit)
+      throw conflict("credit_limit_exceeded", customer.credit_limit > 0 ? "Vượt hạn mức nợ của khách" : "Khách chưa được đặt hạn mức nợ", { creditLimit: customer.credit_limit, outstanding, available: Math.max(0, customer.credit_limit - outstanding) });
+    await assertPeriodOpen(db, new Date(), "bán nợ");
+  } else if (paid < total) throw new AppError(422, "payment_mismatch", "Tổng thanh toán chưa đủ tổng tiền đơn", { total, paid });
   const cashTotal = body.payments.filter((p) => p.method === "cash").reduce((s, p) => s + p.amount, 0);
-  const change = paid - total;
+  const change = body.credit ? 0 : paid - total;
   if (change > cashTotal) throw new AppError(422, "payment_mismatch", "Tổng thanh toán vượt tổng tiền đơn (chỉ tiền mặt được thối lại)", { total, paid });
   const recorded = body.payments.map((p) => ({ ...p }));
   let toCut = change;
@@ -444,8 +471,11 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     if (items.some((it, i) => it.lineTotal + it.promoDiscount < costs[i])) reasons.push("below_cost");
     approvalUsed = null;
     overrideReasons = [];
-    if (reasons.length && !can(user.role, "approvals.decide")) {
-      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, reasons, { total, discountValue: discValue }, await cartHash(body));
+    // B1: ghi nợ vượt ngưỡng approval.pos_credit_vnd mà người bán không có pos.credit → cần quản lý duyệt (cùng luồng duyệt POS)
+    const needCreditApproval = creditAmount > creditCfg.approvalVnd && !can(user.role, "pos.credit") && !can(user.role, "approvals.decide");
+    const allReasons = needCreditApproval ? [...reasons, "credit"] : reasons;
+    if (allReasons.length && !can(user.role, "approvals.decide")) {
+      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount } : {}) }, await cartHash(body));
     } else if (reasons.length) {
       // A-29: người có quyền tự duyệt không cần phiếu, nhưng phải ghi lý do (audit)
       if (!body.overrideReason) throw new AppError(422, "override_reason_required", "Bán dưới giá vốn hoặc giảm giá vượt ngưỡng cần nhập lý do", { reasons });
@@ -476,7 +506,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
 
   const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
 
-  const promoStmts = await promoStatements(db, { sql: "?", bind: orderId }, { plan: promoPlan, customerId: customer?.id ?? null, payableTotal: total, userId: user.id });
+  const promoStmts = await promoStatements(db, { sql: "?", bind: orderId }, { plan: promoPlan, customerId: customer?.id ?? null, payableTotal: goodsTotal, userId: user.id });
+  const creditInvCode = body.credit ? await nextCode(db, "HDB") : null;
 
   const commit = async () => {
     await db.prepare(`DELETE FROM order_lines WHERE order_id = ?`).bind(orderId).run();
@@ -494,6 +525,11 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     }
     const costTotal = p.costs.reduce((s, x) => s + x, 0);
     const stmts: D1PreparedStatement[] = [];
+    // B1: chốt chặn hạn mức đặt ĐẦU batch — hai quầy ghi nợ đồng thời chỉ một quầy qua (quầy kia 409)
+    if (body.credit && customer) {
+      const g = creditLimitGuard(customer.id, creditAmount);
+      stmts.push(assertStmt(db, "pos.credit_limit", g.sql, g.binds));
+    }
     items.forEach((_, i) => {
       for (const a of p.lineAllocs[i]) {
         stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
@@ -514,13 +550,23 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
           .bind(orderId, pay.method, pay.amount, payFunds.get(pay.method)!, pay.ref ?? null),
       );
     }
+    stmts.push(...chargeStmts(db, orderId, charges));
+    if (body.credit && customer && creditInvCode) {
+      stmts.push(
+        db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?, 'credit', ?, NULL, 'confirmed')`).bind(orderId, creditAmount),
+        creditInvoiceStmt(db, {
+          code: creditInvCode, orderId, customerId: customer.id, customerName: customer.name, amount: creditAmount,
+          termsDays: creditTermsDays(customer.payment_terms_days, creditCfg.defaultTermsDays), userId: user.id,
+        }),
+      );
+    }
     stmts.push(
       db
         .prepare(
-          `UPDATE orders SET status='completed', subtotal=?, discount=?, total=?, cost_total=?, paid_total=?, completed_at=COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          `UPDATE orders SET status='completed', subtotal=?, discount=?, total=?, cost_total=?, paid_total=?, charges_total=?, completed_at=COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             WHERE id=? AND status='draft'`,
         )
-        .bind(subtotal, totalDiscount, total, costTotal, total, soldAt, orderId),
+        .bind(subtotal, totalDiscount, total, costTotal, total - creditAmount, chargesTotal, soldAt, orderId),
     );
     if (approvalUsed) stmts.push(db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=?`).bind(String(orderId), approvalUsed));
     if (overrideReasons.length)
@@ -531,6 +577,8 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
         entity: "order",
         entityId: orderId,
         after: { code, total, discount: totalDiscount, change, lines: items.length, approvalId: approvalUsed, voucher: promoPlan.voucher?.code ?? null, pointsRedeemed: promoPlan.points,
+          ...(chargesTotal ? { charges: charges.map((x) => ({ name: x.name, amount: x.amount })) } : {}),
+          ...(body.credit ? { credit: { amount: creditAmount, customerId: customer!.id, invoice: creditInvCode } } : {}),
           ...(soldAt ? { offline: { soldAt, requestedShiftId: body.shiftId ?? null, shiftId: shift.id, snapshotProducts: snapUsed } } : {}) },
       }),
     );
@@ -547,6 +595,10 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     }
   } catch (e) {
     await cancelDraft();
+    if (body.credit && customer && /state_changed/.test(String((e as Error)?.message))) {
+      const outstanding = await openDebtOf(db, customer.id);
+      if (outstanding + creditAmount > customer.credit_limit) throw conflict("credit_limit_exceeded", "Vượt hạn mức nợ của khách (vừa có đơn nợ khác)", { creditLimit: customer.credit_limit, outstanding, available: Math.max(0, customer.credit_limit - outstanding) });
+    }
     if (isVoucherExhausted(e)) throw conflict("voucher_exhausted", "Voucher đã hết lượt sử dụng");
     if (isPointsInsufficient(e)) throw conflict("points_insufficient", "Khách không đủ điểm để đổi");
     if (isCheckFail(e)) throw conflict("insufficient_stock", "Không đủ tồn khả dụng (tồn vừa thay đổi), vui lòng thử lại");
@@ -562,6 +614,9 @@ async function cartHash(body: z.infer<typeof checkoutSchema>) {
     d: body.discount ?? 0,
     v: body.voucherCode ?? null,
     r: body.redeemPoints ?? 0,
+    // B1/B2: chỉ đưa vào băm khi có — yêu cầu duyệt cũ (chưa có tính năng này) vẫn khớp
+    ...(body.credit ? { cr: body.credit.amount, cu: body.customerId ?? null } : {}),
+    ...(body.charges?.length ? { ch: body.charges.map((x) => [x.chargeTypeId ?? null, x.name ?? null, x.amount]) } : {}),
   });
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -570,7 +625,7 @@ async function cartHash(body: z.infer<typeof checkoutSchema>) {
 async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object, hash: string): Promise<number> {
   const db = c.env.DB;
   const user = c.get("user");
-  const type = reasons.includes("below_cost") ? "order.below_cost" : "order.discount";
+  const type = reasons.includes("below_cost") ? "order.below_cost" : reasons.includes("discount") ? "order.discount" : "order.credit";
   if (approvalId) {
     const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
     // Duyệt gắn với đúng giỏ hàng (hash dòng + giảm giá) và đúng loại lý do, không chỉ clientUuid
@@ -597,7 +652,7 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
   }
   throw conflict(
     "approval_required",
-    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : "Giảm giá vượt ngưỡng, cần quản lý duyệt",
+    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : reasons.includes("discount") ? "Giảm giá vượt ngưỡng, cần quản lý duyệt" : "Ghi nợ vượt ngưỡng cho phép, cần quản lý duyệt",
     { approvalId: id, reasons },
   );
 }
@@ -776,6 +831,8 @@ posRoutes.get("/pos/receipt/:id", requirePerm("orders.view"), async (c) => {
     discount: o.discount,
     discounts: (await c.env.DB.prepare(`SELECT description, amount FROM order_discounts WHERE order_id = ? ORDER BY id`).bind(o.id).all<{ description: string; amount: number }>()).results,
     total: o.total,
+    charges: o.charges.map((x: any) => ({ name: x.name, amount: x.amount })),
+    credit: o.credit,
     payments: o.payments.map((p: any) => ({ method: p.method, amount: p.amount, ref: p.ref })),
     note: o.note,
   });
@@ -795,7 +852,28 @@ const returnSchema = z.object({
   lines: z.array(returnLineSchema).min(1).max(200),
   refundMethod: z.enum(METHODS),
   approvalId: z.number().int().positive().optional(), // A-16: mã duyệt của quản lý (trả hàng cần duyệt)
+  // B2: trả TOÀN BỘ đơn thì được chọn hoàn cả thu khác (bắt buộc lý do); mặc định không hoàn
+  refundCharges: z.boolean().optional(),
+  chargesReason: z.string().trim().min(3).max(300).optional(),
 });
+
+/** B2: số thu khác hoàn lại khi trả hàng. Mặc định 0; chỉ hoàn khi người dùng chọn VÀ lần trả này làm đơn được trả hết, kèm lý do. */
+async function chargesRefundOf(db: D1Database, origId: number, claimed: Map<number, number>, body: { refundCharges?: boolean; chargesReason?: string }) {
+  if (!body.refundCharges) return 0;
+  if (!body.chargesReason) throw new AppError(422, "charges_reason_required", "Hoàn thu khác cần nhập lý do");
+  const lines = (await db.prepare(`SELECT id, qty_milli FROM order_lines WHERE order_id = ?`).bind(origId).all<{ id: number; qty_milli: number }>()).results;
+  for (const l of lines) {
+    const prev = (
+      await db
+        .prepare(`SELECT COALESCE(SUM(r.qty_milli),0) AS q FROM order_lines r JOIN orders ro ON ro.id = r.order_id WHERE r.original_line_id = ? AND ro.kind='return' AND ro.status='completed'`)
+        .bind(l.id)
+        .first<{ q: number }>()
+    )?.q ?? 0;
+    if (prev + (claimed.get(l.id) ?? 0) < l.qty_milli) throw new AppError(422, "charges_refund_partial", "Chỉ hoàn thu khác khi trả toàn bộ đơn");
+  }
+  const left = (await db.prepare(`SELECT COALESCE(SUM(amount - refunded_amount),0) AS s FROM order_charges WHERE order_id = ?`).bind(origId).first<{ s: number }>())?.s ?? 0;
+  return left;
+}
 
 type PreparedReturn = { orig: any; qtyMilli: number; lineTotal: number; cost: number; alloc: LotAllocation[]; restock: boolean; reason: string };
 
@@ -905,9 +983,10 @@ async function returnEffectStmts(db: D1Database, orig: any, origId: number, retI
   const stmts: D1PreparedStatement[] = [];
   // Đợt 4: thu hồi điểm tích / hoàn điểm đã đổi / hoàn lượt voucher
   const priorRet = (
-    await db.prepare(`SELECT COALESCE(SUM(total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(origId).first<{ t: number }>()
+    await db.prepare(`SELECT COALESCE(SUM(total - charges_total),0) AS t FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed'`).bind(origId).first<{ t: number }>()
   )?.t ?? 0;
-  stmts.push(...(await reversalStatements(db, orig, priorRet + total, userId, `trả hàng ${code}`)));
+  // B2: so sánh theo giá trị HÀNG (thu khác không tích điểm/không áp voucher) → trả hết hàng vẫn hoàn điểm đã đổi / lượt voucher
+  stmts.push(...(await reversalStatements(db, { ...orig, total: orig.total - (orig.charges_total ?? 0) }, priorRet + total, userId, `trả hàng ${code}`)));
   prepared.forEach((x, i) => {
     if (!x.restock) return;
     for (const a of x.alloc) stmts.push(db.prepare(`INSERT INTO order_line_lots(order_line_id, lot_id, qty_milli, unit_cost) VALUES (?,?,?,?)`).bind(lineIds[i], a.lotId, a.qtyMilli, a.unitCost));
@@ -925,19 +1004,27 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
   if (!orig) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   if (orig.kind !== "sale" || orig.status !== "completed") throw conflict("not_returnable", "Chỉ trả hàng cho đơn bán đã hoàn tất");
   const shift = await openShiftOf(db, user.id);
-  if (body.refundMethod === "cash" && !shift) throw conflict("no_open_shift", "Cần mở ca để hoàn tiền mặt");
 
-  const { prepared, claimed, total, costTotal } = await prepareReturnLines(db, origId, body.lines);
+  const { prepared, claimed, total: linesTotal, costTotal } = await prepareReturnLines(db, origId, body.lines);
+  const chargesRefund = await chargesRefundOf(db, origId, claimed, body);
+  const total = linesTotal + chargesRefund; // tổng giá trị phiếu trả (hàng + thu khác được hoàn)
+  // B1: đơn có ghi nợ → giá trị trả trừ vào nợ còn lại của hoá đơn trước, phần vượt mới hoàn tiền
+  const credInv = orig.channel === "pos" ? await creditInvoiceOf(db, origId) : null;
+  const debtReduction = credInv && credInv.os > 0 ? Math.min(total, credInv.os) : 0;
+  const cashRefund = total - debtReduction;
+  if (cashRefund > 0 && body.refundMethod === "cash" && !shift) throw conflict("no_open_shift", "Cần mở ca để hoàn tiền mặt");
+  if (debtReduction > 0) await assertPeriodOpen(db, new Date(), "trả hàng đơn ghi nợ");
 
   // A-16 (M1-09): thu ngân chỉ tự trả hàng đơn của CA ĐANG MỞ (hoặc cùng ngày VN của ca còn mở), dưới ngưỡng giá trị, có nhập lại kho.
   // Còn lại cần quản lý (approvals.decide) tự làm hoặc duyệt qua approvals (gắn băm yêu cầu trả như duyệt giảm giá POS).
   let approvalUsed: number | null = null;
   if (!can(user.role, "approvals.decide")) {
-    const reasons = await returnApprovalReasons(db, orig, shift, prepared, total);
+    const reasons = await returnApprovalReasons(db, orig, shift, prepared, linesTotal);
     if (reasons.length) approvalUsed = await requireReturnApproval(c, origId, body, reasons, total);
   }
-  const fundId = total > 0 ? await fundFor(db, orig.store_id, body.refundMethod, shift) : null;
+  const fundId = cashRefund > 0 ? await fundFor(db, orig.store_id, body.refundMethod, shift) : null;
   const code = await nextCode(db, PREFIX.return);
+  const adjCode = debtReduction > 0 ? await nextCode(db, "HDB") : null;
   const note = prepared.map((x) => `${x.orig.id}: ${x.reason}${x.restock ? "" : " (không nhập lại kho)"}`).join("; ").slice(0, 500);
   const r = await db
     .prepare(
@@ -951,21 +1038,34 @@ posRoutes.post("/orders/:id/return", requirePerm("pos.return"), async (c) => {
     const lineIds = await insertReturnLines(db, retId, prepared);
     const stmts: D1PreparedStatement[] = [
       ...returnGuardStmts(db, origId, approvalUsed, claimed, total),
-      ...(await returnEffectStmts(db, orig, origId, retId, code, prepared, lineIds, total, user.id)),
+      ...(await returnEffectStmts(db, orig, origId, retId, code, prepared, lineIds, linesTotal, user.id)),
     ];
-    if (total > 0) {
-      stmts.push(db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?,?,?,?, 'confirmed')`).bind(retId, body.refundMethod, -total, fundId));
+    if (chargesRefund > 0)
+      stmts.push(
+        assertStmt(db, "order.return.charges", `SELECT COALESCE(SUM(amount - refunded_amount),0) = ? FROM order_charges WHERE order_id = ?`, [chargesRefund, origId]),
+        db.prepare(`UPDATE order_charges SET refunded_amount = amount WHERE order_id = ?`).bind(origId),
+      );
+    if (cashRefund > 0) {
+      stmts.push(db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?,?,?,?, 'confirmed')`).bind(retId, body.refundMethod, -cashRefund, fundId));
+    }
+    if (debtReduction > 0 && credInv && adjCode) {
+      const g = `SELECT ${INVOICE_OUTSTANDING_SQL} >= ? FROM invoices i WHERE i.id = ?`;
+      stmts.push(
+        assertStmt(db, "order.return.debt", g, [debtReduction, credInv.id]),
+        db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, status) VALUES (?, 'credit', ?, NULL, 'confirmed')`).bind(retId, -debtReduction),
+        creditAdjustmentStmt(db, { code: adjCode, original: { id: credInv.id, due_date: credInv.due_date }, orderId: retId, customerId: credInv.customer_id, customerName: null, amount: debtReduction, userId: user.id, note: `Trả hàng ${code} trừ vào nợ` }),
+      );
     }
     stmts.push(
       db
-        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
-        .bind(total, total, costTotal, total, retId),
+        .prepare(`UPDATE orders SET status='completed', subtotal=?, total=?, cost_total=?, paid_total=?, charges_total=?, completed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`)
+        .bind(linesTotal, total, costTotal, cashRefund, chargesRefund, retId),
       ...(approvalUsed ? [db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=? AND ref_id IS NULL`).bind(String(retId), approvalUsed)] : []),
       auditStmt(c, {
         action: "order.return",
         entity: "order",
         entityId: retId,
-        after: { code, originalOrderId: origId, total, approvalId: approvalUsed, lines: prepared.map((x) => ({ orderLineId: x.orig.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
+        after: { code, originalOrderId: origId, total, ...(chargesRefund ? { chargesRefund } : {}), ...(debtReduction ? { debtReduction, cashRefund } : {}), approvalId: approvalUsed, lines: prepared.map((x) => ({ orderLineId: x.orig.id, qtyMilli: x.qtyMilli, restock: x.restock, reason: x.reason })) },
         reason: note,
       }),
     );
@@ -1015,6 +1115,7 @@ posRoutes.post("/orders/:id/exchange", requirePerm("pos.return", "pos.sell"), as
   if (!orig) throw notFound("order_not_found", "Không tìm thấy đơn hàng");
   if (orig.kind !== "sale" || orig.status !== "completed") throw conflict("not_returnable", "Chỉ đổi hàng cho đơn bán đã hoàn tất");
   if (orig.channel !== "pos") throw conflict("wrong_channel", "Đổi hàng tại quầy chỉ áp dụng cho đơn POS");
+  if (await creditInvoiceOf(db, origId)) throw conflict("credit_order_no_exchange", "Đơn có ghi nợ không đổi hàng được — dùng Trả hàng (trừ vào nợ) rồi bán đơn mới");
   const shift = await openShiftOf(db, user.id);
   if (!shift) throw conflict("no_open_shift", "Cần mở ca để đổi hàng (tiền chênh lệch đi qua két của ca)");
   const storeId = shift.store_id as number;
@@ -1259,6 +1360,14 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   }
   const hasReturn = await db.prepare(`SELECT 1 AS x FROM orders WHERE original_order_id = ? AND kind='return' AND status='completed' LIMIT 1`).bind(id).first();
   if (hasReturn) throw conflict("has_returns", "Đơn đã có phiếu trả hàng, không thể huỷ");
+  // B1: đơn có ghi nợ chỉ huỷ được khi hoá đơn nợ chưa được thu đồng nào; đã thu một phần → dùng Trả hàng
+  const credInv = await creditInvoiceOf(db, id);
+  if (credInv) {
+    const paidOn = await db.prepare(`SELECT 1 AS x FROM debt_allocations x LEFT JOIN debt_payments p ON p.id = x.payment_id LEFT JOIN debt_adjustments d ON d.id = x.adjustment_id WHERE x.invoice_id = ? AND (p.status = 'posted' OR d.status = 'posted') LIMIT 1`).bind(credInv.id).first();
+    if (paidOn) throw conflict("credit_already_paid", "Hoá đơn nợ của đơn này đã được thu một phần — dùng Trả hàng thay vì huỷ đơn", { invoiceId: credInv.id });
+    await assertPeriodOpen(db, new Date(), "huỷ đơn ghi nợ");
+  }
+  const voidAdjCode = credInv ? await nextCode(db, "HDB") : null;
   const rows = (
     await db
       .prepare(
@@ -1283,7 +1392,12 @@ posRoutes.post("/orders/:id/void", requirePerm("pos.void"), async (c) => {
   ];
   if (refundShiftId) stmts.push(assertStmt(db, "order.void.refund_shift", `SELECT status = 'open' FROM shifts WHERE id = ?`, [refundShiftId]));
   for (const [pid, alloc] of byProduct) stmts.push(...moveStatements(db, pid, alloc, 1, "return", "order_void", id, user.id));
-  stmts.push(...(await reversalStatements(db, o, o.total, user.id, "huỷ đơn")));
+  if (credInv && voidAdjCode)
+    stmts.push(
+      assertStmt(db, "order.void.debt", `SELECT NOT EXISTS (SELECT 1 FROM debt_allocations x LEFT JOIN debt_payments p ON p.id = x.payment_id LEFT JOIN debt_adjustments d ON d.id = x.adjustment_id WHERE x.invoice_id = ? AND (p.status = 'posted' OR d.status = 'posted'))`, [credInv.id]),
+      creditAdjustmentStmt(db, { code: voidAdjCode, original: { id: credInv.id, due_date: credInv.due_date }, orderId: id, customerId: credInv.customer_id, customerName: null, amount: credInv.total, userId: user.id, note: `Huỷ đơn ${o.code}` }),
+    );
+  stmts.push(...(await reversalStatements(db, { ...o, total: o.total - (o.charges_total ?? 0) }, o.total - (o.charges_total ?? 0), user.id, "huỷ đơn")));
   stmts.push(
     db.prepare(`UPDATE orders SET status='cancelled', voided_by=?, void_reason=?, refund_shift_id=? WHERE id=? AND status='completed'`).bind(user.id, body.reason, refundShiftId, id),
     db.prepare(`UPDATE payments SET status='refunded' WHERE order_id=?`).bind(id),

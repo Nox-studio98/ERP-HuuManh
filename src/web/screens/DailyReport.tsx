@@ -23,7 +23,7 @@ export default function DailyReport() {
   const dayLabel = fmtDate(`${day}T05:00:00Z`);
 
   const csvRows = !d ? [] : [
-    { s: "Tổng quan", k: "Số đơn bán", v: d.saleCount }, { s: "Tổng quan", k: "Doanh thu bán", v: d.saleTotal }, { s: "Tổng quan", k: "Trả hàng", v: d.returnTotal }, { s: "Tổng quan", k: "Doanh thu thuần", v: d.revenue },
+    { s: "Tổng quan", k: "Số đơn bán", v: d.saleCount }, { s: "Tổng quan", k: "Doanh thu bán", v: d.saleTotal }, { s: "Tổng quan", k: "Trả hàng", v: d.returnTotal }, { s: "Tổng quan", k: "Doanh thu thuần", v: d.revenue }, ...(d.otherCharges ? [{ s: "Tổng quan", k: "Trong đó thu khác", v: d.otherCharges }] : []),
     ...(showCost ? [{ s: "Tổng quan", k: "Giá vốn", v: d.cogs }, { s: "Tổng quan", k: "Lãi gộp", v: d.grossProfit }] : []),
     ...(d.byChannel ?? []).map((c: any) => ({ s: "Theo kênh", k: CHANNELS[c.channel] ?? c.channel, v: c.revenue })),
     ...pay.flatMap((p) => [{ s: "Theo hình thức thanh toán", k: `${PAY_LABEL[p.method] ?? p.method} - bán`, v: p.sold }, { s: "Theo hình thức thanh toán", k: `${PAY_LABEL[p.method] ?? p.method} - hoàn`, v: p.refunded }]),
@@ -34,6 +34,7 @@ export default function DailyReport() {
 
   const sections: DocSection[] = !d ? [] : [
     { heading: "Tổng quan", kv: [["Số đơn bán", d.saleCount], ["Doanh thu bán", money(d.saleTotal)], [`Trả hàng (${d.returnCount} phiếu)`, d.returnTotal ? `-${money(d.returnTotal)}` : money(0)], ["Doanh thu thuần", money(d.revenue), true],
+      ...(d.otherCharges ? ([["Trong đó thu khác (phí đóng gói, giỏ quà…)", money(d.otherCharges)]] as [string, string, boolean?][]) : []),
       ...(showCost ? ([["Giá vốn", money(d.cogs)], ["Lãi gộp", money(d.grossProfit), true]] as [string, string, boolean?][]) : [])] },
     { heading: "Theo kênh bán", table: { head: ["Kênh", "Đơn", "Doanh thu"], right: [1, 2], rows: (d.byChannel ?? []).map((c: any) => [CHANNELS[c.channel] ?? c.channel, c.orders, money(c.revenue)]) } },
     { heading: "Theo hình thức thanh toán", table: { head: ["Hình thức", "Bán", "Hoàn", "Ròng"], right: [1, 2, 3], rows: pay.map((p) => [PAY_LABEL[p.method] ?? p.method, money(p.sold), money(p.refunded), money(p.net)]), foot: ["Thu tiền (không gồm điểm/voucher)", money(totals.sold), money(totals.refunded), money(totals.net)] },
@@ -62,7 +63,7 @@ export default function DailyReport() {
       {r.loading ? <Spinner /> : !d ? <Banner tone="danger">Không tải được báo cáo. Thử lại sau.</Banner> : (
         <>
           <KpiRow items={[
-            { label: "Doanh thu thuần", value: money(d.revenue), sub: `${d.saleCount} đơn bán`, tone: "ok" },
+            { label: "Doanh thu thuần", value: money(d.revenue), sub: `${d.saleCount} đơn bán${d.otherCharges ? ` · gồm thu khác ${money(d.otherCharges)}` : ""}`, tone: "ok" },
             { label: "Trả hàng", value: money(d.returnTotal), sub: `${d.returnCount} phiếu` },
             { label: "Huỷ đơn", value: d.cancelled?.count ?? 0, sub: money(d.cancelled?.total ?? 0), tone: d.cancelled?.count ? "warn" : undefined },
             showCost ? { label: "Lãi gộp", value: money(d.grossProfit), sub: `Giá vốn ${money(d.cogs)}` } : { label: "Thu − chi quỹ", value: money(cashIn - cashOut), sub: `Thu ${money(cashIn)} · chi ${money(cashOut)}` },
@@ -72,7 +73,7 @@ export default function DailyReport() {
           ) : (
             <div className="two-col">
               <div className="stack">
-                <Card title="Theo hình thức thanh toán"><PayTable rows={pay} /><div className="hint">Điểm tích luỹ và voucher là phần giảm trừ khi bán, không phải tiền thu. “Hoàn” là tiền trả lại khách trên phiếu trả hàng.</div></Card>
+                <Card title="Theo hình thức thanh toán"><PayTable rows={pay} /><div className="hint">Điểm tích luỹ và voucher là phần giảm trừ khi bán, không phải tiền thu. “Công nợ” là phần khách ghi nợ, chưa thu tiền. “Hoàn” là tiền trả lại khách trên phiếu trả hàng.</div></Card>
                 <Card title="Theo kênh bán">
                   <DataTable rows={d.byChannel ?? []} rowKey={(c: any) => c.channel} empty="Chưa có đơn" cols={[
                     { key: "c", label: "Kênh", title: true, render: (c: any) => CHANNELS[c.channel] ?? c.channel },

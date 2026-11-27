@@ -10,6 +10,7 @@ import { lineAmount } from "../lib/money";
 import { parseBody, unitFactor } from "../services/http";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { resolvePrice } from "../services/pricing";
+import { getSettingInt } from "../services/settings";
 import { groupIdsOf, planPromotions } from "../services/promo-checkout";
 import { loyaltyConfig, pointsStmts } from "../services/loyalty-points";
 import { bundleRoutes } from "./promo-bundles";
@@ -121,8 +122,11 @@ promotionRoutes.post("/pos/customers", requirePerm("pos.sell"), async (c) => {
   }
   const code = await nextCode(db, "KL");
   const group = await db.prepare(`SELECT id FROM customer_groups WHERE code = 'le'`).first<{ id: number }>();
-  const r = await db.prepare(`INSERT INTO customers(code, type, name, phone, customer_group_id, created_at) VALUES (?, 'retail', ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) RETURNING id, code, name, type, phone, points`)
-    .bind(code, b.name, phone ?? null, group?.id ?? null).first<any>();
+  // B1: hạn mức nợ / kỳ hạn mặc định cho khách lẻ mới (mặc định 0 = chưa cho nợ)
+  const defLimit = await getSettingInt(db, "pos.retail_credit_default_limit", 0);
+  const defTerms = await getSettingInt(db, "pos.retail_credit_default_terms_days", 7);
+  const r = await db.prepare(`INSERT INTO customers(code, type, name, phone, customer_group_id, credit_limit, payment_terms_days, created_at) VALUES (?, 'retail', ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) RETURNING id, code, name, type, phone, points`)
+    .bind(code, b.name, phone ?? null, group?.id ?? null, defLimit, defTerms).first<any>();
   await auditStmt(c, { action: "customer.create_retail", entity: "customer", entityId: r.id, after: { code, name: b.name } }).run();
   return c.json(posCustomerView(r, role), 201);
 });

@@ -103,12 +103,21 @@ export async function cashFormula(db: D1Database, s: ShiftRow) {
     )
     .bind(s.fund_id, s.user_id, s.opened_at, s.closed_at, s.closed_at)
     .first<{ s: number }>();
+  // B1: thu nợ khách lẻ tại quầy (phiếu thu công nợ của người mở ca, vào quỹ của ca = tiền mặt). Phiếu đảo tự trừ ngược.
+  const debt = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN v.direction='in' THEN v.amount ELSE -v.amount END),0) AS s
+         FROM cash_vouchers v JOIN debt_payments dp ON dp.id = v.ref_id
+        WHERE v.status='posted' AND v.ref_type='debt_payment' AND dp.partner_type='customer' AND v.fund_id = ? AND v.created_by = ? AND v.created_at >= ? AND (? IS NULL OR v.created_at <= ?)`,
+    )
+    .bind(s.fund_id, s.user_id, s.opened_at, s.closed_at, s.closed_at)
+    .first<{ s: number }>();
   const voidRef = await db
     .prepare(`SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.refund_shift_id = ? AND p.method = 'cash' AND p.status = 'refunded'`)
     .bind(s.id)
     .first<{ s: number }>();
-  const cashSold = sales?.sold ?? 0, cashRefunded = sales?.refunded ?? 0, deposits = dep?.s ?? 0, voidRefunds = voidRef?.s ?? 0;
-  return { opening: s.opening_cash, cashSold, cashRefunded, deposits, voidRefunds, expected: s.opening_cash + cashSold - cashRefunded + deposits - voidRefunds };
+  const cashSold = sales?.sold ?? 0, cashRefunded = sales?.refunded ?? 0, deposits = dep?.s ?? 0, voidRefunds = voidRef?.s ?? 0, debtCollected = debt?.s ?? 0;
+  return { opening: s.opening_cash, cashSold, cashRefunded, deposits, debtCollected, voidRefunds, expected: s.opening_cash + cashSold - cashRefunded + deposits + debtCollected - voidRefunds };
 }
 
 const SHIFT_COLS = `s.id, s.user_id, s.fund_id, s.opened_at, s.opening_cash, s.closed_at, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason, s.status`;
@@ -127,13 +136,14 @@ export async function shiftSummary(db: D1Database, id: number) {
   const vouchers = (
     await db
       .prepare(
-        `SELECT v.code, v.direction, v.amount, v.ref_type, v.note, v.created_at, COALESCE(cc.name,'Khác') AS category
+        `SELECT v.code, v.direction, v.amount, v.ref_type, v.note, v.created_at, COALESCE(cc.name,'Khác') AS category,
+                CASE WHEN v.ref_type = 'debt_payment' AND EXISTS (SELECT 1 FROM debt_payments dp WHERE dp.id = v.ref_id AND dp.partner_type = 'customer') THEN 1 ELSE 0 END AS counterparty_customer
            FROM cash_vouchers v LEFT JOIN cash_categories cc ON cc.id = v.category_id
           WHERE v.status = 'posted' AND v.fund_id = ? AND v.created_by = ? AND v.created_at >= ? AND v.created_at <= ? ORDER BY v.id LIMIT 100`,
       )
       .bind(s.fund_id, s.user_id, s.opened_at, to)
       .all<any>()
-  ).results.map((v) => ({ code: v.code, direction: v.direction, amount: v.amount, category: v.category, note: v.note, createdAt: v.created_at, inExpected: v.ref_type === "order_deposit" }));
+  ).results.map((v) => ({ code: v.code, direction: v.direction, amount: v.amount, category: v.category, note: v.note, createdAt: v.created_at, inExpected: v.ref_type === "order_deposit" || (v.ref_type === "debt_payment" && v.counterparty_customer === 1) }));
   const returns = (
     await db
       .prepare(
@@ -155,7 +165,7 @@ export async function shiftSummary(db: D1Database, id: number) {
       expectedCash: s.status === "closed" ? s.expected_cash : formula.expected,
       countedCash: s.counted_cash, diffCash: s.diff_cash, diffReason: s.diff_reason,
     },
-    sales: { saleCount: sales.saleCount, saleTotal: sales.saleTotal, returnCount: sales.returnCount, returnTotal: sales.returnTotal, revenue: sales.revenue },
+    sales: { saleCount: sales.saleCount, saleTotal: sales.saleTotal, returnCount: sales.returnCount, returnTotal: sales.returnTotal, revenue: sales.revenue, otherCharges: sales.otherCharges },
     byChannel: sales.byChannel,
     byPayment,
     cashFormula: formula,

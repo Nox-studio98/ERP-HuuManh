@@ -1,6 +1,6 @@
 # Bán hàng tại quầy — đợt B: bán nợ khách lẻ, thu khác, giao hàng tại quầy
 
-Trạng thái (26/11/2026): **thiết kế đã chốt** (quyết định ở mục 5), đang làm. Đợt A đã xong (PR #23, `docs/POS-KV.md`).
+Trạng thái (27/11/2026): **thiết kế đã chốt** (quyết định ở mục 5). **B1 (bán nợ khách lẻ) và B2 (thu khác) đã làm** — migration 0038, 0039; hợp đồng API ở cuối `docs/API.md`; test `test/pos-credit.test.ts`, `test/order-charges.test.ts`; E2E `e2e/pos-kv-b.mjs`. B3 (giao hàng tại quầy) làm riêng. Đợt A đã xong (PR #23, `docs/POS-KV.md`).
 
 Nguyên tắc: dùng lại cơ chế đang có, không làm sổ sách song song.
 - Bán nợ khách lẻ → dùng **hoá đơn phải thu** (`invoices`), thu nợ (`debt_payments` + `debt_allocations`), tuổi nợ, sao kê, QR SePay mã `HDS` y như khách sỉ. Các route công nợ hiện không giới hạn khách sỉ.

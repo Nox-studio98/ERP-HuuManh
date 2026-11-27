@@ -7,6 +7,9 @@ import { auditStmt } from "../lib/audit";
 import { assertStmt } from "../services/guard";
 import { addVnRange, guarded, likeOf, pageParams, parseBody } from "../services/http";
 import { pointsStmts, loyaltyConfig } from "../services/loyalty-points";
+import { customerDebtStatus, INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { getSettingInt } from "../services/settings";
+import { vnDate } from "../lib/time";
 
 /**
  * Quản lý khách lẻ (`customers.type = 'retail'`), mount ở /api/v1/retail-customers.
@@ -33,6 +36,7 @@ function shape(r: any, pii: boolean) {
     customerGroupId: r.customer_group_id, groupName: r.group_name ?? null,
     points: r.points, active: !!r.active, mergedInto: r.merged_into ?? null, version: r.version, createdAt: r.created_at ?? null,
     spend: r.spend ?? 0, ordersCount: r.orders_count ?? 0, lastPurchaseAt: r.last_purchase_at ?? null,
+    creditLimit: r.credit_limit ?? 0, paymentTermsDays: r.payment_terms_days ?? 0, // B1: bán nợ khách lẻ
   };
 }
 
@@ -112,8 +116,35 @@ retailCustomerRoutes.get("/retail-customers/:id", requirePerm("b2b.view"), async
     await db.prepare(`SELECT id, email, phone, full_name, active, created_at FROM shop_accounts WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id`).bind(id).all<any>()
   ).results;
   const merged = (await db.prepare(`SELECT id, code, name FROM customers WHERE merged_into = ? ORDER BY id`).bind(id).all<any>()).results;
+  // B1: công nợ (hoá đơn mở, phiếu thu) — chỉ người có quyền xem công nợ
+  let debt: unknown = null;
+  if (can(c.get("user").role, "debt.view")) {
+    const st = await customerDebtStatus(db, id);
+    const today = vnDate();
+    const invoices = (
+      await db
+        .prepare(
+          `SELECT i.id, i.code, i.kind, i.issue_date, i.due_date, i.total, ${INVOICE_OUTSTANDING_SQL} AS os, (SELECT o.code FROM orders o WHERE o.id = i.order_id) AS order_code
+             FROM invoices i WHERE i.customer_id = ? AND i.status = 'open' AND i.kind IN ('sale','replacement') ORDER BY i.id DESC LIMIT 100`,
+        )
+        .bind(id)
+        .all<any>()
+    ).results;
+    const payments = (
+      await db
+        .prepare(`SELECT code, amount, method, paid_at, status, note FROM debt_payments WHERE partner_type = 'customer' AND partner_id = ? AND direction = 'in' ORDER BY id DESC LIMIT 50`)
+        .bind(id)
+        .all<any>()
+    ).results;
+    debt = {
+      outstanding: st.outstanding, balance: st.balance, unapplied: st.unapplied, overdueAmount: st.overdueAmount, oldestOverdueDays: st.oldestOverdueDays, available: Math.max(0, st.creditLimit - st.outstanding),
+      invoices: invoices.map((i) => ({ id: i.id, code: i.code, orderCode: i.order_code, issueDate: i.issue_date, dueDate: i.due_date, total: i.total, outstanding: i.os, overdueDays: i.os > 0 ? Math.max(0, Math.round((Date.parse(today) - Date.parse(i.due_date)) / 86400_000)) : 0 })),
+      payments: payments.map((p) => ({ code: p.code, amount: p.amount, method: p.method, paidAt: p.paid_at, status: p.status, note: p.note })),
+    };
+  }
   return c.json({
     ...shape(r, pii),
+    debt,
     loyalty: {
       enabled: cfg.enabled, pointValueVnd: cfg.pointValueVnd,
       ledger: ledger.map((l) => ({ id: l.id, orderId: l.order_id, kind: l.kind, points: l.points, note: l.note, createdBy: l.created_by, createdAt: l.created_at })),
@@ -184,6 +215,58 @@ retailCustomerRoutes.patch("/retail-customers/:id", requirePerm("b2b.write"), as
   );
   const pii = can(c.get("user").role, "customers.view_pii");
   return c.json(shape(await loadRetail(db, id), pii));
+});
+
+// ---------------------------------------------------------------- B1: hạn mức nợ + kỳ hạn (luồng A-10 như khách sỉ)
+const creditSchema = z.object({
+  version: z.number().int().positive(),
+  creditLimit: z.number().int().min(0).max(10_000_000_000).optional(),
+  paymentTermsDays: z.number().int().min(0).max(365).optional(),
+  reason: z.string().trim().min(3).max(300),
+});
+
+/**
+ * Đặt hạn mức nợ / kỳ hạn cho khách lẻ. Cần b2b.write + b2b.approve (quản lý, chủ). Chủ (b2b.credit_override) đặt tuỳ ý; quản lý chỉ đặt tới
+ * `b2b.new_credit_limit_max_vnd` / `b2b.new_payment_terms_max_days` (hoặc hạ xuống) — phần vượt thành yêu cầu duyệt `customer.credit_change` gửi chủ (A-10).
+ */
+retailCustomerRoutes.put("/retail-customers/:id/credit", requirePerm("b2b.write", "b2b.approve"), async (c) => {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const id = idParam(c.req.param("id"));
+  const b = await parseBody(c, creditSchema);
+  const cur = await loadRetail(db, id);
+  if (cur.merged_into) throw conflict("customer_merged", "Khách này đã được gộp vào hồ sơ khác");
+  if (cur.version !== b.version) throw conflict("version_conflict", "Hồ sơ vừa được người khác sửa — hãy tải lại", { version: cur.version });
+  const limitChanged = b.creditLimit !== undefined && b.creditLimit !== cur.credit_limit;
+  const termsChanged = b.paymentTermsDays !== undefined && b.paymentTermsDays !== cur.payment_terms_days;
+  if (!limitChanged && !termsChanged) throw new AppError(422, "validation_error", "Không có thay đổi hạn mức hoặc kỳ hạn");
+  const owner = can(user.role, "b2b.credit_override");
+  const maxLimit = await getSettingInt(db, "b2b.new_credit_limit_max_vnd", 50_000_000);
+  const maxDays = await getSettingInt(db, "b2b.new_payment_terms_max_days", 30);
+  const overLimit = limitChanged && b.creditLimit! > Math.max(maxLimit, cur.credit_limit);
+  const overTerms = termsChanged && b.paymentTermsDays! > Math.max(maxDays, cur.payment_terms_days);
+  const deferred = !owner && (overLimit || overTerms) ? { creditLimit: overLimit ? b.creditLimit : undefined, paymentTermsDays: overTerms ? b.paymentTermsDays : undefined } : null;
+  const nextLimit = deferred?.creditLimit !== undefined ? cur.credit_limit : b.creditLimit ?? cur.credit_limit;
+  const nextTerms = deferred?.paymentTermsDays !== undefined ? cur.payment_terms_days : b.paymentTermsDays ?? cur.payment_terms_days;
+  await guarded(() =>
+    db.batch([
+      assertStmt(db, "retail_customer.credit", `SELECT version = ? AND type = 'retail' AND merged_into IS NULL FROM customers WHERE id = ?`, [b.version, id]),
+      db.prepare(`UPDATE customers SET credit_limit = ?, payment_terms_days = ?, version = version + 1 WHERE id = ?`).bind(nextLimit, nextTerms, id),
+      auditStmt(c, {
+        action: "retail_customer.credit", entity: "customer", entityId: id,
+        before: { credit_limit: cur.credit_limit, payment_terms_days: cur.payment_terms_days }, after: { credit_limit: nextLimit, payment_terms_days: nextTerms }, reason: b.reason,
+      }),
+      ...(deferred
+        ? [
+            db
+              .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('customer.credit_change','customer',?,?,?,?)`)
+              .bind(String(id), JSON.stringify({ ...deferred, code: cur.code, currentCreditLimit: cur.credit_limit, currentPaymentTermsDays: cur.payment_terms_days }), b.reason, user.id),
+          ]
+        : []),
+    ]),
+  );
+  const pii = can(user.role, "customers.view_pii");
+  return c.json({ ...shape(await loadRetail(db, id), pii), ...(deferred ? { creditApprovalPending: true, requestedCreditLimit: deferred.creditLimit ?? null, requestedPaymentTermsDays: deferred.paymentTermsDays ?? null } : {}) });
 });
 
 // ---------------------------------------------------------------- ngừng / kích hoạt

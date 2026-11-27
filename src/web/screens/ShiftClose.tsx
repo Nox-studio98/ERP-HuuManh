@@ -67,6 +67,15 @@ export default function ShiftClose() {
         <div className="stack">
           <div className="kv-row"><span className="muted">Mở lúc</span><b>{fmtDateTime(s.openedAt)}</b></div>
           <div className="kv-row"><span className="muted">Tiền đầu ca</span><b className="money">{money(s.openingCash)}</b></div>
+          {sum.data?.cashFormula && (
+            <>
+              <div className="kv-row"><span className="muted">+ Thu tiền mặt bán hàng</span><span className="num">{money(sum.data.cashFormula.cashSold)}</span></div>
+              {sum.data.cashFormula.cashRefunded > 0 && <div className="kv-row"><span className="muted">− Hoàn tiền mặt trả hàng</span><span className="num">{money(sum.data.cashFormula.cashRefunded)}</span></div>}
+              {sum.data.cashFormula.deposits !== 0 && <div className="kv-row"><span className="muted">± Cọc đặt trước</span><span className="num">{money(sum.data.cashFormula.deposits)}</span></div>}
+              <div className="kv-row" data-testid="shift-debt-collected"><span className="muted">+ Thu nợ khách lẻ bằng tiền mặt</span><span className="num">{money(sum.data.cashFormula.debtCollected ?? 0)}</span></div>
+              {sum.data.cashFormula.voidRefunds > 0 && <div className="kv-row"><span className="muted">− Hoàn tiền mặt khi huỷ đơn</span><span className="num">{money(sum.data.cashFormula.voidRefunds)}</span></div>}
+            </>
+          )}
           <div className="hint">Hệ thống tự tính tiền dự kiến trong két từ các đơn tiền mặt của ca. Đếm tiền thực tế rồi nhập vào ô bên cạnh; nếu lệch cần ghi lý do.</div>
         </div>
       </Card>

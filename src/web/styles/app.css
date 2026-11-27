@@ -780,6 +780,8 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .pos-tab-add:disabled { opacity: .4; cursor: not-allowed; }
 .pos-tab-add .kbd-hint { font-weight: 400; }
 @media (min-width: 768px) { .pos-tab-main .long { display: inline; } .pos-tab-main .short { display: none; } }
+/* Hàng tìm sản phẩm + nút (Quét mã, Thu nợ, cài đặt): điện thoại cho ô tìm chiếm cả dòng, các nút xuống dòng dưới */
+@media (max-width: 600px) { .pos-searchrow { flex-wrap: wrap; } .pos-searchrow > .grow { flex: 1 1 100%; } }
 .pos-filter { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; margin-top: var(--s-1); }
 .pos-filter .chips.scroll { margin-top: 0; }
 @media (min-width: 768px) { .pos-filter { flex-direction: row; align-items: flex-start; justify-content: space-between; } .pos-filter .chips { flex: 1 1 auto; } .pos-filter .seg { flex: none; } }
