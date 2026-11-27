@@ -239,7 +239,7 @@ async function dailyReport(c: Ctx) {
     .first();
   // Báo cáo cuối ngày (bổ sung, giữ nguyên các khoá cũ): theo hình thức thanh toán, trả hàng, huỷ, thu/chi quỹ ròng; giá vốn/lãi gộp chỉ khi có prices.view_cost
   const byPayment = await paymentBreakdown(db, `o.completed_at >= ? AND o.completed_at < ?`, [r.from, r.to]);
-  const flow = await cashFlow(db, r.from, r.to);
+  const flow = await cashFlow(db, r.from, r.to, { sensitive: can(c.get("user").role, "hr.sensitive") });
   const cancelled = await cancelledOrders(db, r.from, r.to);
   const out: Record<string, unknown> = {
     day, ...summary, vouchers, shifts, voided, byPayment, cashFlow: flow, cancelled,

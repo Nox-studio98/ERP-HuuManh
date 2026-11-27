@@ -70,7 +70,7 @@ shiftReportRoutes.get("/shifts/history", shiftViewer, async (c) => {
 shiftReportRoutes.get("/shifts/:id/summary", shiftViewer, async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) throw notFound("shift_not_found", "Không tìm thấy ca");
-  const r = await shiftSummary(c.env.DB, id);
+  const r = await shiftSummary(c.env.DB, id, { sensitive: can(c.get("user").role, "hr.sensitive") });
   // Thu ngân xem ca người khác → 404 như không tồn tại (không lộ sự tồn tại / số liệu)
   if (!r || (!seesAll(c.get("user").role) && r.shift.cashierId !== c.get("user").id)) throw notFound("shift_not_found", "Không tìm thấy ca");
   return c.json(r);

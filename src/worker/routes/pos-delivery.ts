@@ -47,6 +47,9 @@ const deliverySchema = z.object({
   note: z.string().trim().max(500).nullish(),
 });
 
+/** C2-02: người được giao hàng = tài khoản đang hoạt động của người làm tại cửa hàng (chủ, quản lý, thu ngân, thủ kho, nhân viên online, nhân viên chung; không phải kế toán) và chưa nghỉ việc. */
+const DELIVERER_SQL = `u.active = 1 AND u.role IN ('owner','manager','cashier','warehouse','online_staff','staff') AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.user_id = u.id AND e.status <> 'active')`;
+
 /** Quỹ theo hình thức: tiền mặt → quỹ của ca; còn lại → quỹ ngân hàng/ví (cùng quy tắc POS bán thường). */
 async function fundFor(db: D1Database, storeId: number, method: string, shift: { fund_id: number }) {
   if (method === "cash") return shift.fund_id;
@@ -90,6 +93,8 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   // Idempotent theo clientUuid: gửi lại cùng mã thì trả đơn đã tạo
   if (b.clientUuid) {
     const ex = await db.prepare(`SELECT id, code, tracking_token, status FROM orders WHERE client_uuid = ?`).bind(b.clientUuid).first<any>();
+    // B-N1: lần tạo trước đã thất bại (đơn tự huỷ) → KHÔNG trả như thành công; client phải dùng mã mới
+    if (ex && ex.status === "cancelled") throw conflict("previous_attempt_failed", "Lần tạo đơn giao này trước đó đã thất bại và đơn đã bị huỷ — kiểm tra lại giỏ hàng rồi tạo lại (mã mới)", { orderId: ex.id, code: ex.code });
     if (ex && ex.status !== "draft") return c.json({ id: ex.id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: trackUrl(c.env, ex.tracking_token), created: false });
   }
 
@@ -98,7 +103,7 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   let carrier: string;
   let trackingNo: string | undefined;
   if ("userId" in b.deliverer) {
-    const du = await db.prepare(`SELECT id, full_name FROM users WHERE id = ? AND active = 1`).bind(b.deliverer.userId).first<{ id: number; full_name: string }>();
+    const du = await db.prepare(`SELECT u.id, u.full_name FROM users u WHERE u.id = ? AND ${DELIVERER_SQL}`).bind(b.deliverer.userId).first<{ id: number; full_name: string }>();
     if (!du) throw new AppError(422, "deliverer_not_found", "Không tìm thấy nhân viên giao hàng");
     delivererUserId = du.id;
     carrier = `Nhân viên: ${du.full_name}`;
@@ -143,6 +148,7 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   const id = created.id;
   if (!created.created) {
     const ex = await db.prepare(`SELECT code, status, tracking_token FROM orders WHERE id = ?`).bind(id).first<any>();
+    if (ex.status === "cancelled") throw conflict("previous_attempt_failed", "Lần tạo đơn giao này trước đó đã thất bại và đơn đã bị huỷ — kiểm tra lại giỏ hàng rồi tạo lại (mã mới)", { orderId: id, code: ex.code });
     return c.json({ id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: trackUrl(c.env, ex.tracking_token), created: false });
   }
 
@@ -184,16 +190,17 @@ posDeliveryRoutes.get("/pos/delivery-zones", requirePerm("pos.sell"), async (c) 
 });
 
 posDeliveryRoutes.get("/pos/deliverers", requirePerm("pos.sell"), async (c) => {
-  const rows = (await c.env.DB.prepare(`SELECT id, full_name FROM users WHERE active = 1 ORDER BY full_name`).all<{ id: number; full_name: string }>()).results;
+  const rows = (await c.env.DB.prepare(`SELECT u.id, u.full_name FROM users u WHERE ${DELIVERER_SQL} ORDER BY u.full_name`).all<{ id: number; full_name: string }>()).results;
   return c.json({ items: rows.map((u) => ({ id: u.id, fullName: u.full_name })) });
 });
 
-/** Gợi ý địa chỉ giao của khách: địa chỉ khách lẻ + sổ địa chỉ khách sỉ. */
+/** Gợi ý địa chỉ giao của khách LẺ đang chọn ở quầy (C2-02: không trả địa chỉ khách sỉ/khách không tồn tại — cùng một câu trả lời rỗng, không lộ sự tồn tại). */
 posDeliveryRoutes.get("/pos/delivery-addresses", requirePerm("pos.sell"), async (c) => {
   const cid = Number(c.req.query("customerId"));
   if (!Number.isInteger(cid) || cid <= 0) throw new AppError(422, "validation_error", "customerId không hợp lệ");
   const db = c.env.DB;
-  const cu = await db.prepare(`SELECT name, phone, address FROM customers WHERE id = ?`).bind(cid).first<any>();
+  const cu = await db.prepare(`SELECT name, phone, address FROM customers WHERE id = ? AND type = 'retail' AND active = 1`).bind(cid).first<any>();
+  if (!cu) return c.json({ receiverName: null, receiverPhone: null, items: [] });
   const book = (await db.prepare(`SELECT label, address FROM customer_addresses WHERE customer_id = ? AND active = 1 ORDER BY is_default DESC, id LIMIT 10`).bind(cid).all<any>()).results;
   const items = [...(cu?.address ? [{ label: "Địa chỉ khách", address: cu.address as string }] : []), ...book];
   // thu ngân không thấy SĐT đầy đủ (customers.view_pii): tự nhập
