@@ -451,7 +451,7 @@ function Sell({ shift }: { shift: any }) {
           onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); finishTab(tab.id); setView("products"); }}
           onQueued={() => { setCheckout(false); finishTab(tab.id); setView("products"); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
       )}
-      {delivery && <PosDeliverySheet lines={lines.map((l) => ({ productId: l.product.id, name: l.product.name, unit: l.unit, qty: l.qty }))} customer={customer} hasManualDiscount={discount > 0 || lines.some((l) => l.discount > 0)} onClose={() => setDelivery(false)} onDone={() => { setDelivery(false); reset(); }} />}
+      {delivery && <PosDeliverySheet lines={lines.map((l) => ({ productId: l.product.id, name: l.product.name, unit: l.unit, qty: l.qty, discount: l.discount }))} customer={customer} orderDiscount={discount} onClose={() => setDelivery(false)} onDone={() => { setDelivery(false); reset(); }} />}
       {chargeSheet && <ChargesSheet charges={charges} onChange={setCharges} onClose={() => setChargeSheet(false)} />}
       {debtSheet && <PosDebtSheet onClose={() => setDebtSheet(false)} />}
       {pickCustomer && <CustomerSheet onClose={() => setPickCustomer(false)} onPick={(c) => { setCustomer(c); setPickCustomer(false); }} />}

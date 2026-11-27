@@ -236,6 +236,35 @@ try {
   assert(ret.status !== "completed" && ret.status !== "shipping", `trả hàng xong: đơn ở trạng thái ${ret.status}, không tính doanh thu`);
   assert((await onHand()) === stockBefore + 2000, "trả hàng nhập lại kho đúng 2 trái (tồn tăng 2.000 milli)");
 
+  step("[PC 1440] Đơn giao có giảm giá tay (giảm dòng 5.000): sheet hiện dòng Giảm giá, đơn lưu đúng, doanh thu = tổng sau giảm");
+  await go(o.page, "/pos");
+  await o.page.getByLabel("Tìm sản phẩm").waitFor();
+  await addProduct(o.page, "Bưởi da xanh");
+  await addProduct(o.page, "Bưởi da xanh");
+  await showCart(o.page);
+  await o.page.getByLabel("Giảm giá dòng Bưởi da xanh").fill("5000");
+  await o.page.getByTestId("pos-delivery").click();
+  const ds = o.page.getByTestId("delivery-sheet");
+  await ds.waitFor();
+  await ds.getByLabel("Người nhận").fill("Anh Minh E2E");
+  await ds.getByLabel("Số điện thoại").fill("0933111222");
+  await ds.getByLabel("Địa chỉ giao").fill("5 Pasteur, Quận 1");
+  await ds.getByLabel("Khu vực giao").selectOption({ index: 1 });
+  await ds.getByTestId("delivery-discount").waitFor();
+  assert(digits(await ds.getByTestId("delivery-discount").innerText()) === 5000, "sheet giao hàng hiện dòng Giảm giá 5.000 (không còn cảnh báo bỏ giảm giá tay)");
+  assert(!(await ds.innerText()).includes("không áp giảm giá tay"), "đã bỏ cảnh báo cũ");
+  const dTotal = digits(await ds.locator('[data-testid="delivery-totals"] .grand .money').innerText());
+  await shot(o.page, "pos-kv-b3-1440-giam-gia.png");
+  await o.page.getByTestId("delivery-submit").click();
+  const dDone = o.page.getByRole("dialog", { name: "Đã tạo đơn giao hàng" });
+  const dSlip = dDone.getByTestId("delivery-slip");
+  await dSlip.waitFor();
+  const dCode = (await dSlip.locator(".l", { hasText: "Mã đơn" }).first().innerText()).replace(/Mã đơn\s*/, "").trim();
+  assert(digits(await dSlip.locator(".l", { hasText: "Giảm giá" }).first().innerText()) === 5000, "phiếu giao có dòng Giảm giá 5.000");
+  await dDone.getByRole("button", { name: "Đơn mới" }).click();
+  const dOrder = await orderByCode(o.ctx, dCode);
+  assert(dOrder.discount === 5000 && dOrder.total === dTotal, `đơn giao: giảm giá 5.000, tổng ${dTotal} khớp sheet`);
+
   step("[PC 1440] API báo giá giao hàng (quyền pos.sell)");
   const r403 = await o.ctx.request.post(BASE + "/api/v1/pos/delivery-quote", { headers: hdr, data: { lines: [{ productId: 12, unit: "trai", qty: 1 }] } });
   assert(r403.ok(), "chủ gọi được /pos/delivery-quote");

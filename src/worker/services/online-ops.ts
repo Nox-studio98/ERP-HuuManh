@@ -196,7 +196,7 @@ export async function overrideWeight(c: Ctx, id: number, reason: string) {
 // ---------------------------------------------------------------- ship (EC-05)
 
 /** Chia một phân bổ lô cho nhiều dòng theo thứ tự. */
-function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
+export function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
   const pool = alloc.map((a) => ({ ...a }));
   let i = 0;
   return qtys.map((q) => {
@@ -750,7 +750,13 @@ export interface SocialOrderInput {
   shippingFee?: number;
   acceptPreorder?: boolean;
   /** Giao hàng tại quầy (B3): đánh dấu nguồn + ca tạo + người giao, ghi cùng lúc tạo đơn. */
-  pos?: { shiftId: number; delivererUserId?: number | null; zoneId?: number | null };
+  pos?: {
+    shiftId: number; delivererUserId?: number | null; zoneId?: number | null;
+    /** Giảm giá tay (VND, đã gồm phần chia của giảm giá cả đơn) theo từng dòng items — ghi order_lines.discount + orders.discount; tổng đơn = tiền hàng − giảm giá + phí giao. */
+    lineDiscounts?: number[];
+    /** Phiếu duyệt bán dưới giá vốn (ghi vào các dòng bị lỗ để truy vết như POS). */
+    belowCostApprovalId?: number | null;
+  };
 }
 
 export async function findZone(db: D1Database, district: string) {
@@ -818,7 +824,9 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     slotCapacity = slot.capacity;
     if ((await slotUsed(db, b.slotDate, b.slotId)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   }
-  const total = subtotal + shippingFee;
+  const lineDisc = items.map((_, i) => Math.min(b.pos?.lineDiscounts?.[i] ?? 0, lineAmount(items[i].unitPrice, items[i].qtyMilli)));
+  const discountTotal = lineDisc.reduce((s, x) => s + x, 0);
+  const total = subtotal - discountTotal + shippingFee;
   const code = await nextOnlineCode(db);
   const token = newTrackingToken();
   const status: OnlineStatus = b.paymentMethod === "transfer" ? "awaiting_payment" : "new";
@@ -828,12 +836,12 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   try {
     const r = await db
       .prepare(
-        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, shipping_fee, total, note, created_by,
+        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, discount, shipping_fee, total, note, created_by,
                             tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id, payment_method, estimated_total,
                             source, pos_shift_id, deliverer_user_id)
-         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?)`,
+         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?)`,
       )
-      .bind(code, b.clientUuid ?? null, storeId, b.customerId ?? null, isPre, subtotal, shippingFee, total, b.note ?? null, user.id,
+      .bind(code, b.clientUuid ?? null, storeId, b.customerId ?? null, isPre, subtotal, discountTotal, shippingFee, total, b.note ?? null, user.id,
         token, b.receiverName, b.receiverPhone, address, b.pos?.zoneId ?? zone?.id ?? null, b.slotDate ?? null, b.slotId ?? null, b.paymentMethod, total,
         b.pos ? "pos" : null, b.pos?.shiftId ?? null, b.pos?.delivererUserId ?? null)
       .run();
@@ -847,10 +855,10 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   }
   const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
   try {
-    for (const i of items) {
+    for (const [k, i] of items.entries()) {
       const r = await db
-        .prepare(`INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, ordered_qty_milli, preorder_milli) VALUES (?,?,?,?,?,?,0,?,?,?) RETURNING id`)
-        .bind(orderId, i.productId, i.unit, i.qtyMilli, i.unitPrice, i.priceListId, lineAmount(i.unitPrice, i.qtyMilli), i.qtyMilli, i.preorder)
+        .prepare(`INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, ordered_qty_milli, preorder_milli, below_cost_approval_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id`)
+        .bind(orderId, i.productId, i.unit, i.qtyMilli, i.unitPrice, i.priceListId, lineDisc[k], lineAmount(i.unitPrice, i.qtyMilli) - lineDisc[k], i.qtyMilli, i.preorder, lineDisc[k] > 0 ? b.pos?.belowCostApprovalId ?? null : null)
         .first<{ id: number }>();
       i.lineId = r!.id;
     }
@@ -874,7 +882,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
       }
       stmts.push(
         enqueueJobStmt(db, "notify.staff_new_order", "order", orderId, {}),
-        auditStmt(c, { action: "online_order.create_social", entity: "order", entityId: orderId, after: { code, total, lines: items.length, paymentMethod: b.paymentMethod, preorder: !!isPre } }),
+        auditStmt(c, { action: "online_order.create_social", entity: "order", entityId: orderId, after: { code, total, ...(discountTotal ? { discount: discountTotal } : {}), lines: items.length, paymentMethod: b.paymentMethod, preorder: !!isPre } }),
       );
       await db.batch(stmts);
     };

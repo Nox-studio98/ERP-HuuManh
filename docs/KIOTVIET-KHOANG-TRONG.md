@@ -36,7 +36,7 @@ Chú thích: ĐC = Đã có; MP = Một phần; CC = Chưa có.
 | Nhập hàng | ĐC | `stock-docs` type `receipt` (nháp -> post), theo lô/HSD, công nợ NCC tự sinh (`/bills`), PO (`routes/purchase-orders.ts`), gợi ý nhập (`/purchasing/suggestions`), phân bổ chi phí nhập (`purchase_cost_adjustments`, mig 0020). Thiếu: sao chép phiếu, lịch sử thanh toán ngay trên phiếu, in tem lô |
 |---|---|---|
 | Trả hàng nhập (NCC) | ĐC (tài liệu sai, cần đính chính) | `routes/purchase-returns.ts` (`/purchase-returns` get/post/cancel) + UI trong `Inventory.tsx` (dòng 319, trả theo phiếu nhập/lô). Thiếu: trả nhanh không theo phiếu nhập (cần kiểm tra thêm) |
-| Kiểm kho | ĐC | `stock-docs` type `count` (snapshot, `lockLots`, chênh lệch vào P&L, duyệt). Thiếu: gộp nhiều phiếu kiểm, sao chép phiếu, nhập kết quả kiểm từ Excel |
+| Kiểm kho | ĐC | `stock-docs` type `count` (snapshot, `lockLots`, chênh lệch vào P&L, duyệt). Đã có: nhập kết quả kiểm từ Excel/CSV vào phiếu nháp (`/stock-docs/:id/count-import`, xem `docs/API.md`). Thiếu: gộp nhiều phiếu kiểm, sao chép phiếu |
 | Xuất huỷ | ĐC | type `waste` bắt buộc lý do; hỏng lô cách ly (EC-15) |
 | Chuyển hàng | ĐC (tài liệu thiếu) | type `transfer` **đã hai bước**: `transfer_status='in_transit'` rồi `POST /stock-docs/:id/receive` (lô mới tại đích). Phạm vi hiện: giữa vị trí (`locations`); `stores` chỉ có 1 bảng thông tin nên nhiều chi nhánh đầy đủ (tồn riêng, quyền theo chi nhánh) = MP |
 | Xuất dùng nội bộ | CC | DOC_TYPES = receipt/waste/adjust/count/transfer; không có loại `internal_use`. Có thể ghi tạm bằng `adjust`/`waste` với lý do, nhưng không vào chi phí đúng loại |
@@ -140,7 +140,7 @@ Chú thích: ĐC = Đã có; MP = Một phần; CC = Chưa có.
 | 4 | ✅ **Đã làm (PR #23)** — màn Báo cáo bán hàng (người bán, hàng hoá, khách, NCC). **Báo cáo hàng hoá/khách/nhân viên/NCC**: bán chạy-chậm, lãi theo SKU, top khách, doanh số theo người bán, mua theo NCC | Cao (quyết định nhập hàng, hao hụt hàng tươi) | Vừa (SQL + màn; người bán phụ thuộc POS-KV A4 đang làm) | A4 cho báo cáo nhân viên |
 | 5 | **Hoá đơn điện tử** cho bán lẻ/online (yêu cầu pháp lý hộ kinh doanh) | Cao (pháp lý, khi go-live) | Lớn (dòng chiết khấu, KM, gộp cuối ngày; MISA thật) | **Tài liệu API/tài khoản MISA (hoặc nhà cung cấp khác)**, xác nhận hình thức kinh doanh |
 | 6 | **Bán nợ lẻ + thu khác + giao hàng tại quầy + QR thu nợ lẻ** (POS-KV đợt B) | Trung bình-Cao (khách quen mua nợ) | Lớn (đụng công nợ/chứng từ) | SePay thật cho QR |
-| 7 | ✅ **Đã làm (PR #23)** — Nhập Excel/CSV hàng hoá, khách sỉ, NCC (chưa có: kết quả kiểm kho). **Nhập Excel**: hàng hoá, khách, NCC, kết quả kiểm kho (hiện chỉ xuất); khi go-live cần nạp dữ liệu từ KiotViet/sổ cũ | Trung bình-Cao (lúc chuyển đổi) | Vừa (parser `xlsx.ts` mới có phần xuất) | không |
+| 7 | ✅ **Đã làm (PR #23)** — Nhập Excel/CSV hàng hoá, khách sỉ, NCC + kết quả kiểm kho (đã làm: vào phiếu kiểm kê nháp, không tự ghi sổ). **Nhập Excel**: hàng hoá, khách, NCC, kết quả kiểm kho; khi go-live cần nạp dữ liệu từ KiotViet/sổ cũ | Trung bình-Cao (lúc chuyển đổi) | Vừa (parser `xlsx.ts` mới có phần xuất) | không |
 | 8 | ✅ **Đã làm (PR #23)** — Xuất dùng nội bộ, Chuyển tiền giữa các quỹ (migration 0035). **Xuất dùng nội bộ** + chuyển quỹ nội bộ (tiền mặt -> ngân hàng) | Trung bình | Nhỏ-vừa mỗi mục (thêm loại phiếu + chi phí/P&L; cặp phiếu thu-chi liên kết, khoá kỳ) | không |
 | 9 | Trả hàng nhanh không hoá đơn gốc (có duyệt) | Trung bình | Vừa | quy tắc giá trả |
 | 10 | Đánh giá đơn hàng (website), nhóm khách tự động + sinh nhật/hạng thành viên | Trung bình | Vừa | #1 |

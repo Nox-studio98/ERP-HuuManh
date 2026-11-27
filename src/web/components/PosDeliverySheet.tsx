@@ -9,15 +9,16 @@ import { Banner, Button, Input, MoneyInput, Segmented, Select, Sheet, TextArea, 
 import { Barcode } from "./Barcode";
 import { toast } from "./toast";
 
-export type DeliveryLine = { productId: number; name: string; unit: string; qty: number };
+export type DeliveryLine = { productId: number; name: string; unit: string; qty: number; discount?: number };
 type Zone = { id: number; name: string; districts: string[]; fee: number; freeOver: number | null; minOrder: number };
 type Result = { id: number; code: string; total: number; prepay: number; cod: number; trackingUrl: string };
 const PAY_METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
 
-export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, onDone }: {
+export function PosDeliverySheet({ lines, customer, orderDiscount = 0, onClose, onDone }: {
   lines: DeliveryLine[];
   customer: { id: number; name: string; phone?: string | null } | null;
-  hasManualDiscount: boolean;
+  /** Giảm giá tay cả đơn trong giỏ (VND); giảm theo dòng nằm trong lines[].discount. */
+  orderDiscount?: number;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -37,19 +38,25 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
   const [busy, setBusy] = useState(false);
   const [uid, setUid] = useState(() => uuid());
   const [res, setRes] = useState<Result | null>(null);
-  const [snap, setSnap] = useState<{ name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[] } | null>(null);
+  const [snap, setSnap] = useState<{ name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[]; discount: number } | null>(null);
+  // A-29: giảm giá vượt ngưỡng / dưới giá vốn → phiếu duyệt của quản lý (thu ngân) hoặc lý do tự duyệt (quản lý/chủ)
+  const [approval, setApproval] = useState<{ id: number; message: string } | null>(null);
+  const [needReason, setNeedReason] = useState(false);
+  const [reason, setReason] = useState("");
 
   const zones = useAsync(async () => ((await get("/pos/delivery-zones", undefined, { silent: true })).items ?? []) as Zone[], []);
   const staff = useAsync(async () => ((await get("/pos/deliverers", undefined, { silent: true })).items ?? []) as { id: number; fullName: string }[], []);
   const addrs = useAsync(async () => (customer ? await get("/pos/delivery-addresses", { customerId: customer.id }, { silent: true }) : null), [customer?.id]);
-  const linesKey = JSON.stringify(lines.map((l) => [l.productId, l.unit, l.qty]));
-  const quote = useAsync(async () => (await post("/pos/delivery-quote", { ...(customer ? { customerId: customer.id } : {}), lines: lines.map((l) => ({ productId: l.productId, unit: l.unit, qty: l.qty })) }, { silent: true })).subtotal as number, [linesKey, customer?.id]);
+  const linesKey = JSON.stringify([lines.map((l) => [l.productId, l.unit, l.qty, l.discount ?? 0]), orderDiscount]);
+  const linePayload = lines.map((l) => ({ productId: l.productId, unit: l.unit, qty: l.qty, ...(l.discount ? { discount: l.discount } : {}) }));
+  const quote = useAsync(async () => (await post("/pos/delivery-quote", { ...(customer ? { customerId: customer.id } : {}), lines: linePayload, ...(orderDiscount ? { discount: orderDiscount } : {}) }, { silent: true })) as { subtotal: number; discount: number; net: number }, [linesKey, customer?.id]);
 
   useEffect(() => { if (addrs.data?.receiverName && !name) setName(addrs.data.receiverName); if (addrs.data?.receiverPhone && !phone) setPhone(addrs.data.receiverPhone); }, [addrs.data]); // eslint-disable-line
   useEffect(() => { if (!staffId && staff.data?.length) setStaffId(staff.data[0].id); }, [staff.data]); // eslint-disable-line
 
-  const subtotal = quote.data ?? 0;
-  const total = subtotal + fee;
+  const subtotal = quote.data?.subtotal ?? 0;
+  const discount = quote.data?.discount ?? 0;
+  const total = subtotal - discount + fee;
   const pickZone = (id: number) => {
     setZoneId(id);
     const z = zones.data?.find((x) => x.id === id);
@@ -68,7 +75,10 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
         clientUuid: uid,
         ...(customer ? { customerId: customer.id } : {}),
         receiver: { name: name.trim(), phone: phone.trim(), address: address.trim(), ...(zoneId ? { zoneId } : {}) },
-        lines: lines.map((l) => ({ productId: l.productId, unit: l.unit, qty: l.qty })),
+        lines: linePayload,
+        ...(orderDiscount ? { discount: orderDiscount } : {}),
+        ...(approval ? { approvalId: approval.id } : {}),
+        ...(reason.trim().length >= 3 ? { overrideReason: reason.trim() } : {}),
         shippingFee: fee,
         deliverer: who === "staff" ? { userId: staffId } : { carrier: carrier.trim(), ...(tracking.trim() ? { trackingNo: tracking.trim() } : {}) },
         prepay: prepay > 0 ? [{ method, amount: prepay }] : [],
@@ -81,12 +91,15 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
         toast(`Đơn ${r.code ?? ""} chưa sang "Đang giao" (trạng thái: ${r.status ?? "không rõ"}) — chưa in phiếu, hãy kiểm tra ở màn Đơn online rồi tạo lại`, "error");
         return;
       }
-      setSnap({ name: name.trim(), phone: phone.trim(), address: address.trim(), deliverer: who === "staff" ? staff.data?.find((s) => s.id === staffId)?.fullName ?? "" : `${carrier.trim()}${tracking.trim() ? ` · ${tracking.trim()}` : ""}`, lines });
+      setSnap({ name: name.trim(), phone: phone.trim(), address: address.trim(), deliverer: who === "staff" ? staff.data?.find((s) => s.id === staffId)?.fullName ?? "" : `${carrier.trim()}${tracking.trim() ? ` · ${tracking.trim()}` : ""}`, lines, discount });
       setRes(r as Result);
       toast(`Đã tạo đơn giao ${(r as Result).code} — đang giao`, "ok");
     } catch (e) {
       // Máy chủ đã trả lỗi → lần này không tạo được đơn: lần thử sau dùng mã mới (không gửi lại mã của lần đã thất bại/đã huỷ).
       // Lỗi mạng (không có phản hồi) thì giữ mã để gửi lại vẫn idempotent, tránh tạo trùng đơn.
+      // Cần duyệt / cần lý do: GIỮ mã đơn (phiếu duyệt gắn với mã + giỏ hàng) để bấm tạo lại sau khi quản lý duyệt
+      if (e instanceof ApiError && e.code === "approval_required") { setApproval({ id: e.details?.approvalId, message: e.message }); return; }
+      if (e instanceof ApiError && e.code === "override_reason_required") { setNeedReason(true); return; }
       if (e instanceof ApiError) setUid(uuid());
       if (e instanceof ApiError && e.code === "payment_mismatch") { quote.reload(); toast("Tổng đơn vừa thay đổi, đã cập nhật lại — kiểm tra rồi bấm tạo lại", "error"); }
     } finally { setBusy(false); }
@@ -111,12 +124,16 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
       <div className="stack" data-testid="delivery-sheet">
         <div className="totals" data-testid="delivery-totals">
           <div><span className="muted">Tiền hàng</span><span className="money">{quote.loading ? "…" : money(subtotal)}</span></div>
+          {discount > 0 && <div data-testid="delivery-discount"><span className="muted">Giảm giá</span><span className="money">-{money(discount)}</span></div>}
           <div><span className="muted">Phí giao</span><span className="money">{money(fee)}</span></div>
           <div className="grand"><span>Tổng</span><span className="money">{money(total)}</span></div>
           <div><span className="muted">Trả trước tại quầy</span><span className="money">{money(prepay)}</span></div>
           <div><span className="muted">Người giao thu hộ (COD)</span><b className="money" data-testid="delivery-cod">{money(cod)}</b></div>
         </div>
-        {hasManualDiscount && <Banner tone="info">Đơn giao hàng tính theo giá bán online và không áp giảm giá tay trong giỏ.</Banner>}
+        {approval && (
+          <Banner data-testid="delivery-approval">{approval.message} Mã yêu cầu duyệt: <b>#{approval.id ?? "?"}</b>. Báo quản lý duyệt trong mục “Duyệt”, rồi bấm <b>Tạo đơn giao</b> lại (giữ nguyên giỏ hàng).</Banner>
+        )}
+        {needReason && <TextArea label="Lý do giảm giá / bán dưới giá vốn (bắt buộc)" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />}
         <div className="grid2">
           <Input label="Người nhận" value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
           <Input label="Số điện thoại" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} error={phone && !phoneOk ? "Số điện thoại chưa hợp lệ" : undefined} />
@@ -170,7 +187,7 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
 }
 
 /** Phiếu giao 80mm: người nhận, địa chỉ, số thu hộ, mã đơn + mã vạch. Dùng khuôn `.receipt print-area` của hoá đơn. */
-function DeliverySlip({ code, total, cod, prepay, trackingUrl, name, phone, address, deliverer, lines }: { code: string; total: number; cod: number; prepay: number; trackingUrl: string; name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[] }) {
+function DeliverySlip({ code, total, cod, prepay, trackingUrl, name, phone, address, deliverer, lines, discount = 0 }: { code: string; total: number; cod: number; prepay: number; trackingUrl: string; name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[]; discount?: number }) {
   return (
     <>
       <style>{`@media print { @page { size: 80mm auto; margin: 3mm; } }`}</style>
@@ -188,6 +205,7 @@ function DeliverySlip({ code, total, cod, prepay, trackingUrl, name, phone, addr
         <hr />
         {lines.map((l, i) => <div key={i} className="l"><span>{l.name}</span><span>{qtyText(Math.round(l.qty * 1000), l.unit)}</span></div>)}
         <hr />
+        {discount > 0 && <div className="l"><span>Giảm giá</span><span>-{money(discount)}</span></div>}
         <div className="l"><span>Tổng đơn</span><span>{money(total)}</span></div>
         {prepay > 0 && <div className="l"><span>Đã trả trước</span><span>-{money(prepay)}</span></div>}
         <div className="l" style={{ fontWeight: 800, fontSize: "1.2em" }}><span>THU HỘ</span><span>{money(cod)}</span></div>

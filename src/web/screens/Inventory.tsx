@@ -10,6 +10,7 @@ import { DateRangeFilter, ExportButton, FilterBar, FilterSelect, KpiRow, PageHea
 import { navigate } from "../router";
 import type { Product } from "./Pos";
 import ReceivePoSheet from "./d4/ReceivePo";
+import CountImportSheet from "./CountImport";
 
 const REASONS = [["dap", "Dập"], ["heo", "Héo"], ["het_han", "Hết hạn"], ["hao_can", "Hao cân"], ["khac", "Khác"]];
 const docTone = (s: string) => (s === "posted" ? "ok" : s === "pending_approval" ? "warn" : s === "cancelled" ? "danger" : "info") as any;
@@ -188,6 +189,7 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
   const [busy, setBusy] = useState(false);
   const [receiving, setReceiving] = useState(false);
   const [returning, setReturning] = useState(false);
+  const [importing, setImporting] = useState(false);
   const can = useCan();
   const d = doc.data && pmap ? withShown(doc.data, pmap) : doc.data;
   const editable = !d || d.status === "draft";
@@ -226,6 +228,8 @@ function DocEditor({ type: t0, id: id0, onClose }: { type?: string; id?: number;
             { key: "e", label: type === "waste" ? "Lý do" : "HSD", render: (l) => (type === "waste" ? REASONS.find((r) => r[0] === l.reason)?.[1] ?? l.reason ?? "—" : fmtDate(l.expiresAt)) },
             ...(editable ? [{ key: "x", label: "", render: (l: any) => <Button size="sm" variant="ghost" aria-label="Xoá dòng" onClick={async () => { try { await api_del(id, l.id); doc.reload(); } catch {} }}>✕</Button> }] : []),
           ]} />
+          {importing && d && <CountImportSheet docId={d.id} docCode={d.code} onClose={() => setImporting(false)} onDone={() => { setImporting(false); doc.reload(); }} />}
+          {editable && type === "count" && can("inventory.write") && !adding && <Button variant="soft" onClick={() => setImporting(true)} data-testid="count-import-open">Nhập kết quả từ Excel / CSV</Button>}
           {editable && (adding ? <LineForm type={type} docId={id} onDone={() => { setAdding(false); doc.reload(); }} onCancel={() => setAdding(false)} /> : <Button variant="soft" onClick={() => setAdding(true)}>+ Thêm dòng (quét / tìm)</Button>)}
         </div>
       )}

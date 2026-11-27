@@ -62,6 +62,7 @@ Quy ước như `CLAUDE.md`: một `db.batch` + `auditStmt`; `assertStmt` cho ki
 ### Dữ liệu / API
 - Migration `0040_pos_delivery.sql`: `orders.source TEXT` (NULL | 'pos'), `orders.pos_shift_id INTEGER REFERENCES shifts(id)`.
 - `POST /pos/delivery-orders` (quyền `pos.sell`): `{ customerId?, receiver:{name, phone, address, zoneId?}, lines[], discount?, shippingFee, deliverer: {userId} | {carrier, trackingNo?}, prepay:[{method, amount}], cod }` (prepay + cod = tổng; sai → 422) → tạo đơn + đưa sang `shipping` trong một batch; trả mã đơn và link tra cứu.
+- **Giảm giá tay** (đã làm): `lines[].discount` + `discount` cả đơn, cùng ngưỡng duyệt / dưới vốn như POS (A-29) — chi tiết ở `docs/API.md`; `test/pos-delivery-discount.test.ts`.
 - Danh sách đơn online lọc thêm `source=pos`; chi tiết đơn hiện người giao.
 - Phiếu in giao hàng (80mm): người nhận, địa chỉ, khung giờ, số tiền thu hộ, mã đơn + mã vạch.
 
