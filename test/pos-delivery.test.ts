@@ -147,6 +147,36 @@ describe("POST /pos/delivery-orders", () => {
     expect((await api("warehouse", "POST", `${V}/pos/delivery-quote`, { lines: [{ productId: 1, unit: "kg", qty: 3 }] })).status).toBe(403);
   });
 
+  it("vai không có pos.sell (thủ kho, kế toán) → 403, không tạo đơn", async () => {
+    const n0 = (await db().prepare(`SELECT COUNT(*) n FROM orders WHERE source='pos'`).first<any>())!.n;
+    for (const role of ["warehouse", "accountant"]) expect((await create(role, body())).status).toBe(403);
+    expect((await db().prepare(`SELECT COUNT(*) n FROM orders WHERE source='pos'`).first<any>())!.n).toBe(n0);
+  });
+
+  it("lỗi giữa chừng (bước ship thất bại) → đơn tự huỷ, không giữ hàng, không payments, kho nguyên", async () => {
+    await db().prepare(`CREATE TRIGGER t_boom BEFORE INSERT ON payments WHEN NEW.amount = 77777 BEGIN SELECT RAISE(ABORT, 'boom'); END`).run();
+    const q0 = await lotQty(1);
+    const before = (await db().prepare(`SELECT COALESCE(MAX(id),0) m FROM orders`).first<any>())!.m;
+    const r = await create("cashier", body({ prepay: [{ method: "cash", amount: 77777 }], cod: 220000 - 77777 }));
+    await db().prepare(`DROP TRIGGER t_boom`).run();
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    const created = (await db().prepare(`SELECT id, status, paid_total FROM orders WHERE id > ?`).bind(before).all<any>()).results;
+    expect(created.length).toBe(1);
+    expect(created[0]).toMatchObject({ status: "cancelled", paid_total: 0 });
+    const id = created[0].id;
+    expect((await db().prepare(`SELECT COUNT(*) n FROM payments WHERE order_id=?`).bind(id).first<any>()).n).toBe(0);
+    expect((await db().prepare(`SELECT COUNT(*) n FROM reservations WHERE order_id=? AND status='active'`).bind(id).first<any>()).n).toBe(0);
+    expect((await db().prepare(`SELECT COUNT(*) n FROM order_line_lots oll JOIN order_lines ol ON ol.id=oll.order_line_id WHERE ol.order_id=?`).bind(id).first<any>()).n).toBe(0);
+    expect(await lotQty(1)).toBe(q0);
+  });
+
+  it("danh sách Đơn online trả paidTotal để hiện 'Trả trước X · thu hộ Y'", async () => {
+    const r = await create("cashier", body({ prepay: [{ method: "cash", amount: 50000 }], cod: 170000 }));
+    const l = await api("manager", "GET", `${V}/online-orders?source=pos`);
+    const it = l.body.items.find((x: any) => x.id === r.body.id);
+    expect(it).toMatchObject({ source: "pos", paidTotal: 50000, total: 220000, paymentStatus: "unpaid" });
+  });
+
   it("kỳ khoá sổ → 423, không ghi gì", async () => {
     const n0 = (await db().prepare(`SELECT COUNT(*) n FROM orders WHERE source='pos'`).first<any>())!.n;
     await db().prepare(`INSERT INTO periods(period, locked_at, locked_by) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 1)`).bind(vnPeriod()).run();

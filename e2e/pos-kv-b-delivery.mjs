@@ -149,6 +149,7 @@ async function deliveryFlow(page, tag, { mode, name, phoneNo, addr, shotName }) 
   const cod = total - prepay;
   assert(digits(await sheet.getByTestId("delivery-cod").innerText()) === cod, `[${tag}] thu hộ COD hiển thị ${cod}`);
   await sheet.getByLabel("Nhân viên giao").waitFor();
+  await sheet.evaluate((el) => { const b = el.closest(".body"); if (b) b.scrollTop = 0; });
   if (shotName) await shot(page, shotName);
   await submit.click();
   const done = page.getByRole("dialog", { name: "Đã tạo đơn giao hàng" });
@@ -160,6 +161,7 @@ async function deliveryFlow(page, tag, { mode, name, phoneNo, addr, shotName }) 
   assert((await slip.innerText()).includes(name) && (await slip.innerText()).includes(addr), `[${tag}] phiếu giao có người nhận + địa chỉ`);
   assert(digits(await slip.locator(".l", { hasText: "THU HỘ" }).innerText()) === cod, `[${tag}] phiếu giao: THU HỘ ${cod}`);
   assert((await slip.locator("svg[aria-label^='Mã vạch']").count()) === 1, `[${tag}] phiếu giao có mã vạch`);
+  assert(/Tra cứu: .*\/track\//.test(await slip.getByTestId("slip-track").innerText()), `[${tag}] phiếu giao có link tra cứu`);
   if (shotName) await shot(page, shotName.replace(".png", "-phieu.png"));
   await done.getByRole("button", { name: "Đơn mới" }).click();
   await page.getByLabel("Tìm sản phẩm").waitFor();
@@ -205,6 +207,7 @@ try {
   await row.click();
   await o.page.getByTestId("pos-origin").waitFor();
   assert(/Người giao: Nhân viên:/.test(await o.page.getByTestId("carrier-info").innerText()), "chi tiết đơn hiện người giao");
+  assert(/Trả trước 50\.000 ₫ · thu hộ 100\.000 ₫/.test(await o.page.locator(".badge").filter({ hasText: "Trả trước" }).first().innerText()), "đơn trả trước một phần hiện \"Trả trước 50.000 ₫ · thu hộ 100.000 ₫\"");
   await shot(o.page, "pos-kv-b3-1440-online-orders.png");
   await o.page.getByRole("button", { name: "Đã giao", exact: true }).click();
   await toastOk(o.page, /Đã giao hàng/);
@@ -258,6 +261,8 @@ try {
   await ms.getByRole("tab", { name: "Trả đủ" }).click();
   await ms.getByLabel("Hình thức trả trước").selectOption("transfer");
   await noOverflow(m.page, "sheet giao hàng");
+  await shot(m.page, "pos-kv-b3-390-sheet-duoi.png");
+  await ms.evaluate((el) => { const b = el.closest(".body"); if (b) b.scrollTop = 0; });
   await shot(m.page, "pos-kv-b3-390-sheet.png");
   await m.page.getByTestId("delivery-submit").click();
   const md = m.page.getByRole("dialog", { name: "Đã tạo đơn giao hàng" });

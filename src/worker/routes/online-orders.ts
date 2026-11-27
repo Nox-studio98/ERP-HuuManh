@@ -69,7 +69,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
   const rows = (
     await c.env.DB
       .prepare(
-        `SELECT o.id, o.code, o.channel, o.source, o.carrier, o.carrier_tracking_no, o.status, o.payment_method, o.payment_status, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
+        `SELECT o.id, o.code, o.channel, o.source, o.carrier, o.carrier_tracking_no, o.status, o.payment_method, o.payment_status, o.paid_total, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
                 o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status, o.refund_due,
                 EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight,
                 (SELECT COALESCE(SUM(s.qty_milli), 0) FROM so_shortages s WHERE s.order_id = o.id AND s.status = 'open') AS short_milli
@@ -92,6 +92,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     statusLabel: CUSTOMER_LABEL[r.status as OnlineStatus] ?? r.status,
     paymentMethod: r.payment_method,
     paymentStatus: r.payment_status,
+    paidTotal: r.paid_total,
     slotDate: r.slot_date,
     slotLabel: r.slot_label,
     receiverName: r.receiver_name,

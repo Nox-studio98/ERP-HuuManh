@@ -69,6 +69,9 @@ async function quoteSubtotal(db: D1Database, customerId: number | null, lines: {
   return subtotal;
 }
 
+/** Link tra cứu của khách: tuyệt đối nếu cấu hình SHOP_BASE_URL, không thì đường dẫn tương đối. */
+const trackUrl = (env: { SHOP_BASE_URL?: string }, token: string) => `${(env.SHOP_BASE_URL ?? "").replace(/\/$/, "")}/track/${token}`;
+
 posDeliveryRoutes.post("/pos/delivery-quote", requirePerm("pos.sell"), async (c) => {
   const b = z.object({ customerId: z.number().int().positive().nullish(), lines: deliverySchema.shape.lines }).parse(await c.req.json().catch(() => ({})));
   return c.json({ subtotal: await quoteSubtotal(c.env.DB, b.customerId ?? null, b.lines) });
@@ -87,7 +90,7 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   // Idempotent theo clientUuid: gửi lại cùng mã thì trả đơn đã tạo
   if (b.clientUuid) {
     const ex = await db.prepare(`SELECT id, code, tracking_token, status FROM orders WHERE client_uuid = ?`).bind(b.clientUuid).first<any>();
-    if (ex && ex.status !== "draft") return c.json({ id: ex.id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: `/track/${ex.tracking_token}`, created: false });
+    if (ex && ex.status !== "draft") return c.json({ id: ex.id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: trackUrl(c.env, ex.tracking_token), created: false });
   }
 
   // Người giao
@@ -140,7 +143,7 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   const id = created.id;
   if (!created.created) {
     const ex = await db.prepare(`SELECT code, status, tracking_token FROM orders WHERE id = ?`).bind(id).first<any>();
-    return c.json({ id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: `/track/${ex.tracking_token}`, created: false });
+    return c.json({ id, code: ex.code, status: ex.status, trackingToken: ex.tracking_token, trackingUrl: trackUrl(c.env, ex.tracking_token), created: false });
   }
 
   // 2) Các bước chuyển trạng thái sẵn có. Lỗi giữa chừng → huỷ đơn (nhả giữ hàng), chưa có tiền nào được ghi.
@@ -171,7 +174,7 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
     throw e;
   }
   const row = await db.prepare(`SELECT code, status, tracking_token FROM orders WHERE id = ?`).bind(id).first<any>();
-  return c.json({ id, code: row.code, status: row.status, total, prepay: prepayTotal, cod: b.cod, trackingToken: row.tracking_token, trackingUrl: `/track/${row.tracking_token}`, created: true }, 201);
+  return c.json({ id, code: row.code, status: row.status, total, prepay: prepayTotal, cod: b.cod, trackingToken: row.tracking_token, trackingUrl: trackUrl(c.env, row.tracking_token), created: true }, 201);
 });
 
 // Danh mục cho sheet giao hàng ở POS (thu ngân không có orders.online.manage)

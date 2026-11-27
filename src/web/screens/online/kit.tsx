@@ -92,3 +92,13 @@ export function TagInput({ label, value, onChange }: { label: string; value: str
 export const Toggle = ({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) => (
   <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={checked} onChange={(e) => onChange(e.target.checked)} /> {label}</label>
 );
+
+/** Nhãn thanh toán của đơn online. Đơn giao từ quầy (source=pos): "Trả trước X · thu hộ Y" hoặc "Đã thanh toán" thay vì "COD · Chưa thanh toán". */
+export const payText = (o: { source?: string | null; paymentMethod?: string | null; paymentStatus?: string; paidTotal?: number; total?: number }) => {
+  if (o.source === "pos" && o.paymentStatus === "paid") return "Đã thanh toán";
+  if (o.source === "pos" && (o.paidTotal ?? 0) > 0 && o.paymentStatus === "unpaid") {
+    const f = (n: number) => new Intl.NumberFormat("vi-VN").format(n) + " ₫";
+    return `Trả trước ${f(o.paidTotal!)} · thu hộ ${f(Math.max(0, (o.total ?? 0) - o.paidTotal!))}`;
+  }
+  return `${PAY_METHOD[o.paymentMethod ?? ""] ?? o.paymentMethod} · ${PAY_STATUS[o.paymentStatus ?? ""] ?? o.paymentStatus}`;
+};

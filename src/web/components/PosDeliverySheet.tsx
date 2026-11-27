@@ -88,7 +88,7 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
       <Sheet open onClose={onDone} title="Đã tạo đơn giao hàng" footer={<Button block size="lg" onClick={onDone}>Đơn mới</Button>}>
         <div className="stack">
           <Banner tone="info">Đơn <b>{res.code}</b> đã sang <b>Đang giao</b>. Hàng đã trừ kho; doanh thu ghi khi giao xong ở màn Đơn online.</Banner>
-          <DeliverySlip code={res.code} total={res.total} cod={res.cod} prepay={res.prepay} {...snap} />
+          <DeliverySlip code={res.code} total={res.total} cod={res.cod} prepay={res.prepay} trackingUrl={res.trackingUrl} {...snap} />
           <Button block variant="soft" data-testid="print-slip" onClick={() => window.print()}>In phiếu giao 80mm</Button>
         </div>
       </Sheet>
@@ -120,13 +120,11 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
           </div>
         )}
         <TextArea label="Địa chỉ giao" rows={2} value={address} onChange={(e) => setAddress(e.target.value)} />
-        <div className="grid2">
-          <Select label="Khu vực giao" value={String(zoneId)} onChange={(e) => pickZone(Number(e.target.value))}>
-            <option value="0">Chọn khu vực (gợi ý phí)</option>
-            {(zones.data ?? []).map((z) => <option key={z.id} value={z.id}>{z.name} · {money(z.fee)}</option>)}
-          </Select>
-          <MoneyInput label="Phí giao (₫)" value={fee} onChange={setFee} hint="Sửa được; ghi vào phí giao của đơn" />
-        </div>
+        <Select label="Khu vực giao" value={String(zoneId)} onChange={(e) => pickZone(Number(e.target.value))}>
+          <option value="0">Chọn khu vực (gợi ý phí)</option>
+          {(zones.data ?? []).map((z) => <option key={z.id} value={z.id}>{z.name} · {money(z.fee)}</option>)}
+        </Select>
+        <MoneyInput label="Phí giao (₫)" value={fee} onChange={setFee} hint="Sửa được; ghi vào phí giao của đơn" />
 
         <div className="stack" style={{ gap: 6 }}>
           <span className="lbl">Người giao</span>
@@ -163,7 +161,7 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
 }
 
 /** Phiếu giao 80mm: người nhận, địa chỉ, số thu hộ, mã đơn + mã vạch. Dùng khuôn `.receipt print-area` của hoá đơn. */
-function DeliverySlip({ code, total, cod, prepay, name, phone, address, deliverer, lines }: { code: string; total: number; cod: number; prepay: number; name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[] }) {
+function DeliverySlip({ code, total, cod, prepay, trackingUrl, name, phone, address, deliverer, lines }: { code: string; total: number; cod: number; prepay: number; trackingUrl: string; name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[] }) {
   return (
     <>
       <style>{`@media print { @page { size: 80mm auto; margin: 3mm; } }`}</style>
@@ -188,6 +186,7 @@ function DeliverySlip({ code, total, cod, prepay, name, phone, address, delivere
         <hr />
         <div style={{ display: "grid", placeItems: "center" }}><Barcode value={code} /></div>
         <div style={{ textAlign: "center" }}>{code}</div>
+        <div style={{ textAlign: "center", fontSize: ".8em", wordBreak: "break-all" }} data-testid="slip-track">Tra cứu: {trackingUrl}</div>
       </div>
     </>
   );

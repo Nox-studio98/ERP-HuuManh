@@ -7,7 +7,7 @@ import { navigate, usePath } from "../../router";
 import { useCan } from "../../store";
 import { Back, Lnk, q3, waitLabel } from "../b2b/kit";
 import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, useWide, type DateRange } from "../../components/list";
-import { CHANNEL_LABEL, PAY_METHOD, PAY_STATUS, STATUS_LABEL, TABS, WEIGHT_LABEL, statusTone, ymdShow } from "./kit";
+import { CHANNEL_LABEL, PAY_METHOD, PAY_STATUS, payText, STATUS_LABEL, TABS, WEIGHT_LABEL, statusTone, ymdShow } from "./kit";
 
 export default function OnlineOrders() {
   const path = usePath();
@@ -44,7 +44,7 @@ function OrderList() {
           <ExportButton filename={`don-online-${range.from}_${range.to}`} rows={rows} columns={[
             { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => chLabel(o) }, { label: "Trạng thái", value: (o) => STATUS_LABEL[o.status] ?? o.status },
             { label: "Người nhận", value: (o) => o.receiverName }, { label: "SĐT", value: (o) => o.receiverPhone }, { label: "Khu vực", value: (o) => o.district ?? o.zoneName }, { label: "Ngày giao", value: (o) => o.slotDate },
-            { label: "Thanh toán", value: (o) => `${PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · ${PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}` }, { label: "Tổng", value: (o) => o.total },
+            { label: "Thanh toán", value: (o) => payText(o) }, { label: "Tổng", value: (o) => o.total },
           ]} />
           <Lnk to="/online-orders/new" className="btn">+ Tạo đơn mạng xã hội</Lnk>
         </>} />
@@ -79,7 +79,7 @@ function OrderList() {
                 { key: "r", label: "Người nhận", sort: (o) => o.receiverName ?? "", render: (o) => <span><span className="nw">{o.receiverName}</span><div className="small muted">{o.receiverPhone}</div></span> },
                 { key: "ch", label: "Kênh", hideBelow: 1440, sort: (o) => chLabel(o), render: (o) => <span className="nw">{chLabel(o)}</span> },
                 { key: "z", label: "Giao", sort: (o) => o.slotDate ?? "", render: (o) => <span>{o.slotDate ? `${ymdShow(o.slotDate)} ${o.slotLabel ?? ""}` : "Chưa hẹn"}<div className="small muted">{o.district ?? "—"}</div></span> },
-                { key: "p", label: "Thanh toán", hideBelow: 1600, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge> },
+                { key: "p", label: "Thanh toán", hideBelow: 1600, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{payText(o)}</Badge> },
                 { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => (
                   <span className="row wrap st-badges" style={{ gap: 4 }}>
                     <Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status] ?? o.status}</Badge>
@@ -142,7 +142,7 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
         <div className="row between wrap"><span className="muted small">{chLabel(o)} · tạo {fmtDateTime(o.createdAt)}</span><Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge></div>
       )}
       <div className="row wrap" style={{ gap: 6 }}>
-        <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
+        <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{payText(o)}</Badge>
         {o.isPreorder && <Badge tone="info">Đặt trước</Badge>}
         {o.awaitingStock && <Badge tone="warn">Chờ hàng về</Badge>}
         {WEIGHT_LABEL[o.weightAdjustStatus] && <Badge tone={weightBlock ? "warn" : "info"}>{WEIGHT_LABEL[o.weightAdjustStatus]}</Badge>}
