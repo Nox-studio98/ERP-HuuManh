@@ -117,8 +117,9 @@ describe("EC-39 chuyển việc khi nghỉ việc / khoá tài khoản", () => {
   it("khoá tài khoản (PUT /users) cũng hết bị chặn sau khi chuyển; kỳ công đã chốt thì không đụng ca", async () => {
     await db().prepare(`INSERT INTO customers(id, code, type, name, owner_user_id) VALUES (1110,'KH-HO9','b2b','Quán Lẻ',1101)`).run();
     expect((await call<any>("owner", "PUT", `${V}/users/1101`, { active: false })).body.error.code).toBe("pending_requests");
-    const farMonth = FUT(2).slice(0, 7);
-    await db().prepare(`INSERT OR IGNORE INTO timesheets(period, status) VALUES (?, 'closed')`).bind(farMonth).run().catch(() => {});
+    // chốt mọi tháng có ca tương lai của người này (ca có thể rơi vào 2 tháng khi chạy gần cuối tháng)
+    const months = (await db().prepare(`SELECT DISTINCT substr(work_date,1,7) m FROM shift_assignments WHERE employee_id=1101`).all<any>()).results.map((r: any) => r.m);
+    for (const m of months) await db().prepare(`INSERT INTO timesheets(period, status) VALUES (?, 'closed') ON CONFLICT(period) DO UPDATE SET status='closed'`).bind(m).run().catch(() => {});
     const g = await call<any>("owner", "GET", `${V}/handover?userId=1101`);
     expect(g.body.groups.find((x: any) => x.key === "shifts")).toBeUndefined();
     const r = await call<any>("owner", "POST", `${V}/handover`, { userId: 1101, reason: "Khoá TK", actions: [{ group: "customers", action: "reassign", toUserId: mgr }, { group: "stock_docs", action: "reassign", toUserId: mgr }, { group: "approvals", action: "reassign", toUserId: mgr }] });

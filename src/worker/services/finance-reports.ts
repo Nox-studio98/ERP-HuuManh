@@ -242,9 +242,9 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
     .prepare(
       `SELECT v.fund_id, v.direction AS dir,
               CASE WHEN dp.id IS NOT NULL THEN (CASE WHEN dp.direction='in' THEN 'Thu công nợ khách hàng' ELSE 'Trả công nợ nhà cung cấp' END) ELSE cc.name END AS category,
-              CASE WHEN v.ref_type = 'fund_transfer' THEN 1 ELSE 0 END AS is_transfer, SUM(v.amount) AS amount
+              CASE WHEN v.ref_type = 'fund_transfer' THEN 1 ELSE 0 END AS is_transfer, cc.code AS ccode, SUM(v.amount) AS amount
          FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id LEFT JOIN debt_payments dp ON dp.cash_voucher_id = v.id
-        WHERE v.status='posted' AND v.fund_id IN (${inList}) AND v.created_at >= ? AND v.created_at < ? GROUP BY v.fund_id, v.direction, category, is_transfer`,
+        WHERE v.status='posted' AND v.fund_id IN (${inList}) AND v.created_at >= ? AND v.created_at < ? GROUP BY v.fund_id, v.direction, category, is_transfer, ccode`,
     )
     .bind(...fundIds, fromIso, toIso)
     .all<any>()).results;
@@ -256,6 +256,10 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
       const m = r.dir === "in" ? transferIn : transferOut, mf = r.dir === "in" ? inflowFund : outflowFund;
       m.set(r.fund_id, (m.get(r.fund_id) ?? 0) + r.amount);
       mf.set(r.fund_id, (mf.get(r.fund_id) ?? 0) + r.amount);
+    } else if (r.ccode === "CK_CHO_XL_RA") {
+      // SePay: phiếu chi khỏi "Chuyển khoản chờ xử lý" (gán đơn/hoá đơn, hoàn, bỏ qua) không phải tiền ra thật mà là
+      // chuyển khoản chờ sang chứng từ thật (đã tính ở dòng thu tương ứng) → trừ vào dòng thu chờ, không cộng vào tổng chi
+      add("in", "Chuyển khoản chờ xử lý", r.fund_id, -r.amount);
     } else add(r.dir, r.category, r.fund_id, r.amount);
   }
 

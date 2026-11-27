@@ -44,6 +44,7 @@ const holdBal = async () => (await api("accountant", "GET", `${V}/sepay/hold`)).
 const vouchersOf = async (eventId: number) =>
   (await db().prepare(`SELECT v.code, v.direction, v.amount, v.created_at, v.period, v.note, cc.code AS cat, cc.pnl_line FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id WHERE v.ref_type='sepay_event' AND v.ref_id = ? ORDER BY v.id`).bind(eventId).all<any>()).results;
 const pnl = async () => (await api("owner", "GET", `${V}/reports/pnl?from=2020-01-01&to=2099-12-31`)).body;
+const cashFlow = async () => (await api("owner", "GET", `${V}/reports/cash-flow?from=2020-01-01&to=2099-12-31`)).body;
 
 let custSeq = 0;
 async function customerWithInvoice(amount: number) {
@@ -78,6 +79,7 @@ describe("SePay × sổ quỹ: khớp ngay (không qua khoản chờ)", () => {
 describe("SePay × sổ quỹ: chưa khớp", () => {
   it("chưa khớp → phiếu thu vào khoản chờ (không vào lãi lỗ); gửi lại webhook không ghi lần hai; gán đơn → chuyển ra, quỹ không đổi lần hai", async () => {
     const p0 = await pnl();
+    const cf0 = await cashFlow();
     const o = await webOrder();
     const t = tx("DH000000012345", o.total); // mã lạ
     expect((await hook(t)).body).toEqual({ success: false });
@@ -101,6 +103,10 @@ describe("SePay × sổ quỹ: chưa khớp", () => {
     const vs = await vouchersOf(ev.id);
     expect(vs.map((v: any) => [v.direction, v.cat])).toEqual([["in", "CK_CHO_XL"], ["out", "CK_CHO_XL_RA"]]);
     expect(await pnl()).toEqual(p0);
+    // báo cáo dòng tiền: tiền vào chỉ tính MỘT lần (phiếu chờ + thanh toán đơn − phiếu chi khỏi chờ), không thành tiền ra
+    const cf1 = await cashFlow();
+    expect(cf1.totalInflow - cf0.totalInflow).toBe(o.total);
+    expect(cf1.totalOutflow - cf0.totalOutflow).toBe(0);
     // hai người cùng bấm Gán: lần hai 409, không thêm phiếu
     const again = await api("accountant", "POST", `${V}/sepay/events/${ev.id}/assign`, { kind: "web", code: o.code, note: "lần hai" });
     expect(again.status).toBe(409);

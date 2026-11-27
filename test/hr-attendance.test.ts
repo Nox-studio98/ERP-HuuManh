@@ -136,7 +136,7 @@ describe("Bổ sung công", () => {
   it("duyệt tạo punch manual accepted (created_by = người duyệt); từ chối thì không", async () => {
     const day = new Date().toISOString().slice(0, 10);
     const at = new Date(Date.now() - 1800_000).toISOString();
-    const c1 = await call("s_f", "POST", "/api/v1/me/attendance/corrections", { workDate: new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10), type: "missing_in", requestedAt: at, reason: "Quên chấm vào" });
+    const c1 = await call("s_f", "POST", "/api/v1/me/attendance/corrections", { workDate: new Date(Date.parse(at) + 7 * 3600_000).toISOString().slice(0, 10), type: "missing_in", requestedAt: at, reason: "Quên chấm vào" });
     expect(c1.status).toBe(201);
     expect((await call("s_f", "POST", `/api/v1/attendance/corrections/${c1.body.id}/decide`, { decision: "approved" })).status).toBe(403);
     expect((await call("manager", "GET", "/api/v1/attendance/corrections?status=pending")).body.items.some((x: any) => x.id === c1.body.id)).toBe(true);
@@ -145,7 +145,7 @@ describe("Bổ sung công", () => {
     const p = await db().prepare(`SELECT kind, server_at, method, status, created_by, correction_id FROM attendance_punches WHERE correction_id=?`).bind(c1.body.id).first<any>();
     expect(p).toMatchObject({ kind: "in", server_at: at, method: "manual", status: "accepted", created_by: 2 });
     expect((await call("manager", "POST", `/api/v1/attendance/corrections/${c1.body.id}/decide`, { decision: "rejected" })).status).toBe(409);
-    const c2 = await call("s_f", "POST", "/api/v1/me/attendance/corrections", { workDate: new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10), type: "missing_out", requestedAt: at, reason: "x" });
+    const c2 = await call("s_f", "POST", "/api/v1/me/attendance/corrections", { workDate: new Date(Date.parse(at) + 7 * 3600_000).toISOString().slice(0, 10), type: "missing_out", requestedAt: at, reason: "x" });
     await call("manager", "POST", `/api/v1/attendance/corrections/${c2.body.id}/decide`, { decision: "rejected" });
     expect((await db().prepare(`SELECT COUNT(*) n FROM attendance_punches WHERE correction_id=?`).bind(c2.body.id).first<any>()).n).toBe(0);
     expect(day).toBeTruthy();
