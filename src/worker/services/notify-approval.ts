@@ -22,7 +22,7 @@ const APPROVAL_TYPES: Record<string, TypeInfo> = {
   "debt_adjustment.post": { label: "Xoá nợ / chiết khấu công nợ", group: "finance", perm: "debt.approve" },
   "order.below_cost": { label: "Bán dưới giá vốn", group: "sales", perm: "approvals.decide" },
   "order.discount": { label: "Giảm giá đơn hàng", group: "sales", perm: "approvals.decide" },
-  "order.credit": { label: "Ghi nợ khách lẻ vượt ngưỡng", group: "sales", perm: "approvals.decide" },
+  "order.credit": { label: "Ghi nợ khách lẻ vượt ngưỡng / hạn mức", group: "sales", perm: "pos.credit" },
   "order.return": { label: "Trả hàng tại quầy", group: "sales", perm: "approvals.decide" },
   "order.credit_override": { label: "Vượt hạn mức nợ", group: "sales", perm: "b2b.credit_override" },
   "customer.credit_change": { label: "Đổi hạn mức nợ khách", group: "sales", perm: "b2b.credit_override" },

@@ -706,7 +706,8 @@ function CheckoutSheet({ total: localTotal, charges, payloadBase, customer, onCl
   const over = paid - need, remaining = need - paid;
   const change = over > 0 ? over : 0;
   const qrPending = sepayPos && pays.some((p) => p.amount > 0 && p.method === "qr" && !(p.qr && p.qr.status === "paid" && p.qr.amount === p.amount));
-  const creditOk = creditAmt === 0 || (creditAmt <= avail && over === 0 && !!customer);
+  const limit = debts.data?.customer?.creditLimit ?? 0;
+  const creditOk = creditAmt === 0 || (limit > 0 && over === 0 && !!customer); // vượt hạn mức → máy chủ trả approval_required, quản lý duyệt
   const valid = paid >= need && (over === 0 || cash >= over) && pays.every((p) => p.amount > 0 || (creditAmt > 0 && p.amount === 0)) && !qrPending && creditOk;
   const setAmt = (i: number, n: number) => setPays((ps) => ps.map((p, j) => (j === i ? { ...p, amount: n } : p)));
   const quickBase = Math.max(0, total - creditAmt);
@@ -795,8 +796,8 @@ function CheckoutSheet({ total: localTotal, charges, payloadBase, customer, onCl
               {credit > 0 && <button className="chip" onClick={() => setCredit(0)}>Bỏ ghi nợ</button>}
             </div>
             {debts.data.outstanding > 0 && <div className="small muted">Khách đang nợ {money(debts.data.outstanding)}.</div>}
-            {credit > 0 && avail <= 0 && <div className="err small" role="alert">Khách chưa được đặt hạn mức nợ hoặc đã hết hạn mức — nhờ quản lý đặt ở màn Khách lẻ.</div>}
-            {credit > avail && avail > 0 && <div className="err small" role="alert">Vượt hạn mức nợ (còn được nợ {money(avail)}).</div>}
+            {credit > 0 && limit <= 0 && <div className="err small" role="alert">Khách chưa được đặt hạn mức nợ — nhờ quản lý đặt ở màn Khách lẻ.</div>}
+            {credit > avail && limit > 0 && <div className="hint" role="alert">Vượt hạn mức nợ (còn được nợ {money(avail)}) — cần quản lý duyệt.</div>}
             {credit > (cc.data?.approvalVnd ?? Infinity) && !cc.data?.canOverride && <div className="hint">Ghi nợ trên {money(cc.data.approvalVnd)} cần quản lý duyệt.</div>}
           </div>
         )}

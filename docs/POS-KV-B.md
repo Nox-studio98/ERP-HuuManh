@@ -17,7 +17,7 @@ Quy ước như `CLAUDE.md`: một `db.batch` + `auditStmt`; `assertStmt` cho ki
 1. Thu ngân gắn khách lẻ (bắt buộc có SĐT) → thanh toán. Ô **Ghi nợ** = phần còn thiếu (tổng − các khoản đã thu).
 2. Máy chủ kiểm tra trong **cùng batch** lập đơn:
    - `pos.retail_credit_enabled = 1` (mặc định **tắt**).
-   - Khách có `credit_limit > 0`; nợ đang mở + phần ghi nợ ≤ `credit_limit` → `assertStmt` (chống hai quầy cùng ghi nợ vượt hạn mức).
+   - Khách có `credit_limit > 0` (hạn mức 0 = chưa được bán nợ, chặn 409 `credit_limit_exceeded`); nợ đang mở + phần ghi nợ ≤ `credit_limit` → `assertStmt` (chống hai quầy cùng ghi nợ vượt hạn mức). **Vượt hạn mức → quản lý duyệt** (approval `order.credit`, người duyệt cần `pos.credit`, dùng một lần, đúng khách + đúng số tiền); đơn lập kèm phiếu đã duyệt thì guard cho vượt, không có phiếu vẫn 409.
    - Phần ghi nợ > `approval.pos_credit_vnd` hoặc thu ngân không có quyền `pos.credit` → cần quản lý duyệt tại chỗ (dùng luồng phê duyệt POS hiện có như giảm giá vượt ngưỡng).
 3. Đơn hoàn tất như thường (doanh thu ghi ngày bán, trừ kho FEFO). Cùng batch sinh **hoá đơn phải thu** `invoices(kind='sale', customer_id, order_id, total = phần ghi nợ, due_date = ngày bán + customers.payment_terms_days, einvoice_status='not_required')`. Phần đã thu ngay vẫn là `payments` như cũ (tiền mặt vào két ca).
 4. Phiếu in có dòng **Còn nợ** và **mã QR thu nợ** (mã `HDS…` của hoá đơn, số tiền = còn nợ) để khách quét trả sau; SePay tự gạch nợ (luồng sẵn có).

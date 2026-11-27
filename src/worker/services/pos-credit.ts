@@ -31,9 +31,10 @@ export async function openDebtOf(db: D1Database, customerId: number): Promise<nu
 }
 
 /** Điều kiện (assertStmt, đặt ĐẦU batch): khách có hạn mức > 0 và nợ đang mở + phần ghi nợ ≤ hạn mức → hai quầy ghi nợ đồng thời chỉ một quầy qua. */
-export function creditLimitGuard(customerId: number, amount: number) {
+export function creditLimitGuard(customerId: number, amount: number, allowOver = false) {
+  // allowOver: đơn có phiếu duyệt vượt hạn mức (đã kiểm ở route) → chỉ cần khách còn hạn mức > 0
   return {
-    sql: `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? <= c.credit_limit FROM customers c WHERE c.id = ?`,
+    sql: allowOver ? `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? >= 0 FROM customers c WHERE c.id = ?` : `SELECT c.credit_limit > 0 AND ${OPEN_DEBT_SQL} + ? <= c.credit_limit FROM customers c WHERE c.id = ?`,
     binds: [customerId, amount, customerId] as unknown[],
   };
 }

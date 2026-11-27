@@ -163,7 +163,7 @@ tr.bad td { background: var(--warn-soft); }
 .logo { width: 64px; height: 64px; border-radius: 16px; }
 
 /* receipt / label + print */
-.receipt { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; background: #fff; color: #111; padding: var(--s-4); border-radius: var(--r-md); border: 1px dashed #bbb; }
+.receipt { font-family: inherit; font-variant-numeric: tabular-nums; /* Be Vietnam Pro: font monospace hệ thống thiếu dấu tiếng Việt */ font-size: .85rem; background: #fff; color: #111; padding: var(--s-4); border-radius: var(--r-md); border: 1px dashed #bbb; }
 .receipt .l { display: flex; justify-content: space-between; gap: 8px; }
 .receipt hr { border: 0; border-top: 1px dashed #999; margin: 8px 0; }
 .label-card { background: #fff; color: #111; border: 1px solid #ccc; border-radius: var(--r-md); padding: var(--s-4); text-align: center; }

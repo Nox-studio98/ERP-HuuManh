@@ -69,7 +69,7 @@ describe("B1: bán nợ khách lẻ — điều kiện", () => {
     expect(r2.body.error.code).toBe("payment_mismatch");
   });
 
-  it("vượt hạn mức / hạn mức 0 → 409 credit_limit_exceeded, không trừ kho", async () => {
+  it("hạn mức 0 → 409 credit_limit_exceeded (chưa được bán nợ, không có đường duyệt); vượt hạn mức > 0 không duyệt → 409 approval_required; không trừ kho", async () => {
     const before = await lotQty(1);
     const zero = await retail({ limit: 0 });
     const a = await sell("cashier", { customerId: zero, payments: [{ method: "cash", amount: 50000 }], credit: { amount: 150000 } });
@@ -78,9 +78,34 @@ describe("B1: bán nợ khách lẻ — điều kiện", () => {
     const small = await retail({ limit: 100000 });
     const b = await sell("cashier", { customerId: small, payments: [{ method: "cash", amount: 50000 }], credit: { amount: 150000 } });
     expect(b.status).toBe(409);
-    expect(b.body.error.code).toBe("credit_limit_exceeded");
-    expect(b.body.error.details).toMatchObject({ creditLimit: 100000, outstanding: 0, available: 100000 });
+    expect(b.body.error.code).toBe("approval_required");
     expect(await lotQty(1)).toBe(before);
+  });
+
+  it("vượt hạn mức: quản lý duyệt (order.credit) → qua, dùng một lần, đúng khách + đúng số tiền; chủ cũng phải có phiếu duyệt", async () => {
+    const cu = await retail({ limit: 100000 });
+    const body = { clientUuid: uid(), customerId: cu, lines: [line(2)], payments: [{ method: "cash", amount: 50000 }], credit: { amount: 150000 } };
+    const r1 = await api("cashier", "POST", `${V}/pos/orders`, body);
+    expect(r1.body.error.code).toBe("approval_required");
+    const aid = r1.body.error.details.approvalId;
+    expect((await db().prepare(`SELECT type FROM approvals WHERE id = ?`).bind(aid).first<any>()).type).toBe("order.credit");
+    expect((await api("warehouse", "POST", `${V}/approvals/${aid}/decide`, { decision: "approved" })).status).toBe(403);
+    expect((await api("manager", "POST", `${V}/approvals/${aid}/decide`, { decision: "approved" })).status).toBe(200);
+    // sai số tiền / sai khách → không hợp lệ
+    const other = await retail({ limit: 100000 });
+    expect((await api("cashier", "POST", `${V}/pos/orders`, { ...body, clientUuid: uid(), credit: { amount: 160000 }, payments: [{ method: "cash", amount: 40000 }], approvalId: aid })).body.error.code).toBe("approval_invalid");
+    expect((await api("cashier", "POST", `${V}/pos/orders`, { ...body, clientUuid: uid(), customerId: other, approvalId: aid })).body.error.code).toBe("approval_invalid");
+    const ok = await api("cashier", "POST", `${V}/pos/orders`, { ...body, approvalId: aid });
+    expect(ok.status).toBe(201);
+    expect((await invoiceOf(ok.body.id)).total).toBe(150000);
+    // dùng lại phiếu duyệt → lỗi, không tạo thêm đơn
+    const again = await api("cashier", "POST", `${V}/pos/orders`, { ...body, clientUuid: uid(), approvalId: aid });
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe("approval_invalid");
+    expect((await db().prepare(`SELECT COUNT(*) n FROM invoices WHERE customer_id = ?`).bind(cu).first<any>()).n).toBe(1);
+    // chủ không tự bỏ qua: vượt hạn mức vẫn cần phiếu duyệt
+    const o = await api("owner", "POST", `${V}/pos/orders`, { ...body, clientUuid: uid(), customerId: other });
+    expect(o.body.error.code).toBe("approval_required");
   });
 
   it("đơn offline (có soldAt) không được ghi nợ", async () => {

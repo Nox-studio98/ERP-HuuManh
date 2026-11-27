@@ -12,6 +12,7 @@ import { AppError, conflict, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { vnDate } from "../lib/time";
 import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
+import { registerApprovalHandler } from "../services/approval-registry";
 import { createPayment } from "../services/debt-ledger";
 import { creditSettings } from "../services/pos-credit";
 import { assertStmt } from "../services/guard";
@@ -20,6 +21,9 @@ import { ensurePayCode, sepayConfig } from "../services/sepay";
 import { buildVietQr } from "../../shop/worker/lib/vietqr";
 
 export const posCreditRoutes = new Hono<AppBindings>();
+
+// Duyệt ghi nợ khách lẻ vượt ngưỡng / vượt hạn mức: người duyệt cần pos.credit (chủ, quản lý); thu ngân gửi lại đơn kèm approvalId
+registerApprovalHandler("order.credit", { perm: "pos.credit" });
 
 const idParam = (v: string) => {
   const n = Number(v);

@@ -13,7 +13,7 @@ import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
 import { salesSummary } from "../services/salesreport";
 import { groupIdsOf, planPromotions, promoStatements } from "../services/promo-checkout";
-import { assertStmt } from "../services/guard";
+import { assertStmt, onceStmt } from "../services/guard";
 import { assertPeriodOpen } from "../services/period";
 import { retireStaleDraft } from "../services/online-ops";
 import { sepayConfig } from "../services/sepay";
@@ -406,14 +406,17 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   // B1: bán nợ khách lẻ
   const creditAmount = body.credit?.amount ?? 0;
   const creditCfg = await creditSettings(db);
+  let overLimit = false;
   if (body.credit) {
     if (soldAt) throw new AppError(422, "credit_offline_not_allowed", "Đơn lập khi offline không được ghi nợ (không kiểm được hạn mức)");
     if (!creditCfg.enabled) throw conflict("credit_disabled", "Chưa bật bán nợ khách lẻ (Cài đặt → Công nợ)");
     if (!customer || customer.type !== "retail" || !customer.phone) throw new AppError(422, "credit_needs_customer", "Ghi nợ cần gắn khách lẻ có số điện thoại");
     if (creditAmount + paid !== total) throw new AppError(422, "credit_mismatch", "Số ghi nợ phải bằng đúng tổng đơn trừ các khoản đã thu", { total, paid, credit: creditAmount });
     const outstanding = await openDebtOf(db, customer.id);
-    if (!(customer.credit_limit > 0) || outstanding + creditAmount > customer.credit_limit)
-      throw conflict("credit_limit_exceeded", customer.credit_limit > 0 ? "Vượt hạn mức nợ của khách" : "Khách chưa được đặt hạn mức nợ", { creditLimit: customer.credit_limit, outstanding, available: Math.max(0, customer.credit_limit - outstanding) });
+    // Hạn mức 0 = khách chưa được bán nợ (chặn cứng). Vượt hạn mức > 0 → cần approval order.credit đã duyệt (kiểm ở plan(), guard trong batch cho vượt khi có duyệt)
+    if (!(customer.credit_limit > 0))
+      throw conflict("credit_limit_exceeded", "Khách chưa được đặt hạn mức nợ", { creditLimit: 0, outstanding, available: 0 });
+    overLimit = outstanding + creditAmount > customer.credit_limit;
     await assertPeriodOpen(db, new Date(), "bán nợ");
   } else if (paid < total) throw new AppError(422, "payment_mismatch", "Tổng thanh toán chưa đủ tổng tiền đơn", { total, paid });
   const cashTotal = body.payments.filter((p) => p.method === "cash").reduce((s, p) => s + p.amount, 0);
@@ -473,8 +476,9 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     overrideReasons = [];
     // B1: ghi nợ vượt ngưỡng approval.pos_credit_vnd mà người bán không có pos.credit → cần quản lý duyệt (cùng luồng duyệt POS)
     const needCreditApproval = creditAmount > creditCfg.approvalVnd && !can(user.role, "pos.credit") && !can(user.role, "approvals.decide");
-    const allReasons = needCreditApproval ? [...reasons, "credit"] : reasons;
-    if (allReasons.length && !can(user.role, "approvals.decide")) {
+    const allReasons = needCreditApproval || overLimit ? [...reasons, ...(overLimit ? ["credit_limit"] : ["credit"])] : reasons;
+    // vượt hạn mức luôn cần phiếu duyệt (kể cả quản lý/chủ — không tự bỏ qua)
+    if (allReasons.length && (overLimit || !can(user.role, "approvals.decide"))) {
       approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount } : {}) }, await cartHash(body));
     } else if (reasons.length) {
       // A-29: người có quyền tự duyệt không cần phiếu, nhưng phải ghi lý do (audit)
@@ -527,8 +531,9 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const stmts: D1PreparedStatement[] = [];
     // B1: chốt chặn hạn mức đặt ĐẦU batch — hai quầy ghi nợ đồng thời chỉ một quầy qua (quầy kia 409)
     if (body.credit && customer) {
-      const g = creditLimitGuard(customer.id, creditAmount);
+      const g = creditLimitGuard(customer.id, creditAmount, overLimit && approvalUsed != null);
       stmts.push(assertStmt(db, "pos.credit_limit", g.sql, g.binds));
+      if (overLimit && approvalUsed) stmts.push(onceStmt(db, "pos.credit_limit_approval", approvalUsed)); // phiếu duyệt vượt hạn mức dùng một lần
     }
     items.forEach((_, i) => {
       for (const a of p.lineAllocs[i]) {
@@ -652,7 +657,7 @@ async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | 
   }
   throw conflict(
     "approval_required",
-    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : reasons.includes("discount") ? "Giảm giá vượt ngưỡng, cần quản lý duyệt" : "Ghi nợ vượt ngưỡng cho phép, cần quản lý duyệt",
+    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : reasons.includes("discount") ? "Giảm giá vượt ngưỡng, cần quản lý duyệt" : reasons.includes("credit_limit") ? "Ghi nợ vượt hạn mức của khách, cần quản lý duyệt" : "Ghi nợ vượt ngưỡng cho phép, cần quản lý duyệt",
     { approvalId: id, reasons },
   );
 }
