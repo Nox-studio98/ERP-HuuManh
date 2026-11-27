@@ -213,7 +213,7 @@ function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
   });
 }
 
-export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; trackingNo?: string }) {
+export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; trackingNo?: string; extra?: D1PreparedStatement[] }) {
   const db = c.env.DB;
   const user = c.get("user");
   const o = await loadOpsOrder(db, id);
@@ -262,6 +262,7 @@ export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; t
   });
   const stmts: D1PreparedStatement[] = [t[0], ...consume, ...t.slice(1)];
   stmts.push(
+    ...(input.extra ?? []), // vd. giao hàng tại quầy: ghi tiền trả trước vào két ca cùng batch với bước chuyển "Đang giao"
     notifyJob(db, id, { status: "shipping" }),
     auditStmt(c, { action: "online_order.ship", entity: "order", entityId: id, before: { status: "preparing" }, after: { status: "shipping", costTotal, carrier: input.carrier ?? null, restockedBefore: !!already } }),
   );
@@ -295,8 +296,9 @@ export async function deliverOrder(c: Ctx, id: number) {
   } else if (o.payment_method === "cod" && o.payment_status !== "paid") {
     const fund = await db.prepare(`SELECT id FROM funds WHERE type='cod_clearing' AND active=1 ORDER BY id LIMIT 1`).first<{ id: number }>();
     if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ chờ đối soát COD (cod_clearing)");
-    t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công", extraSet: "payment_status = ?3, paid_total = paid_total + ?4", extraBinds: ["paid", o.total] });
-    stmts.push(t[0], db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.total, fund.id, o.code), ...t.slice(1));
+    t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công", extraSet: "payment_status = ?3, paid_total = paid_total + ?4", extraBinds: ["paid", o.total - (o.paid_total ?? 0)] });
+    // Đơn giao từ quầy (B3) đã trả trước một phần: COD chỉ thu phần còn lại (đơn COD thường paid_total = 0 nên không đổi)
+    stmts.push(t[0], db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.total - (o.paid_total ?? 0), fund.id, o.code), ...t.slice(1));
   } else {
     t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công" });
     if (prepaid) stmts.push(assertStmt(db, "order.diff_none", `SELECT diff_status <> 'pending' FROM orders WHERE id = ?`, [id]));
@@ -743,6 +745,8 @@ export interface SocialOrderInput {
   note?: string | null;
   shippingFee?: number;
   acceptPreorder?: boolean;
+  /** Giao hàng tại quầy (B3): đánh dấu nguồn + ca tạo + người giao, ghi cùng lúc tạo đơn. */
+  pos?: { shiftId: number; delivererUserId?: number | null; zoneId?: number | null };
 }
 
 export async function findZone(db: D1Database, district: string) {
@@ -821,11 +825,13 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     const r = await db
       .prepare(
         `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, shipping_fee, total, note, created_by,
-                            tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id, payment_method, estimated_total)
-         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
+                            tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id, payment_method, estimated_total,
+                            source, pos_shift_id, deliverer_user_id)
+         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?)`,
       )
       .bind(code, b.clientUuid ?? null, storeId, b.customerId ?? null, isPre, subtotal, shippingFee, total, b.note ?? null, user.id,
-        token, b.receiverName, b.receiverPhone, address, zone?.id ?? null, b.slotDate ?? null, b.slotId ?? null, b.paymentMethod, total)
+        token, b.receiverName, b.receiverPhone, address, b.pos?.zoneId ?? zone?.id ?? null, b.slotDate ?? null, b.slotId ?? null, b.paymentMethod, total,
+        b.pos ? "pos" : null, b.pos?.shiftId ?? null, b.pos?.delivererUserId ?? null)
       .run();
     orderId = r.meta.last_row_id as number;
   } catch (e) {

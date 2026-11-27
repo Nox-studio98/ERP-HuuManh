@@ -9,6 +9,7 @@ import { enqueue, useQueue, syncQueue } from "../offline";
 import { navigate, setQuery } from "../router";
 import { createScanDetector, loadScannerSettings, saveScannerSettings, type ScannerSettings } from "../scanner";
 import { QrImage } from "../components/QrImage";
+import { PosDeliverySheet } from "../components/PosDeliverySheet";
 import { useAuth, useCan } from "../store";
 import { reasonText } from "./d4/voucher-text";
 
@@ -125,6 +126,7 @@ function Sell({ shift }: { shift: any }) {
   const [weighing, setWeighing] = useState<{ p: Product; unit?: string } | null>(null);
   const [asking, setAsking] = useState<{ p: Product; unit?: string } | null>(null);
   const [checkout, setCheckout] = useState(false);
+  const [delivery, setDelivery] = useState(false); // B3: bán giao hàng tại quầy
   const [receipt, setReceipt] = useState<{ order: any; names: Record<number, string> } | null>(null);
   const [settings, setSettings] = useState(false);
   const [scanCfg, setScanCfg] = useState<ScannerSettings>(loadScannerSettings);
@@ -397,6 +399,7 @@ function Sell({ shift }: { shift: any }) {
                   <div className="grand"><span>Tổng</span><span className="money">{money(total)}</span></div>
                 </div>
                 <Button size="lg" block disabled={total <= 0} onClick={() => setCheckout(true)}>Thanh toán {money(total)}<span className="kbd-hint"> F9</span></Button>
+                <Button block variant="soft" data-testid="pos-delivery" disabled={count <= 0} onClick={() => setDelivery(true)}>Giao hàng</Button>
               </div>
             </>
           )}
@@ -429,6 +432,7 @@ function Sell({ shift }: { shift: any }) {
           onDone={(order, change) => { setCheckout(false); setReceipt({ order: { ...withShown(order, new Map(lines.map((l) => [l.product.id, l.product]))), change }, names }); finishTab(tab.id); setView("products"); }}
           onQueued={() => { setCheckout(false); finishTab(tab.id); setView("products"); toast("Mất mạng — đã lưu đơn, sẽ đồng bộ sau", "info"); }} />
       )}
+      {delivery && <PosDeliverySheet lines={lines.map((l) => ({ productId: l.product.id, name: l.product.name, unit: l.unit, qty: l.qty }))} customer={customer} hasManualDiscount={discount > 0 || lines.some((l) => l.discount > 0)} onClose={() => setDelivery(false)} onDone={() => { setDelivery(false); reset(); }} />}
       {pickCustomer && <CustomerSheet onClose={() => setPickCustomer(false)} onPick={(c) => { setCustomer(c); setPickCustomer(false); }} />}
       <Sheet open={!!receipt} onClose={() => setReceipt(null)} title="Hoá đơn" footer={<Button block onClick={() => setReceipt(null)}>Đơn mới</Button>}>
         {receipt && <Receipt order={receipt.order} names={receipt.names} />}

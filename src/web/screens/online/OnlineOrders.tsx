@@ -17,6 +17,7 @@ export default function OnlineOrders() {
 }
 
 /* ============================================================ danh sách */
+const chLabel = (o: { channel: string; source?: string | null }) => (o.source === "pos" ? "Từ quầy" : CHANNEL_LABEL[o.channel] ?? o.channel);
 const qs = (k: string) => { try { return new URLSearchParams(location.search).get(k) ?? ""; } catch { return ""; } };
 function OrderList() {
   const [status, setStatus] = useState(qs("status") || "all");
@@ -26,7 +27,7 @@ function OrderList() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<number | null>(null);
   const wide = useWide();
-  const l = usePagedList<any>("/online-orders", { status: status === "all" ? undefined : status, slotDate, channel: channel || "all", q, from: range.from, to: range.to, limit: 50 }, [status, slotDate, channel, q, range.from, range.to]);
+  const l = usePagedList<any>("/online-orders", { status: status === "all" ? undefined : status, slotDate, channel: channel === "pos" ? "all" : channel || "all", source: channel === "pos" ? "pos" : undefined, q, from: range.from, to: range.to, limit: 50 }, [status, slotDate, channel, q, range.from, range.to]);
   const counts: Record<string, number> = l.extra?.counts ?? {};
   const sum = l.extra?.summary;
   const cnt = (v: string) => counts[v.replace(/_([a-z])/g, (_, c) => c.toUpperCase())];
@@ -41,7 +42,7 @@ function OrderList() {
       <PageHeader compact subtitle={<>Đặt từ {rangeLabel}{sum ? <> · {sum.count} đơn</> : null}</>}
         actions={<>
           <ExportButton filename={`don-online-${range.from}_${range.to}`} rows={rows} columns={[
-            { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => CHANNEL_LABEL[o.channel] ?? o.channel }, { label: "Trạng thái", value: (o) => STATUS_LABEL[o.status] ?? o.status },
+            { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => chLabel(o) }, { label: "Trạng thái", value: (o) => STATUS_LABEL[o.status] ?? o.status },
             { label: "Người nhận", value: (o) => o.receiverName }, { label: "SĐT", value: (o) => o.receiverPhone }, { label: "Khu vực", value: (o) => o.district ?? o.zoneName }, { label: "Ngày giao", value: (o) => o.slotDate },
             { label: "Thanh toán", value: (o) => `${PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · ${PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}` }, { label: "Tổng", value: (o) => o.total },
           ]} />
@@ -53,7 +54,7 @@ function OrderList() {
         ))}
       </div>
       <FilterBar dirty={dirty} onReset={reset} activeCount={[channel, slotDate].filter(Boolean).length} advanced={<>
-        <FilterSelect label="Kênh" value={channel} onChange={setChannel} allLabel="Tất cả kênh" options={[{ v: "online", label: "Website" }, { v: "fresco", label: "Fresco" }, { v: "social", label: "Mạng xã hội" }]} />
+        <FilterSelect label="Kênh" value={channel} onChange={setChannel} allLabel="Tất cả kênh" options={[{ v: "online", label: "Website" }, { v: "fresco", label: "Fresco" }, { v: "social", label: "Mạng xã hội" }, { v: "pos", label: "Từ quầy" }]} />
         <label className="field"><span className="lbl">Ngày giao</span><input className="input" type="date" aria-label="Ngày giao" value={slotDate} onChange={(e) => setSlotDate(e.target.value)} style={{ minHeight: 40 }} /></label>
       </>}>
         <DateRangeFilter value={range} onChange={setRange} presets={["today", "yesterday", "7d", "month", "lastMonth", "custom"]} />
@@ -76,7 +77,7 @@ function OrderList() {
                 { key: "c", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => <b className="num nw">{o.code}</b> },
                 { key: "t", label: "Đặt lúc", hideBelow: 1600, sort: (o) => o.createdAt, render: (o) => <span className="nw">{fmtDateTime(o.createdAt)}</span> },
                 { key: "r", label: "Người nhận", sort: (o) => o.receiverName ?? "", render: (o) => <span><span className="nw">{o.receiverName}</span><div className="small muted">{o.receiverPhone}</div></span> },
-                { key: "ch", label: "Kênh", hideBelow: 1440, sort: (o) => CHANNEL_LABEL[o.channel] ?? o.channel, render: (o) => <span className="nw">{CHANNEL_LABEL[o.channel] ?? o.channel}</span> },
+                { key: "ch", label: "Kênh", hideBelow: 1440, sort: (o) => chLabel(o), render: (o) => <span className="nw">{chLabel(o)}</span> },
                 { key: "z", label: "Giao", sort: (o) => o.slotDate ?? "", render: (o) => <span>{o.slotDate ? `${ymdShow(o.slotDate)} ${o.slotLabel ?? ""}` : "Chưa hẹn"}<div className="small muted">{o.district ?? "—"}</div></span> },
                 { key: "p", label: "Thanh toán", hideBelow: 1600, render: (o) => <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge> },
                 { key: "s", label: "Trạng thái", sort: (o) => o.status, render: (o) => (
@@ -133,12 +134,12 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
         <div className="page-head" style={{ marginBottom: 0 }}>
           <div style={{ minWidth: 0 }}>
             <h2 style={{ margin: 0 }} className="num">{o.code}</h2>
-            <div className="muted small">{CHANNEL_LABEL[o.channel] ?? o.channel} · tạo {fmtDateTime(o.createdAt)}</div>
+            <div className="muted small">{chLabel(o)} · tạo {fmtDateTime(o.createdAt)}</div>
           </div>
           <Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge>
         </div>
       ) : (
-        <div className="row between wrap"><span className="muted small">{CHANNEL_LABEL[o.channel] ?? o.channel} · tạo {fmtDateTime(o.createdAt)}</span><Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge></div>
+        <div className="row between wrap"><span className="muted small">{chLabel(o)} · tạo {fmtDateTime(o.createdAt)}</span><Badge tone={statusTone(st)}>{STATUS_LABEL[st] ?? st}</Badge></div>
       )}
       <div className="row wrap" style={{ gap: 6 }}>
         <Badge tone={o.paymentStatus === "paid" ? "ok" : "warn"}>{PAY_METHOD[o.paymentMethod] ?? o.paymentMethod} · {PAY_STATUS[o.paymentStatus] ?? o.paymentStatus}</Badge>
@@ -179,7 +180,8 @@ function OrderDetail({ id, panel }: { id: number; panel?: { onClose: () => void;
           <div><b>{o.receiverName}</b> · {o.receiverPhone}</div>
           <div>{o.shipAddress}</div>
           <div className="small muted">{o.zone?.name ? `Khu vực ${o.zone.name} · ` : ""}{o.slotDate ? `Giao ${ymdShow(o.slotDate)} ${o.slot?.label ?? ""}` : "Chưa hẹn giờ giao"}</div>
-          {(o.carrier || o.carrierTrackingNo) && <div className="small">Vận chuyển: {o.carrier ?? "—"} · Mã vận đơn: <span className="num">{o.carrierTrackingNo ?? "—"}</span></div>}
+          {o.source === "pos" && <div className="small" data-testid="pos-origin"><Badge tone="info">Từ quầy</Badge> Đơn giao hàng tạo tại quầy (ca #{o.posShiftId ?? "—"}), hàng đã đóng gói tại quầy</div>}
+          {(o.carrier || o.carrierTrackingNo) && <div className="small" data-testid="carrier-info">{o.delivererUserId ? "Người giao" : "Vận chuyển"}: {o.carrier ?? "—"}{o.delivererUserId ? "" : <> · Mã vận đơn: <span className="num">{o.carrierTrackingNo ?? "—"}</span></>}</div>}
           {o.note && <div className="small">Ghi chú khách: {o.note}</div>}
           {o.cancelReason && <div className="small" style={{ color: "var(--danger)" }}>Lý do huỷ: {o.cancelReason}</div>}
         </div>

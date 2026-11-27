@@ -107,7 +107,12 @@ export async function cashFormula(db: D1Database, s: ShiftRow) {
     .prepare(`SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.refund_shift_id = ? AND p.method = 'cash' AND p.status = 'refunded'`)
     .bind(s.id)
     .first<{ s: number }>();
-  const cashSold = sales?.sold ?? 0, cashRefunded = sales?.refunded ?? 0, deposits = dep?.s ?? 0, voidRefunds = voidRef?.s ?? 0;
+  // Đơn giao từ quầy (POS-KV B3): tiền mặt khách trả trước nằm trong két ca ngay lúc tạo đơn (đơn chưa hoàn tất vẫn tính), hoàn tiền là dòng âm
+  const delivery = await db
+    .prepare(`SELECT COALESCE(SUM(p.amount),0) AS s FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.pos_shift_id = ? AND p.method = 'cash' AND p.status = 'confirmed'`)
+    .bind(s.id)
+    .first<{ s: number }>();
+  const cashSold = (sales?.sold ?? 0) + (delivery?.s ?? 0), cashRefunded = sales?.refunded ?? 0, deposits = dep?.s ?? 0, voidRefunds = voidRef?.s ?? 0;
   return { opening: s.opening_cash, cashSold, cashRefunded, deposits, voidRefunds, expected: s.opening_cash + cashSold - cashRefunded + deposits - voidRefunds };
 }
 
