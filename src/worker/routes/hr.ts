@@ -13,6 +13,7 @@ import { getSettingInt } from "../services/settings";
 import {
   addDays, assertPeriodsOpen, eachDate, employeeOfUser, hrSettings, isDate, isPeriod, isPeriodClosed, leaveBalance, leaveCountableDates, offboardingBlockers, periodOf, prevPeriod, weekStart, minutesBetween, shiftWindow,
 } from "../services/hr-common";
+import { listHandover, runHandover } from "../services/hr-handover";
 import { registerBoardRoutes } from "./hr-board";
 import { haversineM } from "../services/hr-geo";
 import { makeQrCode, qrWindowExpiresAt, qrWindowOf, verifyQrCode } from "../services/hr-qr";
@@ -308,6 +309,52 @@ hrRoutes.post("/employees/:id/terminate", requirePerm("hr.manage"), async (c) =>
   stmts.push(auditStmt(c, { action: "hr.employee.terminate", entity: "employee", entityId: id, before: { status: "active" }, after: { status: "terminated", terminationDate: body.terminationDate, pendingAtTermination: bl.pendingTotal > 0 ? bl.pending : undefined }, reason: body.reason }));
   await db.batch(stmts);
   return c.json(await employeeDetail(c, id));
+});
+
+/** EC-39: danh sách việc đang dở của một nhân viên/tài khoản + người nhận khả dĩ (chỉ hr.manage). */
+async function handoverTarget(c: Ctx) {
+  const q = z.object({ userId: z.coerce.number().int().positive().optional(), employeeId: z.coerce.number().int().positive().optional() }).safeParse(c.req.query());
+  if (!q.success || (!q.data.userId && !q.data.employeeId)) throw new AppError(422, "validation_error", "Thiếu userId hoặc employeeId");
+  return resolveHandoverTarget(c.env.DB, q.data.userId ?? null, q.data.employeeId ?? null);
+}
+async function resolveHandoverTarget(db: D1Database, userId: number | null, employeeId: number | null) {
+  let emp = employeeId ? await db.prepare(`SELECT id, user_id, full_name FROM employees WHERE id = ?`).bind(employeeId).first<any>() : null;
+  if (employeeId && !emp) throw notFound("employee_not_found", "Không tìm thấy nhân viên");
+  if (!emp && userId) emp = await db.prepare(`SELECT id, user_id, full_name FROM employees WHERE user_id = ?`).bind(userId).first<any>();
+  const uid = emp?.user_id ?? userId;
+  const user = uid ? await db.prepare(`SELECT id, full_name, username, role FROM users WHERE id = ?`).bind(uid).first<any>() : null;
+  if (uid && !user) throw notFound("user_not_found", "Không tìm thấy người dùng");
+  if (userId && emp?.user_id && emp.user_id !== userId) throw new AppError(422, "validation_error", "Nhân viên và tài khoản không khớp");
+  return { userId: (user?.id as number | undefined) ?? null, employeeId: (emp?.id as number | undefined) ?? null, name: (emp?.full_name ?? user?.full_name) as string };
+}
+hrRoutes.get("/handover", requirePerm("hr.manage"), async (c) => {
+  const t = await handoverTarget(c);
+  const db = c.env.DB;
+  const data = await listHandover(db, t.userId, t.employeeId);
+  const [users, employees] = await Promise.all([
+    db.prepare(`SELECT id, full_name AS fullName, role FROM users WHERE active = 1 AND id != ? ORDER BY full_name, id`).bind(t.userId ?? -1).all(),
+    db.prepare(`SELECT id, code, full_name AS fullName FROM employees WHERE status = 'active' AND id != ? ORDER BY full_name, id`).bind(t.employeeId ?? -1).all(),
+  ]);
+  return c.json({ name: t.name, userId: t.userId, employeeId: t.employeeId, ...data, recipients: { users: users.results, employees: employees.results } });
+});
+
+hrRoutes.post("/handover", requirePerm("hr.manage"), async (c) => {
+  const b = await parseBody(c, z.object({
+    userId: z.number().int().positive().optional(),
+    employeeId: z.number().int().positive().optional(),
+    reason: z.string().trim().min(1, "Cần ghi lý do").max(300),
+    actions: z.array(z.object({
+      group: z.string().min(1).max(40),
+      action: z.enum(["reassign", "cancel"]),
+      toUserId: z.number().int().positive().optional(),
+      toEmployeeId: z.number().int().positive().optional(),
+    })).min(1).max(20),
+  }));
+  if (!b.userId && !b.employeeId) throw new AppError(422, "validation_error", "Thiếu userId hoặc employeeId");
+  const t = await resolveHandoverTarget(c.env.DB, b.userId ?? null, b.employeeId ?? null);
+  if (t.userId && t.userId === c.get("user").id) throw forbidden("handover_self", "Không tự chuyển việc của chính mình");
+  const r = await runHandover(c, { userId: t.userId, employeeId: t.employeeId, actions: b.actions, reason: b.reason });
+  return c.json({ ...r, remaining: await listHandover(c.env.DB, t.userId, t.employeeId) });
 });
 
 // ----- Hợp đồng & phụ cấp -----

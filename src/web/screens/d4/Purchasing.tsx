@@ -90,7 +90,7 @@ export default function Purchasing() {
               <thead><tr><th /><th>Sản phẩm</th><th className="r">Tồn</th><th className="r">Giữ</th><th className="r">Bán/ngày</th><th className="r">Còn đủ</th><th className="r">Đề xuất</th></tr></thead>
               <tbody>{g.rows.map((r) => (
                 <tr key={r.productId}>
-                  <td><input type="checkbox" aria-label={`Chọn ${r.name}`} checked={sel.has(r.productId)} onChange={() => toggle(r.productId)} /></td>
+                  <td><label className="check-hit"><input type="checkbox" aria-label={`Chọn ${r.name}`} checked={sel.has(r.productId)} onChange={() => toggle(r.productId)} /></label></td>
                   <td><b>{r.name}</b><div className="small muted">Về sau {r.leadTimeDays} ngày{r.lastCost ? ` · giá nhập ${money(r.lastCost)}` : " · chưa có giá nhập"}{r.expiringMilli > 0 ? ` · ${qtyText(r.expiringMilli, r.baseUnit)} sắp hết hạn` : ""}</div></td>
                   <td className="r">{qtyText(r.onHandMilli, r.baseUnit)}</td><td className="r">{qtyText(r.reservedMilli)}</td>
                   <td className="r">{qtyText(r.avgDailySalesMilli)}</td>

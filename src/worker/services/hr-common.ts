@@ -186,6 +186,12 @@ export async function offboardingBlockers(db: D1Database, userId: number | null,
     draftQuotes: userId ? await n(`SELECT COUNT(*) n FROM quotes WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
     draftPromotions: userId ? await n(`SELECT COUNT(*) n FROM promotions WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
     draftPurchaseReturns: userId ? await n(`SELECT COUNT(*) n FROM purchase_returns WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    // EC-39: việc chuyển được qua màn "Chuyển việc" (hr-handover.ts)
+    draftPurchaseOrders: userId ? await n(`SELECT COUNT(*) n FROM purchase_orders WHERE created_by = ? AND status IN ('draft','pending_approval')`, userId) : 0,
+    ownedCustomers: userId ? await n(`SELECT COUNT(*) n FROM customers WHERE owner_user_id = ? AND active = 1`, userId) : 0,
+    recurringOrders: userId ? await n(`SELECT COUNT(*) n FROM recurring_orders WHERE created_by = ? AND active = 1`, userId) : 0,
+    b2bNewOrders: userId ? await n(`SELECT COUNT(*) n FROM orders WHERE created_by = ? AND channel = 'b2b' AND status = 'new'`, userId) : 0,
+    deliveringOrders: userId ? await n(`SELECT COUNT(*) n FROM orders WHERE deliverer_user_id = ? AND status IN ('confirmed','preparing','shipping')`, userId) : 0,
     draftSettlements: userId ? await n(`SELECT COUNT(*) n FROM settlements WHERE created_by = ? AND status = 'draft'`, userId) : 0,
   };
   const pendingTotal = Object.values(pending).reduce((a, b) => a + b, 0);

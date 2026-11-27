@@ -4,6 +4,8 @@ import { Badge, Button, DataTable, EmptyState, Input, Select, Sheet, Spinner, us
 import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout } from "../components/list";
 import { toast } from "../components/toast";
 import { ROLES, fmtDateTime } from "../format";
+import { useCan } from "../store";
+import Handover from "./hr/Handover";
 import { Banner } from "../components/ui";
 
 /** Tài khoản nội bộ của hệ thống (không đăng nhập được): ẩn khỏi danh sách để tránh sửa nhầm. */
@@ -58,7 +60,8 @@ export default function Users() {
 function UserForm({ u, onClose, onSaved }: { u: any; onClose: () => void; onSaved: (temp?: { username: string; pw: string }) => void }) {
   const isNew = !u.id;
   const [f, setF] = useState({ username: u.username ?? "", fullName: u.fullName ?? "", role: u.role ?? "cashier", reset: false, tempPassword: "", active: !(u.active === 0 || u.active === false) });
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false), [ho, setHo] = useState(false);
+  const canHr = useCan()("hr.manage");
   return (
     <DetailPanel onClose={onClose} title={isNew ? "Thêm người dùng" : `Sửa ${u.username}`} footer={<Button block loading={busy} disabled={!f.fullName || (isNew && (!f.username || (f.tempPassword !== "" && f.tempPassword.length < 8)))} onClick={async () => {
       setBusy(true);
@@ -78,6 +81,8 @@ function UserForm({ u, onClose, onSaved }: { u: any; onClose: () => void; onSave
           ? <Input label="Mật khẩu tạm (≥ 8 ký tự, để trống: hệ thống tự sinh)" type="text" value={f.tempPassword} onChange={(e) => setF({ ...f, tempPassword: e.target.value })} hint="Người dùng sẽ phải đổi mật khẩu khi đăng nhập lần đầu." />
           : <label className="row" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.reset} onChange={(e) => setF({ ...f, reset: e.target.checked })} /> Đặt lại mật khẩu tạm (hệ thống sinh mã mới, thu hồi phiên)</label>}
         {!isNew && <label className="row wrap" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 22, height: 22 }} checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> <span>Cho phép đăng nhập</span> {!f.active && <span className="err small">(khoá sẽ đăng xuất mọi phiên)</span>}</label>}
+        {!isNew && canHr && <><Button variant="soft" onClick={() => setHo(true)} data-testid="user-handover">Chuyển việc đang làm cho người khác</Button><div className="small muted">Nên chuyển khách sỉ, chứng từ nháp, yêu cầu chờ duyệt, ca đã xếp trước khi khoá tài khoản.</div></>}
+        {ho && <Handover userId={u.id} onClose={() => setHo(false)} onDone={() => setHo(false)} />}
       </div>
     </DetailPanel>
   );

@@ -93,7 +93,7 @@ export default function Orders() {
               cols={[
                 { key: "code", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => (
                   <span className="row nw" style={{ gap: 8 }}>
-                    {picking && <input type="checkbox" aria-label={`Chọn đơn ${o.code}`} disabled={!selectable(o)} checked={picked.has(o.id)} onChange={() => toggle(o.id)} onClick={(e) => e.stopPropagation()} style={{ width: 20, height: 20 }} />}
+                    {picking && <label className="check-hit" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Chọn đơn ${o.code}`} disabled={!selectable(o)} checked={picked.has(o.id)} onChange={() => toggle(o.id)} onClick={(e) => e.stopPropagation()} /></label>}
                     <b>{o.code}</b>
                   </span>) },
                 { key: "t", label: "Thời gian", sort: (o) => o.createdAt, render: (o) => (range.from === range.to ? fmtTime(o.createdAt) : `${fmtDayShort(o.createdAt)} ${fmtTime(o.createdAt)}`) },
