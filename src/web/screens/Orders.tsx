@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { ApiError, api, get, items, post } from "../api";
-import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
-import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, usePagedList, type DateRange } from "../components/list";
+import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Select, Sheet, Spinner, TextArea, useAsync, type Col } from "../components/ui";
+import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, useColumnPrefs, usePagedList, type DateRange } from "../components/list";
 import { Receipt, lineName, receiptText } from "../components/Receipt";
 import { toast } from "../components/toast";
 import { CHANNELS, METHODS, ORDER_STATUS, fmtDateTime, fmtTime, money, qtyText, todayVN, unitLabel, withShown } from "../format";
 import { navigate, setQuery } from "../router";
 import { useUnitMap } from "../units";
 import { useCan } from "../store";
+import { downloadFile } from "../download";
 import { ExchangeForm } from "./Exchange";
 
 const tone = (s: string) => (s === "completed" ? "ok" : s === "cancelled" || s === "returned" ? "danger" : "info") as any;
@@ -35,6 +36,24 @@ export default function Orders() {
   const open = (id: number | null) => { setSel(id); setQuery({ open: id ? String(id) : undefined }); };
   const rangeLabel = range.from === range.to ? fmtDay(range.from) : `${fmtDay(range.from)} – ${fmtDay(range.to)}`;
   const signed = (o: any) => (o.kind === "return" ? -o.total : o.total);
+  const allCols: Col<any>[] = [
+        { key: "code", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => (
+          <span className="row nw" style={{ gap: 8 }}>
+            {picking && <input type="checkbox" aria-label={`Chọn đơn ${o.code}`} disabled={!selectable(o)} checked={picked.has(o.id)} onChange={() => toggle(o.id)} onClick={(e) => e.stopPropagation()} style={{ width: 20, height: 20 }} />}
+            <b>{o.code}</b>
+          </span>) },
+        { key: "t", label: "Thời gian", sort: (o) => o.createdAt, render: (o) => (range.from === range.to ? fmtTime(o.createdAt) : `${fmtDayShort(o.createdAt)} ${fmtTime(o.createdAt)}`) },
+        { key: "ch", label: "Kênh", sort: (o) => CHANNELS[o.channel] ?? o.channel, render: (o) => <span className="nw">{CHANNELS[o.channel] ?? o.channel}</span> },
+        { key: "cu", label: "Khách", sort: (o) => o.customerName ?? "", render: (o) => o.customerName ? <span>{o.customerName}{o.customerPhone && <div className="small muted">{o.customerPhone}</div>}</span> : <span className="muted">Khách lẻ</span> },
+        { key: "sl", label: "Người bán", hideBelow: 1024, sort: (o) => o.sellerName ?? "", render: (o) => <span className="nw">{o.sellerName ?? "—"}</span> },
+        { key: "ca", label: "Thu ngân", hideBelow: 1280, sort: (o) => o.cashierName ?? "", render: (o) => <span className="nw">{o.cashierName ?? "—"}</span> },
+        { key: "pm", label: "Thanh toán", hideBelow: 1600, render: (o) => (o.methods?.length ? o.methods.map((m: string) => METHODS[m] ?? m).join(" + ") : "—") },
+        { key: "st", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={tone(o.status)}>{o.kind === "return" ? "Trả hàng" : ORDER_STATUS[o.status] ?? o.status}</Badge> },
+        { key: "tt", label: "Tổng", num: true, sort: signed, render: (o) => <span className="money">{o.kind === "return" ? "-" : ""}{money(o.total)}</span> },
+  ];
+  const cp = useColumnPrefs("orders", allCols);
+  const [exporting, setExporting] = useState(false);
+  const exportLines = async () => { setExporting(true); await downloadFile("/exports/order-lines.xlsx", { ...query, limit: undefined }, "chi-tiet-dong-hang.xlsx"); setExporting(false); };
   const empty = (
     <EmptyState
       title={dirty ? "Không có đơn nào khớp bộ lọc" : range.preset === "today" ? "Hôm nay chưa có đơn hàng nào" : "Không có đơn nào trong khoảng này"}
@@ -51,7 +70,7 @@ export default function Orders() {
   return (
     <div className="stack">
       <PageHeader subtitle={<>{rangeLabel}{sum ? <> · {sum.rowsTotal} phiếu</> : null}</>}
-        actions={<>{canEdit && <Button variant={picking ? "soft" : "ghost"} onClick={() => (picking ? stopPicking() : setPicking(true))}>{picking ? "Thoát chọn nhiều" : "Chọn nhiều"}</Button>}<ExportButton filename={`don-hang-${range.from}_${range.to}`} rows={list.rows} columns={[
+        actions={<>{canEdit && <Button variant={picking ? "soft" : "ghost"} onClick={() => (picking ? stopPicking() : setPicking(true))}>{picking ? "Thoát chọn nhiều" : "Chọn nhiều"}</Button>}{cp.menu}<Button variant="ghost" size="sm" disabled={exporting} onClick={exportLines} title="Mỗi dòng hàng một dòng Excel, theo đúng bộ lọc hiện tại">{exporting ? "Đang xuất…" : "Xuất chi tiết hàng (Excel)"}</Button><ExportButton filename={`don-hang-${range.from}_${range.to}`} rows={list.rows} columns={[
           { label: "Mã đơn", value: (o) => o.code }, { label: "Thời gian", value: (o) => fmtDateTime(o.createdAt) }, { label: "Kênh", value: (o) => CHANNELS[o.channel] ?? o.channel },
           { label: "Loại", value: (o) => (o.kind === "return" ? "Trả hàng" : "Bán") }, { label: "Trạng thái", value: (o) => ORDER_STATUS[o.status] ?? o.status },
           { label: "Khách hàng", value: (o) => o.customerName }, { label: "SĐT", value: (o) => o.customerPhone }, { label: "Thu ngân", value: (o) => o.cashierName }, { label: "Người bán", value: (o) => o.sellerName },
@@ -90,21 +109,7 @@ export default function Orders() {
             <DataTable rows={list.rows} rowKey={(o) => o.id} onRowClick={(o) => (picking ? selectable(o) && toggle(o.id) : open(o.id))} selectedKey={picking ? null : sel} rowClass={(o) => (picking && picked.has(o.id) ? "sel" : "")} emptyState={empty}
               hasMore={list.hasMore} loadingMore={list.loadingMore} onLoadMore={list.loadMore}
               footer={`Đang hiển thị ${list.rows.length}${sum ? ` / ${sum.rowsTotal}` : ""} phiếu`}
-              cols={[
-                { key: "code", label: "Mã đơn", title: true, sort: (o) => o.code, render: (o) => (
-                  <span className="row nw" style={{ gap: 8 }}>
-                    {picking && <input type="checkbox" aria-label={`Chọn đơn ${o.code}`} disabled={!selectable(o)} checked={picked.has(o.id)} onChange={() => toggle(o.id)} onClick={(e) => e.stopPropagation()} style={{ width: 20, height: 20 }} />}
-                    <b>{o.code}</b>
-                  </span>) },
-                { key: "t", label: "Thời gian", sort: (o) => o.createdAt, render: (o) => (range.from === range.to ? fmtTime(o.createdAt) : `${fmtDayShort(o.createdAt)} ${fmtTime(o.createdAt)}`) },
-                { key: "ch", label: "Kênh", sort: (o) => CHANNELS[o.channel] ?? o.channel, render: (o) => <span className="nw">{CHANNELS[o.channel] ?? o.channel}</span> },
-                { key: "cu", label: "Khách", sort: (o) => o.customerName ?? "", render: (o) => o.customerName ? <span>{o.customerName}{o.customerPhone && <div className="small muted">{o.customerPhone}</div>}</span> : <span className="muted">Khách lẻ</span> },
-                { key: "sl", label: "Người bán", hideBelow: 1024, sort: (o) => o.sellerName ?? "", render: (o) => <span className="nw">{o.sellerName ?? "—"}</span> },
-                { key: "ca", label: "Thu ngân", hideBelow: 1280, sort: (o) => o.cashierName ?? "", render: (o) => <span className="nw">{o.cashierName ?? "—"}</span> },
-                { key: "pm", label: "Thanh toán", hideBelow: 1600, render: (o) => (o.methods?.length ? o.methods.map((m: string) => METHODS[m] ?? m).join(" + ") : "—") },
-                { key: "st", label: "Trạng thái", sort: (o) => o.status, render: (o) => <Badge tone={tone(o.status)}>{o.kind === "return" ? "Trả hàng" : ORDER_STATUS[o.status] ?? o.status}</Badge> },
-                { key: "tt", label: "Tổng", num: true, sort: signed, render: (o) => <span className="money">{o.kind === "return" ? "-" : ""}{money(o.total)}</span> },
-              ]} />
+              cols={cp.cols} />
           )}
       </SplitLayout>
     </div>

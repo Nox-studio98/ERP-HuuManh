@@ -214,3 +214,14 @@ Migration `0038_pos_credit.sql` (tham số), `0039_order_charges.sql` (`charge_t
 ### Báo cáo
 - `GET /reports/daily`, `GET /shifts/:id/summary` → `otherCharges` (thu khác ròng sau hoàn, đã nằm trong doanh thu). `byPayment` có dòng `credit` ("Công nợ"): `sold` = phần ghi nợ, `refunded` = phần trả hàng đã trừ vào nợ; giao diện không cộng dòng này vào "Tổng thu tiền".
 - `GET /reports/pnl` → `otherCharges`; với `groupBy=group` có thêm dòng `{key:"Thu khác", revenue, cogs:0}`, với `groupBy=day|channel` mỗi dòng có `otherCharges` (cộng vào `revenue`) để tổng breakdown = doanh thu.
+
+## Xuất chi tiết dòng hàng của danh sách đơn — `routes/export-order-lines.ts` (POS-KV đợt B, mục 5)
+
+`GET /exports/order-lines.xlsx` — quyền `orders.view`. Nhận **đúng bộ lọc của `GET /orders`**: `day` | `from`+`to` (≤ 366 ngày), `channel`, `status` (mặc định bỏ nháp), `kind`, `shiftId`, `cashierId`, `sellerId`, `method`, `q` (SĐT chỉ tìm được khi có `customers.view_pii`); bỏ qua `limit`/`cursor`. Bộ lọc dùng chung ở `services/order-filter.ts` (bản sao ngữ nghĩa của `/orders`; sửa một nơi thì sửa nơi kia).
+- Trả file `.xlsx` (một sheet "Chi tiết dòng hàng", dùng `services/xlsx.ts` nên chuỗi `=...` không thành công thức). Mỗi dòng = một dòng hàng: Mã đơn, Ngày giờ (VN), Kênh, Loại, Trạng thái, Khách hàng, SĐT (che nếu thiếu `customers.view_pii`), Thu ngân, Người bán, Mã hàng, Tên hàng, ĐVT, Số lượng và Đơn giá **theo đơn vị của dòng**, Giảm giá dòng, Thành tiền. Thêm **Giá vốn, Lãi gộp chỉ khi có `prices.view_cost`** (cột không tồn tại với vai trò khác).
+- Phiếu trả hàng: số lượng, giảm giá, thành tiền, giá vốn, lãi mang dấu âm. Thu khác (B2) là dòng riêng "Thu khác: <tên>" (chỉ có Thành tiền); phiếu trả có hoàn thu khác → dòng "Hoàn thu khác" âm. Có dòng "Tổng cộng" cuối.
+- Giới hạn 20.000 dòng (gồm dòng thu khác). Vượt → `422 export_too_large` (`details.max`), không trả file.
+- Ghi audit `export.order_lines` (bộ lọc + số dòng).
+- Đăng ký trước `exportRoutes` vì `/exports/:file` bắt mọi tên.
+
+Giao diện (`Orders.tsx`): nút "Xuất chi tiết hàng (Excel)" (tải qua `src/web/download.ts`, lỗi hiện toast) và nút "Cột" (`useColumnPrefs`/`ColumnsMenu` trong `components/list.tsx`: bật/tắt cột, cột `title` luôn hiện, lưu `localStorage` khoá `hm.cols.<columnsKey>` theo thiết bị, có "Mặc định"). Hook tái dùng cho bảng khác: `const cp = useColumnPrefs("khoa", cols); <DataTable cols={cp.cols} />` + `{cp.menu}`; DataTable không đổi.

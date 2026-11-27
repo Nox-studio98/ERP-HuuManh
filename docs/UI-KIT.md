@@ -21,6 +21,7 @@ Giữ nguyên ngôn ngữ thị giác hiện có (xanh thương hiệu, `Card`, 
 | `FilterSelect` | `label`, `value`, `onChange`, `options:{v,label}[]`, `allLabel?` | Giá trị rỗng = "Tất cả". |
 | `KpiRow` | `items: {label,value,sub?,tone?,delta?,onClick?}[]`, `cols?` | `deltaPct(cur, prev)` tính % so kỳ trước. |
 | `DataTable` (ui.tsx) | cũ + `emptyState?`, `defaultSort?`, `selectedKey?`, `hasMore/loadingMore/onLoadMore?`, `pageSize?`, `footer?` | Tương thích ngược. Cột: `sort: (r)=>giá trị` ⇒ bấm tiêu đề để sắp xếp (client), `num` ⇒ căn phải + số tabular, `hideBelow: 1024\|1280\|1440` ⇒ ẩn cột khi hẹp (mobile vẫn dùng thẻ). Tiêu đề cột dính khi cuộn, hàng hover. |
+| `useColumnPrefs` / `ColumnsMenu` (list.tsx) | mới | Nút "Cột" bật/tắt cột của bảng, nhớ theo thiết bị (`localStorage` `hm.cols.<key>`), có "Mặc định"; cột `title` luôn hiện. Dùng: `const cp = useColumnPrefs("orders", cols); <DataTable cols={cp.cols} />` + `{cp.menu}`. Không đổi DataTable. |
 | `usePagedList(path, query, deps)` | trả `{rows, loading, loadingMore, hasMore, loadMore, reload, extra, error}` | Dùng API `{items,nextCursor,...extra}`; `extra` = phần còn lại (vd. `summary`). Đổi `deps` ⇒ tải lại trang đầu. |
 | `ExportButton` | `filename`, `rows`, `columns:{label,value}[]`, `disabled?` | Xuất CSV (UTF-8 BOM, mở Excel được, chống CSV-injection như server — `src/web/csv.ts`). Không có thư viện xlsx trong package.json nên chỉ CSV. Xuất số thật, không kèm "₫". |
 | `EmptyState` (ui.tsx) | `title`, `hint?`, `action?` | `action` là ReactNode ⇒ đặt hàng nút (vd. "Bán hàng", "Xem hôm qua", "Xoá lọc"). |

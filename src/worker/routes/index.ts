@@ -16,6 +16,7 @@ import { b2bRoutes } from "./b2b";
 import { debtRoutes } from "./debts";
 import { integrationRoutes } from "./integrations";
 import { exportRoutes } from "./exports";
+import { exportOrderLinesRoutes } from "./export-order-lines";
 // Đợt 3
 import { onlineOrderRoutes } from "./online-orders";
 import { cmsRoutes } from "./cms";
@@ -62,6 +63,7 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", hrRoutes);
   v1.route("/", payrollRoutes);
   // exportRoutes sau payrollRoutes: /exports/:file bắt mọi tên, nên /exports/bang-luong.xlsx (payroll) phải đăng ký trước
+  v1.route("/", exportOrderLinesRoutes); // trước exportRoutes (/exports/:file bắt mọi tên)
   v1.route("/", exportRoutes);
   v1.route("/", competitorRoutes);
   v1.route("/", purchasingRoutes);
