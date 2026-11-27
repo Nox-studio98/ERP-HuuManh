@@ -13,9 +13,13 @@ import Login, { ChangePassword } from "./screens/Login";
 const Dashboard = lazy(() => import("./screens/Dashboard"));
 const Pos = lazy(() => import("./screens/Pos"));
 const ShiftClose = lazy(() => import("./screens/ShiftClose"));
+const ShiftHistory = lazy(() => import("./screens/ShiftHistory"));
+const DailyReport = lazy(() => import("./screens/DailyReport"));
 const Orders = lazy(() => import("./screens/Orders"));
+const RetailCustomers = lazy(() => import("./screens/RetailCustomers"));
 const Inventory = lazy(() => import("./screens/Inventory"));
 const Products = lazy(() => import("./screens/Products"));
+const Import = lazy(() => import("./screens/Import"));
 const Prices = lazy(() => import("./screens/Prices"));
 const Finance = lazy(() => import("./screens/Finance"));
 const Sepay = lazy(() => import("./screens/Sepay"));
@@ -53,6 +57,8 @@ const PurchaseOrders = lazy(() => import("./screens/d4/PurchaseOrders"));
 const Promotions = lazy(() => import("./screens/d4/Promotions"));
 const Bundles = lazy(() => import("./screens/d4/Bundles"));
 const FinReports = lazy(() => import("./screens/d4/FinReports"));
+const SalesReports = lazy(() => import("./screens/SalesReports"));
+const HrCommission = lazy(() => import("./screens/hr/Commission"));
 
 const I = (d: string) => <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 type Nav = { path: string; label: string; icon: ReactNode; perms: string[]; el: ReactNode; hidden?: boolean; group?: string; pri?: number };
@@ -61,8 +67,10 @@ const NAV: Nav[] = [
   { path: "/dashboard", label: "Tổng quan", pri: 5, perms: ["reports.view"], icon: I("M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z"), el: <Dashboard /> },
   { path: "/pos", label: "Bán hàng", group: G.retail, pri: 1, perms: ["pos.sell"], icon: I("M3 4h2l2.4 11h10.2L20 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z"), el: <Pos /> },
   { path: "/orders", label: "Đơn hàng", group: G.retail, pri: 3, perms: ["orders.view"], icon: I("M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"), el: <Orders /> },
+  { path: "/retail-customers", label: "Khách lẻ", group: G.retail, perms: ["b2b.view"], icon: I("M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0"), el: <RetailCustomers /> },
   { path: "/inventory", label: "Kho", group: G.stock, pri: 4, perms: ["inventory.view"], icon: I("M3 8l9-5 9 5v10l-9 5-9-5zM3 8l9 5 9-5M12 13v10"), el: <Inventory /> },
   { path: "/products", label: "Hàng hoá", group: G.stock, perms: ["inventory.view"], icon: I("M12 7c-4 0-7 3-7 7s3 7 7 7 7-3 7-7-3-7-7-7zM12 7c0-2 1-4 4-4"), el: <Products /> },
+  { path: "/import", label: "Nhập Excel", group: G.stock, perms: ["products.write", "b2b.write", "inventory.write"], icon: I("M12 15V3M7 8l5-5 5 5M5 21h14M5 17v4M19 17v4"), el: <Import /> },
   { path: "/prices", label: "Giá", group: G.stock, perms: ["prices.view_sell"], icon: I("M20 12l-8 8-9-9V3h8zM7.5 7.5h.01"), el: <Prices /> },
   { path: "/suppliers", label: "Nhà cung cấp", group: G.stock, perms: ["inventory.view"], icon: I("M3 7h11v9H3zM14 10h4l3 3v3h-7zM7 19a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm10 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"), el: <Suppliers /> },
   { path: "/customers", label: "Khách sỉ", group: G.b2b, perms: ["b2b.view"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM20 20v-1a3 3 0 00-2-2.8M16 4.2a3.5 3.5 0 010 6.6"), el: <Customers /> },
@@ -79,6 +87,7 @@ const NAV: Nav[] = [
   { path: "/bank", label: "Ngân hàng", group: G.fin, perms: ["debt.view", "finance.write"], icon: I("M3 10l9-6 9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"), el: <Bank /> },
   { path: "/sepay", label: "Giao dịch SePay", group: G.fin, perms: ["finance.view"], icon: I("M12 3v12M8 11l4 4 4-4M4 19h16"), el: <Sepay /> },
   { path: "/exports", label: "Xuất Excel", group: G.fin, perms: ["reports.view"], icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), el: <Exports /> },
+  { path: "/reports/daily", label: "Báo cáo cuối ngày", group: G.fin, perms: ["reports.view"], icon: I("M7 3h10v18H7zM10 8h4M10 12h4M10 16h2"), el: <DailyReport /> }, // đứng trước /reports (khớp tiền tố theo thứ tự)
   { path: "/reports", label: "Báo cáo", group: G.fin, perms: ["reports.view"], icon: I("M4 20V10M10 20V4M16 20v-8M22 20H2"), el: <Reports /> },
   { path: "/approvals", label: "Duyệt", group: G.admin, perms: ["approvals.decide"], icon: I("M5 12l4 4 10-10"), el: <Approvals /> },
   { path: "/integrations", label: "Tích hợp", group: G.admin, perms: ["integrations.manage"], icon: I("M9 7V3M15 7V3M7 7h10v5a5 5 0 01-10 0zM12 17v4"), el: <Integrations /> },
@@ -90,6 +99,7 @@ const NAV: Nav[] = [
   { path: "/purchasing", label: "Gợi ý đặt hàng", group: G.stock, perms: ["purchasing.view"], icon: I("M3 5h18M6 5v14h12V5M9 9h6M9 13h6"), el: <Purchasing /> },
   { path: "/purchase-orders", label: "Đơn đặt NCC", group: G.stock, perms: ["purchasing.view"], icon: I("M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h4"), el: <PurchaseOrders /> },
   { path: "/competitors", label: "Giá đối thủ", group: G.stock, perms: ["competitors.view"], icon: I("M4 19h16M7 16V9M12 16V5M17 16v-4"), el: <Competitors /> },
+  { path: "/sales-reports", label: "Báo cáo bán hàng", group: G.fin, perms: ["reports.view"], icon: I("M3 20h18M6 16v-5M11 16V6M16 16v-8M21 16v-3"), el: <SalesReports /> },
   { path: "/fin-reports", label: "Báo cáo tài chính", group: G.fin, perms: ["reports.view"], icon: I("M4 4h16v16H4zM8 15v-3M12 15V9M16 15v-5"), el: <FinReports /> },
   { path: "/me", label: "Chấm công", group: G.hr, pri: 2, perms: ["hr.self"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrMe /> },
   { path: "/hr/employees", label: "Nhân viên", group: G.hr, perms: ["hr.view"], icon: I("M16 20v-1a4 4 0 00-4-4H8a4 4 0 00-4 4v1M10 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7z"), el: <HrEmployees /> },
@@ -98,8 +108,10 @@ const NAV: Nav[] = [
   { path: "/hr/approvals", label: "Duyệt chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <HrAttendance /> },
   { path: "/hr/timesheets", label: "Bảng công", group: G.hr, perms: ["hr.view"], icon: I("M4 4h16v16H4zM4 10h16M10 4v16"), el: <HrTimesheets /> },
   { path: "/payroll", label: "Bảng lương", group: G.hr, perms: ["hr.sensitive"], icon: I("M3 7h18v10H3zM12 12a2 2 0 100-4 2 2 0 000 4zM6 12h.01M18 12h.01"), el: <HrPayroll /> },
+  { path: "/hr/commission", label: "Hoa hồng bán hàng", group: G.hr, perms: ["hr.sensitive"], icon: I("M19 5L5 19M7.5 9a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm9 9a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"), el: <HrCommission /> },
   { path: "/hr/stores", label: "Cửa hàng", group: G.hr, perms: ["hr.manage", "users.manage"], icon: I("M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"), el: <HrStores /> },
   { path: "/hr/qr", label: "Mã QR chấm công", perms: ["hr.schedule"], hidden: true, icon: I("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2z"), el: <HrQrDisplay /> },
+  { path: "/shift-history", label: "Lịch sử ca", group: G.retail, perms: ["pos.shift", "reports.view"], icon: I("M12 8v5l3 2M3 12a9 9 0 109-9M3 4v5h5"), el: <ShiftHistory /> },
   { path: "/shift-close", label: "Chốt ca", perms: ["pos.shift"], icon: I("M12 6v6l4 2M12 21a9 9 0 100-18 9 9 0 000 18z"), el: <ShiftClose />, hidden: true },
 ];
 

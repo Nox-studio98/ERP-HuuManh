@@ -5,12 +5,14 @@ const dt = new Intl.DateTimeFormat("vi-VN", { timeZone: TZ, day: "2-digit", mont
 const dOnly = new Intl.DateTimeFormat("vi-VN", { timeZone: TZ, day: "2-digit", month: "2-digit", year: "numeric" });
 const tOnly = new Intl.DateTimeFormat("vi-VN", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
 
-export const money = (n: number | null | undefined) => (n == null || Number.isNaN(n) ? "—" : vnd.format(Math.round(n)).replace(/ /g, " "));
+export const money = (n: number | null | undefined) => (n == null || Number.isNaN(n) ? "—" : vnd.format(Math.round(n) || 0).replace(/ /g, " "));
 export const num = (n: number | null | undefined) => (n == null ? "—" : numFmt.format(n));
 export const qtyText = (milli: number | null | undefined, unit?: string) => (milli == null ? "—" : `${numFmt.format(milli / 1000)}${unit ? " " + unitLabel(unit) : ""}`);
 export const fmtDateTime = (iso?: string | null) => (iso ? dt.format(new Date(iso)) : "—");
 export const fmtDate = (iso?: string | null) => (iso ? dOnly.format(new Date(iso)) : "—");
 export const fmtTime = (iso?: string | null) => (iso ? tOnly.format(new Date(iso)) : "—");
+/** "YYYY-MM-DD" → "dd/mm/yyyy" (không qua Date, không lệch múi giờ) */
+export const fmtDay = (ymd?: string | null) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd ?? ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : ymd || "—"; };
 /** YYYY-MM-DD theo giờ Việt Nam */
 export const todayVN = (offsetDays = 0) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -31,8 +33,8 @@ export const UNIT_OPTIONS = ["kg", "trai", "khay", "hop", "thung", "tui", "bo"];
 export const METHODS: Record<string, string> = { cash: "Tiền mặt", transfer: "Chuyển khoản", qr: "QR", card: "Thẻ", ewallet: "Ví điện tử", cod: "COD", marketplace: "Sàn", credit: "Công nợ" };
 export const CHANNELS: Record<string, string> = { pos: "Tại quầy", online: "Online", b2b: "Sỉ", fresco: "Fresco", social: "Mạng xã hội" };
 export const ROLES: Record<string, string> = { owner: "Chủ", manager: "Quản lý", cashier: "Thu ngân", warehouse: "Thủ kho", accountant: "Kế toán", online_staff: "NV online", staff: "Nhân viên" };
-export const ORDER_STATUS: Record<string, string> = { draft: "Nháp", new: "Mới", confirmed: "Đã xác nhận", preparing: "Đang chuẩn bị", shipping: "Đang giao", completed: "Hoàn tất", cancelled: "Đã huỷ", delivery_failed: "Giao thất bại", returned: "Đã trả", awaiting_payment: "Chờ thanh toán" };
-export const DOC_TYPES: Record<string, string> = { receipt: "Nhập hàng", issue: "Xuất", waste: "Huỷ hàng", adjust: "Điều chỉnh", count: "Kiểm kê", transfer: "Chuyển kho" };
+export const ORDER_STATUS: Record<string, string> = { draft: "Nháp", new: "Mới", confirmed: "Đã xác nhận", preparing: "Đang chuẩn bị", shipping: "Đang giao", completed: "Hoàn tất", cancelled: "Đã huỷ", delivery_failed: "Giao thất bại", returned: "Đã trả hàng", awaiting_payment: "Chờ thanh toán" };
+export const DOC_TYPES: Record<string, string> = { receipt: "Nhập hàng", issue: "Xuất", waste: "Huỷ hàng", adjust: "Điều chỉnh", count: "Kiểm kê", transfer: "Chuyển kho", internal_use: "Xuất dùng nội bộ" };
 export const DOC_STATUS: Record<string, string> = { draft: "Nháp", pending_approval: "Chờ duyệt", posted: "Đã ghi sổ", cancelled: "Đã huỷ" };
 export const uuid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto

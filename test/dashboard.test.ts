@@ -129,8 +129,13 @@ describe("GET /orders filters + summary", () => {
 });
 
 describe("/me without employee profile", () => {
-  it("returns 404 employee_not_linked for owner on every /me/* endpoint", async () => {
-    for (const p of ["/api/v1/me/attendance/today", "/api/v1/me/schedule?from=2026-11-01&to=2026-11-07", "/api/v1/me/payslips"]) {
+  it("GET /me/attendance/today trả 200 { employee: null } cho chủ không có hồ sơ nhân viên", async () => {
+    const r = await api("owner", "GET", "/api/v1/me/attendance/today");
+    expect(r.status).toBe(200);
+    expect(r.body.employee).toBeNull();
+  });
+  it("returns 404 employee_not_linked for owner on the other /me/* endpoints", async () => {
+    for (const p of ["/api/v1/me/schedule?from=2026-11-01&to=2026-11-07", "/api/v1/me/payslips"]) {
       const r = await api("owner", "GET", p);
       expect(r.status, p).toBe(404);
       expect(r.body.error.code, p).toBe("employee_not_linked");

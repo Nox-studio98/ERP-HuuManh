@@ -46,8 +46,8 @@ export default function QrDisplay() {
       {!q ? <Spinner /> : (
         <>
           <QrSvg value={q.code} size={Math.min(560, Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.7))} label="Mã QR chấm công" />
-          <div className="num" style={{ fontSize: "1.1rem" }}>Mã đổi sau <b>{left}</b> giây</div>
-          <div style={{ fontFamily: "monospace", fontSize: ".85rem", color: "#555", wordBreak: "break-all", textAlign: "center" }} data-testid="qr-code">{q.code}</div>
+          <div className="num" style={{ fontSize: "1.1rem" }}>Mã đổi sau <b>{Math.max(1, left)}</b> giây</div>
+          <div className="sr-only" data-testid="qr-code">{q.code}</div>
         </>
       )}
       <div style={{ color: "#555", fontSize: ".85rem", textAlign: "center" }}>Nhân viên mở mục Chấm công › Bằng mã QR rồi quét. Mỗi mã chỉ dùng một lần.</div>

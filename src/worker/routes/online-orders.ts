@@ -9,6 +9,7 @@ import { addVnRange, guarded, parseBody } from "../services/http";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { CUSTOMER_LABEL, type OnlineStatus } from "../services/online-orders";
 import { bankFundId, markOrderPaid } from "../services/online-payments";
+import { sepayCandidates } from "../services/sepay-ledger";
 import {
   cancelOrder, canCost, confirmOrder, createSocialOrder, deliverOrder, failOrder, loadOpsOrder, packOrder, prepareOrder,
   overrideWeight, redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
@@ -44,6 +45,10 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     base.push(`o.slot_date = ?`);
     bp.push(q.slotDate);
   }
+  if (q.source) {
+    if (q.source !== "pos") throw new AppError(422, "validation_error", "source chỉ nhận 'pos'");
+    base.push(`o.source = 'pos'`);
+  }
   addVnRange(q, "o.created_at", base, bp);
   if (q.q?.trim()) {
     const like = `%${q.q.trim().replace(/[\\%_]/g, (m) => "\\" + m)}%`;
@@ -65,7 +70,7 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
   const rows = (
     await c.env.DB
       .prepare(
-        `SELECT o.id, o.code, o.channel, o.status, o.payment_method, o.payment_status, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
+        `SELECT o.id, o.code, o.channel, o.source, o.carrier, o.carrier_tracking_no, o.status, o.payment_method, o.payment_status, o.paid_total, o.slot_date, s.label AS slot_label, o.receiver_name, o.receiver_phone,
                 o.ship_address, z.name AS zone_name, o.total, o.estimated_total, o.weight_adjust_status, o.created_at, o.is_preorder, o.diff_amount, o.diff_status, o.refund_due,
                 EXISTS (SELECT 1 FROM order_lines ol JOIN products p ON p.id = ol.product_id WHERE ol.order_id = o.id AND p.sell_by_weight = 1) AS has_weight,
                 (SELECT COALESCE(SUM(s.qty_milli), 0) FROM so_shortages s WHERE s.order_id = o.id AND s.status = 'open') AS short_milli
@@ -81,10 +86,14 @@ onlineOrderRoutes.get("/online-orders", requirePerm("orders.online.manage"), asy
     id: r.id,
     code: r.code,
     channel: r.channel,
+    source: r.source,
+    carrier: r.carrier,
+    carrierTrackingNo: r.carrier_tracking_no,
     status: r.status,
     statusLabel: CUSTOMER_LABEL[r.status as OnlineStatus] ?? r.status,
     paymentMethod: r.payment_method,
     paymentStatus: r.payment_status,
+    paidTotal: r.paid_total,
     slotDate: r.slot_date,
     slotLabel: r.slot_label,
     receiverName: r.receiver_name,
@@ -199,6 +208,9 @@ async function orderDetail(c: Ctx, oid: number) {
     shortMilli: awaiting.reduce((a, x) => a + x.qtyMilli, 0),
     carrier: o.carrier,
     carrierTrackingNo: o.carrier_tracking_no,
+    source: o.source,
+    delivererUserId: o.deliverer_user_id,
+    posShiftId: o.pos_shift_id,
     cancelReason: o.cancel_reason,
     shippingFeePolicy: o.shipping_fee_policy,
     note: o.note,
@@ -320,6 +332,8 @@ act("mark-paid", "finance.write", async (c, oid) => {
     if (!t) throw new AppError(422, "bank_txn_not_found", "Không tìm thấy giao dịch ngân hàng");
     if (t.status !== "unmatched") throw conflict("not_unmatched", "Giao dịch ngân hàng đã được xử lý");
     if (t.amount !== o.total) throw new AppError(422, "amount_mismatch", "Số tiền giao dịch không bằng tổng đơn", { txnAmount: t.amount, total: o.total });
+    const sc = await sepayCandidates(db, { fund_id: t.fund_id, amount: t.amount, txn_date: t.txn_date, bank_ref: t.bank_ref });
+    if (sc.length) throw conflict("already_recorded_by_sepay", "Khoản tiền này đã được SePay ghi vào quỹ — gán giao dịch SePay vào đơn ở màn Giao dịch SePay", { candidates: sc });
     amount = t.amount;
     ref ??= t.bank_ref;
     fundId ??= t.fund_id;

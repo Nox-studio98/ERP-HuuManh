@@ -1,5 +1,7 @@
 # Đối chiếu ERP Hữu Mạnh với KiotViet (bán lẻ) — 26/11/2026
 
+> **Bản kiểm chứng trong mã (26/11/2026): xem `docs/KIOTVIET-KHOANG-TRONG.md`** — bảng Đã có / Một phần / Chưa có từng module, đính chính tài liệu này (trả hàng nhập, chuyển hàng 2 bước, API báo cáo cuối ngày đã có) và xếp hạng khoảng trống lớn.
+
 Nguồn: hướng dẫn sử dụng KiotViet ngành bán lẻ (lộ trình 6 bước: hàng hoá → nhập hàng → bán hàng → trả hàng → công nợ → báo cáo, cùng các mục Kết ca, Khách hàng, Nhóm khách, Sổ quỹ, Trả hàng, Nhập hàng, Trả hàng nhập, Kiểm kho, Xuất huỷ, Nhà cung cấp, Báo cáo, Thiết lập giá, Đặt hàng, Hoa hồng, Tích điểm, Thu khác, Mẫu in, Chuyển hàng, Xuất dùng nội bộ).
 Chỉ học **nghiệp vụ và luồng thao tác**; giao diện làm bằng bộ thành phần của dự án. Đã đối chiếu riêng: Chấm công (đã làm, PR #21) và Bán hàng (`docs/POS-KV.md`, tạm dừng).
 

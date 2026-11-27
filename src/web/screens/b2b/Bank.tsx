@@ -3,7 +3,7 @@ import { get, items, post } from "../../api";
 import { Badge, Banner, Button, Card, DataTable, DecInput, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../../components/ui";
 import { DateRangeFilter, DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, rangeOf, type DateRange } from "../../components/list";
 import { toast } from "../../components/toast";
-import { money, todayVN } from "../../format";
+import { fmtDateTime, money, todayVN } from "../../format";
 import { useCan } from "../../store";
 import { CustomerSelect, SupplierSelect, ymd } from "./kit";
 
@@ -53,7 +53,7 @@ function BankTxns() {
           <Button variant="ghost" onClick={() => file.current?.click()}>Chọn tệp CSV…</Button>
           <Button loading={busy} disabled={!csv.trim() || !fid} onClick={imp}>Nhập giao dịch</Button>
         </div>
-        {res && <Banner tone="info">Đã nhập {res.imported} · tự khớp {res.matched} · chưa khớp {res.unmatched} · trùng {res.duplicates} · lỗi dòng {res.invalid}.</Banner>}
+        {res && <Banner tone="info">Đã nhập {res.imported} · tự khớp {res.matched}{res.sepayLinked ? ` (trong đó ${res.sepayLinked} đã ghi qua SePay, không ghi quỹ lần hai)` : ""} · chưa khớp {res.unmatched} · trùng {res.duplicates} · lỗi dòng {res.invalid}.</Banner>}
       </div>
     </Card>
   );
@@ -67,7 +67,7 @@ function BankTxns() {
             <SearchInput value={q} onSearch={setQ} placeholder="Nội dung, mã giao dịch…" label="Tìm giao dịch" />
             <label className="row" style={{ minHeight: 40 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={useRange} onChange={(e) => setUseRange(e.target.checked)} /> Lọc theo ngày</label>
             {useRange && <DateRangeFilter value={range} onChange={setRange} presets={["month", "lastMonth", "7d", "custom"]} />}
-            <span style={{ marginLeft: "auto" }}><ExportButton filename={`giao-dich-ngan-hang-${status}`} rows={rows} columns={[{ label: "Ngày", value: (x) => x.txnDate }, { label: "Nội dung", value: (x) => x.description }, { label: "Mã GD", value: (x) => x.bankRef }, { label: "Trạng thái", value: (x) => ST[x.status] ?? x.status }, { label: "Số tiền", value: (x) => x.amount }]} /></span>
+            <span style={{ marginLeft: "auto" }}><ExportButton filename={`giao-dich-ngan-hang-${status}`} rows={rows} columns={[{ label: "Ngày", value: (x) => x.txnDate }, { label: "Nội dung", value: (x) => x.description }, { label: "Mã GD", value: (x) => x.bankRef }, { label: "Trạng thái", value: (x) => x.sepayEventId ? "Đã ghi qua SePay" : ST[x.status] ?? x.status }, { label: "Số tiền", value: (x) => x.amount }]} /></span>
           </FilterBar>
           {list.loading ? <Spinner /> : (
             <DataTable rows={rows} rowKey={(x) => x.id} onRowClick={(x) => x.status === "unmatched" && can("debt.write") && setMatch(x)} selectedKey={match?.id} pageSize={50} defaultSort={{ key: "d", dir: "desc" }}
@@ -76,7 +76,7 @@ function BankTxns() {
                 { key: "d", label: "Ngày", title: true, sort: (x) => x.txnDate, render: (x) => <b className="nw">{ymd(x.txnDate)}</b> },
                 { key: "n", label: "Nội dung", render: (x) => x.description || "—" },
                 { key: "r", label: "Mã GD", hideMobile: true, hideBelow: 1280, render: (x) => <span className="num small">{x.bankRef}</span> },
-                { key: "s", label: "Trạng thái", render: (x) => <Badge tone={x.status === "matched" ? "ok" : x.status === "unmatched" ? "warn" : undefined}>{ST[x.status] ?? x.status}</Badge> },
+                { key: "s", label: "Trạng thái", render: (x) => <Badge tone={x.status === "matched" ? "ok" : x.status === "unmatched" ? "warn" : undefined}>{x.sepayEventId ? "Đã ghi qua SePay" : ST[x.status] ?? x.status}</Badge> },
                 { key: "a", label: "Số tiền", num: true, sort: (x) => x.amount, render: (x) => <b className="money" style={{ color: x.amount > 0 ? "var(--accent)" : "var(--danger)" }}>{x.amount > 0 ? "+" : ""}{money(x.amount)}</b> },
               ]} />
           )}
@@ -92,20 +92,34 @@ function MatchSheet({ txn, onClose, onDone }: { txn: any; onClose: () => void; o
   const isIn = txn.amount > 0;
   const [p, setP] = useState<{ id: number; name: string } | null>(null);
   const [ignore, setIgnore] = useState(false), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const [sepayId, setSepayId] = useState<number | null>(null);
+  const cands = useAsync(() => (isIn ? get(`/bank-transactions/${txn.id}/sepay-candidates`, undefined, { silent: true }).then((r) => items<any>(r)).catch(() => [] as any[]) : Promise.resolve([] as any[])), [txn.id]);
+  const hasCands = (cands.data ?? []).length > 0;
   const submit = async () => {
     setBusy(true);
     try {
-      if (ignore) await post(`/bank-transactions/${txn.id}/match`, { ignore: true, reason: reason.trim() });
+      if (sepayId) { await post(`/bank-transactions/${txn.id}/match`, { sepayEventId: sepayId }); toast("Đã liên kết với giao dịch SePay (không ghi quỹ lần hai)", "ok"); }
+      else if (ignore) await post(`/bank-transactions/${txn.id}/match`, { ignore: true, reason: reason.trim() });
       else { const r = await post(`/bank-transactions/${txn.id}/match`, { partnerType: isIn ? "customer" : "supplier", partnerId: p!.id }); toast(`Đã ghi phiếu ${r.payment.code}${r.unapplied ? ` — dư ${money(r.unapplied)}` : ""}`, "ok"); }
       onDone();
     } catch {} finally { setBusy(false); }
   };
   return (
-    <Sheet open onClose={onClose} title="Khớp giao dịch" footer={<Button block loading={busy} disabled={ignore ? reason.trim().length < 3 : !p} onClick={submit}>{ignore ? "Bỏ qua giao dịch" : isIn ? "Khớp & ghi phiếu thu" : "Khớp & ghi phiếu chi"}</Button>}>
+    <Sheet open onClose={onClose} title="Khớp giao dịch" footer={<Button block loading={busy} disabled={sepayId ? false : ignore ? reason.trim().length < 3 : !p || hasCands} onClick={submit}>{sepayId ? "Liên kết giao dịch SePay" : ignore ? "Bỏ qua giao dịch" : isIn ? "Khớp & ghi phiếu thu" : "Khớp & ghi phiếu chi"}</Button>}>
       <div className="stack">
         <div className="card flat"><div className="row between"><b className="money" style={{ color: isIn ? "var(--accent)" : "var(--danger)" }}>{money(txn.amount)}</b><span className="muted small">{ymd(txn.txnDate)}</span></div><div className="small">{txn.description}</div></div>
         <Segmented value={ignore ? "ig" : "m"} onChange={(v) => setIgnore(v === "ig")} options={[{ v: "m", label: isIn ? "Khớp với khách" : "Khớp với NCC" }, { v: "ig", label: "Bỏ qua" }]} />
         {ignore ? <TextArea label="Lý do bỏ qua" value={reason} onChange={(e) => setReason(e.target.value)} /> : (isIn ? <CustomerSelect value={p} onChange={setP} /> : <SupplierSelect value={p} onChange={setP} />)}
+        {hasCands && !ignore && (
+          <Banner tone="info">
+            Khoản này có vẻ đã được SePay ghi vào quỹ — chọn giao dịch SePay tương ứng để liên kết (không tạo phiếu thu mới):
+            <div className="stack" style={{ marginTop: 8 }}>
+              {(cands.data ?? []).map((e: any) => (
+                <label key={e.id} className="row" style={{ gap: 8 }}><input type="radio" name="sepay-ev" checked={sepayId === e.id} onChange={() => setSepayId(e.id)} /> <span className="small">{fmtDateTime(e.txnAt)} · {e.code ?? "không mã"} · {e.referenceCode ?? "—"} · {money(e.amount)}</span></label>
+              ))}
+            </div>
+          </Banner>
+        )}
         {!ignore && <div className="hint">Tiền được gạch vào hoá đơn cũ nhất; phần dư giữ làm số dư có.</div>}
       </div>
     </Sheet>

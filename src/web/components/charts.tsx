@@ -1,12 +1,14 @@
 import { money, num } from "../format";
 
 /** `maxBar` (tuỳ chọn, đơn vị viewBox): giới hạn bề rộng cột và gom nhóm cột vào giữa khi ít dữ liệu, tránh cột to bản. */
-export function BarChart({ data, height = 180, format = money, maxBar, width = 560 }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string; maxBar?: number; width?: number }) {
-  const W = width, padL = 8, padB = 22, padT = 16;
+export function BarChart({ data, height = 180, format = money, maxBar, width, labelMax }: { data: { label: string; value: number }[]; height?: number; format?: (n: number) => string; maxBar?: number; width?: number; /** Nhãn là tên (không phải ngày): cắt đuôi kèm "…" khi dài hơn số ký tự này, thay cho cách lấy 5 ký tự cuối. */ labelMax?: number }) {
+  const narrow = typeof window !== "undefined" && window.innerWidth < 600;
+  const W = narrow ? Math.min(width ?? 340, 340) : width ?? 560, padL = 8, padB = 22, padT = 16;
   const max = Math.max(1, ...data.map((d) => d.value));
   const slot = (W - padL * 2) / Math.max(1, data.length);
   const bw = maxBar ? Math.min(slot, maxBar / 0.7) : slot;
   const off = maxBar ? (W - padL * 2 - bw * data.length) / 2 : 0;
+  const fit = Math.floor(bw / 6.2); // ~6 đơn vị viewBox mỗi ký tự cỡ 11px: nhãn dài không đè nhau
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${height}`} role="img" aria-label={"Biểu đồ cột: " + data.map((d) => `${d.label} ${format(d.value)}`).join(", ")}>
       <line className="axis" x1={padL} x2={W - padL} y1={height - padB} y2={height - padB} />
@@ -16,7 +18,7 @@ export function BarChart({ data, height = 180, format = money, maxBar, width = 5
         return (
           <g key={i}>
             <rect className="bar" x={x} y={height - padB - h} width={w} height={h} rx={3}><title>{`${d.label}: ${format(d.value)}`}</title></rect>
-            {data.length <= 12 && <text x={x + w / 2} y={height - 6} textAnchor="middle">{d.label.length > 8 ? d.label.slice(-5) : d.label}</text>}
+            {data.length <= 12 && <text x={x + w / 2} y={height - 6} textAnchor="middle">{labelMax ? (d.label.length > Math.min(labelMax, fit) ? d.label.slice(0, Math.max(2, Math.min(labelMax, fit) - 1)) + "…" : d.label) : d.label.length > 8 ? d.label.slice(-5) : d.label}</text>}
             {data.length <= 7 && d.value > 0 && <text x={x + w / 2} y={height - padB - h - 4} textAnchor="middle">{num(Math.round(d.value / 1000))}k</text>}
           </g>
         );

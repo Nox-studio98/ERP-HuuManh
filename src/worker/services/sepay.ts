@@ -20,6 +20,7 @@ import { bankFundId, markOrderPaid } from "./online-payments";
 import { createPayment } from "./debt-ledger";
 import { INVOICE_OUTSTANDING_SQL } from "./debt";
 import { sysAuditStmt } from "./sysaudit";
+import { holdInStmts, holdOutStmts, NO_LEDGER_REASONS, ignoreCategory, incomeStmt } from "./sepay-ledger";
 
 type Ctx = Context<AppBindings>;
 
@@ -131,6 +132,7 @@ interface EventRow {
   id: number; sepay_id: number | null; api_id: string | null; source: string; txn_at: string | null; account_number: string | null; gateway: string | null; code: string | null;
   transfer_type: string | null; amount: number; reference_code: string | null; content: string | null; status: EventStatus; verdict: number | null; reason: string | null;
   kind: string | null; ref_id: number | null; ref_code: string | null; created_at: string;
+  hold_in_voucher_id: number | null; hold_out_voucher_id: number | null;
 }
 
 const verdictOf = (r: EventRow, duplicate: boolean): Verdict => ({ eventId: r.id, success: r.verdict === 1, status: r.status, reason: r.reason, duplicate });
@@ -313,11 +315,13 @@ async function decidePos(env: Env, ev: EventRow, code: string, requestId: number
   return {
     act: "pay", kind: "pos", refId: q.id, refCode: code,
     run: async (finalize) => {
+      const hold = await holdInStmts(db, ev); // tiền QR đã về tài khoản: vào khoản chờ cho tới khi thu ngân hoàn tất đơn bằng QR này
       await db.batch([
         assertStmt(db, "sepay.pos_qr", `SELECT status = 'pending' FROM pos_qr_requests WHERE id = ?`, [q.id]),
         db.prepare(`UPDATE pos_qr_requests SET status = 'paid', event_id = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND status = 'pending'`).bind(ev.id, q.id),
         sysAuditStmt(db, { action: "sepay.pos_qr_paid", entity: "pos_qr", entityId: q.id, after: { eventId: ev.id, amount: ev.amount } }),
         ...finalize,
+        ...hold,
       ]);
     },
   };
@@ -333,8 +337,10 @@ export async function processEvent(env: Env, eventId: number): Promise<Verdict> 
     const out = await decide(env, ev);
     try {
       if (out.act === "park") {
+        const hold = NO_LEDGER_REASONS.includes(out.reason) || ev.transfer_type !== "in" ? [] : await holdInStmts(db, ev); // tiền vào chưa khớp → khoản chờ xử lý
         await db.batch([
           ...claimStmts(db, ev, ["received"], { status: out.status, verdict: 0, reason: out.reason, kind: out.kind, refId: out.refId, refCode: out.refCode }),
+          ...hold,
           sysAuditStmt(db, { action: `sepay.${out.status}`, entity: "sepay_event", entityId: ev.id, after: { reason: out.reason, amount: ev.amount, code: ev.code, kind: out.kind ?? null } }),
         ]);
       } else {
@@ -347,12 +353,15 @@ export async function processEvent(env: Env, eventId: number): Promise<Verdict> 
       if (isRace && attempt < 2) continue;
       if (!(e instanceof AppError) && !isRace) throw e; // lỗi hạ tầng: 5xx, dòng còn 'received' để cron xử lý lại
       const why = (e instanceof AppError ? e.code : "conflict").slice(0, 50);
-      await db
-        .batch([
-          ...claimStmts(db, ev, ["received"], { status: "unmatched", verdict: 0, reason: `error:${why}`, kind: out.act === "pay" ? out.kind : undefined, refId: out.act === "pay" ? out.refId : undefined, refCode: out.act === "pay" ? out.refCode : undefined }),
-          sysAuditStmt(db, { action: "sepay.unmatched", entity: "sepay_event", entityId: ev.id, after: { reason: `error:${why}`, amount: ev.amount } }),
-        ])
-        .catch(() => {});
+      const parkRows = (hold: D1PreparedStatement[]) => [
+        ...claimStmts(db, ev, ["received"], { status: "unmatched" as const, verdict: 0 as const, reason: `error:${why}`, kind: out.act === "pay" ? out.kind : undefined, refId: out.act === "pay" ? out.refId : undefined, refCode: out.act === "pay" ? out.refCode : undefined }),
+        ...hold,
+        sysAuditStmt(db, { action: "sepay.unmatched", entity: "sepay_event", entityId: ev.id, after: { reason: `error:${why}`, amount: ev.amount } }),
+      ];
+      // Có lỗi xử lý: vẫn phải đưa tiền vào khoản chờ; nếu chính phiếu chờ làm batch hỏng (vd. kỳ vừa khoá) thì lưu sự kiện không phiếu (ghi sau bằng thao tác "ghi giao dịch chờ cũ")
+      const canHold = out.act === "pay" || !NO_LEDGER_REASONS.includes(out.reason);
+      const withHold = canHold && ev.transfer_type === "in" ? await holdInStmts(db, ev) : [];
+      await db.batch(parkRows(withHold)).catch(() => (withHold.length ? db.batch(parkRows([])).catch(() => {}) : undefined));
       continue;
     }
     const done = (await db.prepare(`SELECT * FROM sepay_events WHERE id = ?`).bind(eventId).first<EventRow>())!;
@@ -392,10 +401,12 @@ export async function assignEvent(c: Ctx, eventId: number, target: { kind: "web"
       throw new AppError(422, p.reason, MANUAL_MSG[p.reason] ?? "Không gán được vào đơn này", { reason: p.reason });
     }
     const o = chk.order;
+    // Tiền đã nằm ở khoản chờ xử lý → phiếu chi chuyển ra CÙNG batch với payments của đơn (ròng quỹ không đổi lần hai)
+    const rel = await holdOutStmts(db, ev, { userId: user.id, note: `Gán giao dịch SePay #${ev.id} vào đơn ${o.code}`, state: { i: ev.hold_in_voucher_id, o: ev.hold_out_voucher_id } });
     await markOrderPaid(c.env, o, {
       userId: user.id, fundId: await bankFundId(db), amount: ev.amount, ref: `SEPAY:${ev.sepay_id ?? ev.api_id}`,
-      audit: auditStmt(c, { action: "sepay.assign", entity: "sepay_event", entityId: ev.id, after: { kind: "web", order: o.code, amount: ev.amount }, reason: note }),
-      extra: claimStmts(db, ev, from, { status: "matched", verdict: 1, reason: "manual", kind: "web", refId: o.id, refCode: o.code, resolution: note, resolvedBy: user.id }),
+      audit: auditStmt(c, { action: "sepay.assign", entity: "sepay_event", entityId: ev.id, after: { kind: "web", order: o.code, amount: ev.amount, holdRelease: rel.code }, reason: note }),
+      extra: [...claimStmts(db, ev, from, { status: "matched", verdict: 1, reason: "manual", kind: "web", refId: o.id, refCode: o.code, resolution: note, resolvedBy: user.id }), ...rel.stmts],
     });
     return o.code as string;
   }
@@ -403,11 +414,13 @@ export async function assignEvent(c: Ctx, eventId: number, target: { kind: "web"
   if (!inv || !inv.customer_id) throw new AppError(422, "unknown_code", MANUAL_MSG.unknown_code);
   if (inv.status !== "open" || inv.kind === "adjustment") throw new AppError(422, "invoice_closed", MANUAL_MSG.invoice_closed);
   if (inv.os <= 0) throw new AppError(422, "already_paid", MANUAL_MSG.already_paid);
+  const rel = await holdOutStmts(db, ev, { userId: user.id, note: `Gán giao dịch SePay #${ev.id} vào hoá đơn ${inv.code}`, state: { i: ev.hold_in_voucher_id, o: ev.hold_out_voucher_id } });
   await payInvoice(
     c, ev, inv, ev.amount,
     [
       ...claimStmts(db, ev, from, { status: "matched", verdict: 1, reason: "manual", kind: "b2b", refId: inv.id, refCode: inv.code, resolution: note, resolvedBy: user.id }),
-      auditStmt(c, { action: "sepay.assign", entity: "sepay_event", entityId: ev.id, after: { kind: "b2b", invoice: inv.code, amount: ev.amount }, reason: note }),
+      ...rel.stmts,
+      auditStmt(c, { action: "sepay.assign", entity: "sepay_event", entityId: ev.id, after: { kind: "b2b", invoice: inv.code, amount: ev.amount, holdRelease: rel.code }, reason: note }),
     ],
   );
   return inv.code;
@@ -423,14 +436,40 @@ const MANUAL_MSG: Record<string, string> = {
   invoice_closed: "Hoá đơn đã huỷ hoặc không phải hoá đơn bán",
 };
 
-export async function resolveEvent(c: Ctx, eventId: number, action: "refunded" | "ignored", reason: string) {
+export async function resolveEvent(c: Ctx, eventId: number, action: "refunded" | "ignored", reason: string, opt: { categoryId?: number; keepInHold?: boolean; refundRef?: string } = {}) {
   const db = c.env.DB;
   const user = c.get("user");
-  const ev = await db.prepare(`SELECT id, status FROM sepay_events WHERE id = ?`).bind(eventId).first<{ id: number; status: EventStatus }>();
+  const ev = await db.prepare(`SELECT * FROM sepay_events WHERE id = ?`).bind(eventId).first<EventRow>();
   if (!ev) throw new AppError(404, "event_not_found", "Không tìm thấy giao dịch");
   if (ev.status !== "unmatched" && ev.status !== "refund_pending") throw new AppError(409, "not_pending", "Giao dịch đã được xử lý");
+  const state = { i: ev.hold_in_voucher_id, o: ev.hold_out_voucher_id };
+  const money: D1PreparedStatement[] = [];
+  let note: Record<string, unknown> = {};
+  if (action === "refunded") {
+    // Đã hoàn tiền cho khách: tiền ra khỏi tài khoản → phiếu chi từ khoản chờ (chưa từng vào quỹ thì không có gì để chi)
+    const rel = await holdOutStmts(db, ev, { userId: user.id, state, note: `Hoàn tiền cho khách (giao dịch SePay #${ev.id}${ev.reference_code ? `, tham chiếu ${ev.reference_code}` : ""})${opt.refundRef ? ` · mã hoàn ${opt.refundRef}` : ""}: ${reason}` });
+    money.push(...rel.stmts);
+    note = { voucher: rel.code, refundRef: opt.refundRef ?? null };
+  } else if (state.i && !state.o) {
+    // Bỏ qua: tiền vẫn nằm trong quỹ → bắt buộc chọn khoản mục thu thật, hoặc giữ ở khoản chờ (ghi lý do) để kế toán xử lý sau
+    if (opt.categoryId) {
+      const cat = await ignoreCategory(db, opt.categoryId);
+      const rel = await holdOutStmts(db, ev, { userId: user.id, state, note: `Chuyển sang ${cat.code} (bỏ qua giao dịch SePay #${ev.id}): ${reason}` });
+      money.push(...rel.stmts, ...(await incomeStmt(db, ev, { userId: user.id, categoryId: cat.id, note: `Giao dịch SePay #${ev.id} đã bỏ qua: ${reason}`, fundId: (await db.prepare(`SELECT fund_id FROM cash_vouchers WHERE id = ?`).bind(state.i).first<{ fund_id: number }>())!.fund_id })));
+      note = { category: cat.code, voucher: rel.code };
+    } else if (opt.keepInHold) {
+      money.push(assertStmt(db, "sepay.hold_state", `SELECT hold_in_voucher_id IS ? AND hold_out_voucher_id IS ? FROM sepay_events WHERE id = ?`, [state.i, state.o, ev.id]));
+      note = { keepInHold: true };
+    } else throw new AppError(422, "category_required", "Giao dịch đã vào quỹ: chọn khoản mục thu, hoặc giữ ở “Chuyển khoản chờ xử lý” (kèm lý do)");
+  } else if (opt.categoryId && !state.i && ev.transfer_type === "in" && !NO_LEDGER_REASONS.includes(ev.reason ?? "")) {
+    // Sự kiện cũ chưa từng vào sổ mà được chọn khoản mục thu: ghi thẳng vào khoản mục đó
+    const cat = await ignoreCategory(db, opt.categoryId);
+    money.push(assertStmt(db, "sepay.hold_state", `SELECT hold_in_voucher_id IS NULL FROM sepay_events WHERE id = ?`, [ev.id]), ...(await incomeStmt(db, ev, { userId: user.id, categoryId: cat.id, note: `Giao dịch SePay #${ev.id} đã bỏ qua: ${reason}` })));
+    note = { category: cat.code, direct: true };
+  }
   await db.batch([
     ...claimStmts(db, ev, ["unmatched", "refund_pending"], { status: action, verdict: 0, reason: null, resolution: reason, resolvedBy: user.id }),
-    auditStmt(c, { action: `sepay.${action}`, entity: "sepay_event", entityId: eventId, before: { status: ev.status }, after: { status: action }, reason }),
+    ...money,
+    auditStmt(c, { action: `sepay.${action}`, entity: "sepay_event", entityId: eventId, before: { status: ev.status }, after: { status: action, ...note }, reason }),
   ]);
 }

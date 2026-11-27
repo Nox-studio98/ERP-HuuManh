@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ApiError, get, post, put } from "../api";
+import { ApiError, api, get, post, put } from "../api";
 import { Badge, Banner, Button, DecInput, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
 import { DetailPanel, PageHeader, SplitLayout } from "../components/list";
 import { toast } from "../components/toast";
@@ -388,15 +388,65 @@ function AuditLog() {
   );
 }
 
+// ===================== Loại thu khác (POS-KV B2) =====================
+
+type ChargeType = { id: number; code: string; name: string; defaultAmount: number; active: boolean; version: number };
+
+/** Danh mục khoản thu khác trên hoá đơn bán lẻ (phí đóng gói, giỏ quà…). Chủ sửa; quản lý chỉ xem. */
+function ChargeTypes() {
+  const can = useCan();
+  const write = can("settings.manage");
+  const list = useAsync<ChargeType[]>(() => get("/charge-types", { all: 1 }).then((r: any) => r.items ?? []), []);
+  const [edit, setEdit] = useState<ChargeType | "new" | null>(null);
+  const [f, setF] = useState({ code: "", name: "", amount: 0, active: true });
+  const [busy, setBusy] = useState(false);
+  const open = (t: ChargeType | "new") => { setEdit(t); setF(t === "new" ? { code: "", name: "", amount: 0, active: true } : { code: t.code, name: t.name, amount: t.defaultAmount, active: t.active }); };
+  const save = async () => {
+    if (!edit) return;
+    setBusy(true);
+    try {
+      if (edit === "new") await post("/charge-types", { code: f.code.trim(), name: f.name.trim(), defaultAmount: f.amount });
+      else await api(`/charge-types/${edit.id}`, { method: "PATCH", body: { version: edit.version, name: f.name.trim(), defaultAmount: f.amount, active: f.active } });
+      toast("Đã lưu loại thu khác", "ok"); setEdit(null); list.reload();
+    } catch {} finally { setBusy(false); }
+  };
+  return (
+    <div className="stack" data-testid="charge-types">
+      <Banner tone="info">Khoản thu thêm thu ngân chọn ở giỏ hàng (nút “+ Thu khác”). Cộng vào tổng hoá đơn, không áp khuyến mãi, voucher, điểm. Số tiền mặc định &gt; 0 thì thu ngân không được sửa; để 0 thì thu ngân tự nhập số tiền. Quản lý được nhập tay khoản khác.</Banner>
+      {write && <div><Button onClick={() => open("new")} data-testid="charge-type-new">+ Thêm loại thu khác</Button></div>}
+      {list.loading && !list.data ? <Spinner /> : (
+        <div className="card-grid">
+          {(list.data ?? []).map((t) => (
+            <div className="card flat period-row" key={t.id} data-testid="charge-type-row">
+              <div><b>{t.name}</b> {!t.active && <Badge tone="warn">Đã ngừng</Badge>}<div className="small muted">{t.code} · {t.defaultAmount > 0 ? money(t.defaultAmount) : "thu ngân tự nhập số tiền"}</div></div>
+              {write && <Button variant="ghost" size="sm" onClick={() => open(t)} aria-label={`Sửa ${t.name}`}>Sửa</Button>}
+            </div>
+          ))}
+        </div>
+      )}
+      <Sheet open={!!edit} onClose={() => setEdit(null)} title={edit === "new" ? "Thêm loại thu khác" : "Sửa loại thu khác"}
+        footer={<><Button variant="ghost" onClick={() => setEdit(null)}>Huỷ</Button><Button block loading={busy} disabled={!f.name.trim() || (edit === "new" && !/^[A-Za-z0-9_]{2,30}$/.test(f.code.trim()))} onClick={save}>Lưu</Button></>}>
+        <div className="stack">
+          {edit === "new" && <Input label="Mã (chữ, số, gạch dưới)" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} placeholder="PHI_DONG_GOI" />}
+          <Input label="Tên hiển thị" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          <MoneyInput label="Số tiền mặc định (₫)" value={f.amount} onChange={(n) => setF({ ...f, amount: n })} hint="0 = thu ngân tự nhập số tiền khi bán." />
+          {edit !== "new" && <label className="row" style={{ minHeight: 44 }}><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} style={{ width: 22, height: 22 }} /> <span>Đang dùng</span></label>}
+        </div>
+      </Sheet>
+    </div>
+  );
+}
+
 export default function Settings() {
   const can = useCan();
-  const tabs = [{ v: "params", label: "Tham số" }, ...(can("finance.view") ? [{ v: "periods", label: "Khoá sổ" }] : []), ...(can("audit.view") ? [{ v: "audit", label: "Nhật ký" }] : [])];
+  const tabs = [{ v: "params", label: "Tham số" }, ...(can("pos.sell") && can("settings.view") ? [{ v: "charges", label: "Thu khác" }] : []), ...(can("finance.view") ? [{ v: "periods", label: "Khoá sổ" }] : []), ...(can("audit.view") ? [{ v: "audit", label: "Nhật ký" }] : [])];
   const [tab, setTab] = useState(tabs[0].v);
   return (
     <div className="stack">
-      <PageHeader subtitle={tab === "params" ? "Tham số vận hành, ngưỡng duyệt, thuế và lương" : tab === "periods" ? "Khoá sổ kế toán theo kỳ" : "Nhật ký thay đổi dữ liệu"} />
+      <PageHeader subtitle={tab === "params" ? "Tham số vận hành, ngưỡng duyệt, thuế và lương" : tab === "charges" ? "Loại thu khác trên hoá đơn bán lẻ (phí đóng gói, giỏ quà…)" : tab === "periods" ? "Khoá sổ kế toán theo kỳ" : "Nhật ký thay đổi dữ liệu"} />
       <Segmented fit value={tab} onChange={setTab} options={tabs} />
       {tab === "params" && <Params />}
+      {tab === "charges" && <ChargeTypes />}
       {tab === "periods" && <Periods />}
       {tab === "audit" && <AuditLog />}
     </div>

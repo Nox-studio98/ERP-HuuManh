@@ -4,7 +4,7 @@ import { Badge, Button, Card, DataTable, EmptyState, Segmented, Spinner, useAsyn
 import { DateRangeFilter, FilterBar, KpiRow, PageHeader, SearchInput, rangeOf, useWide, type DateRange } from "../components/list";
 import { ExportButton } from "../components/list";
 import { BarChart } from "../components/charts";
-import { CHANNELS, downloadHref, money, qtyText, todayVN } from "../format";
+import { CHANNELS, downloadHref, fmtDay, money, qtyText, todayVN } from "../format";
 
 export default function Reports() {
   const [tab, setTab] = useState<"pnl" | "inv">("pnl");
@@ -16,7 +16,7 @@ export default function Reports() {
   );
 }
 
-const EXP_LABEL: Record<string, string> = { opex: "Chi phí vận hành", shrinkage: "Hao hụt / huỷ hàng", other: "Chi phí khác", payroll: "Lương", marketing: "Marketing", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
+const EXP_LABEL: Record<string, string> = { opex: "Chi phí vận hành", shrinkage: "Hao hụt / huỷ hàng", other: "Chi phí khác", payroll: "Lương", marketing: "Marketing", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua", internalUse: "Xuất dùng nội bộ" };
 function Pnl() {
   const [range, setRange] = useState<DateRange>(() => rangeOf("7d")), [by, setBy] = useState("day");
   const { from, to } = range;
@@ -31,12 +31,12 @@ function Pnl() {
   const hasData = rows.length > 0 && (rev > 0 || cogs > 0 || exp > 0);
   return (
     <div className="stack">
-      <PageHeader subtitle={`${from === to ? from : `${from} → ${to}`} · nhóm theo ${by === "day" ? "ngày" : by === "channel" ? "kênh bán" : "nhóm hàng"}`} actions={<>
+      <PageHeader subtitle={`${from === to ? fmtDay(from) : `${fmtDay(from)} → ${fmtDay(to)}`} · nhóm theo ${by === "day" ? "ngày" : by === "channel" ? "kênh bán" : "nhóm hàng"}`} actions={<>
         <ExportButton filename={`lai-lo-${from}_${to}`} rows={rows} columns={[{ label: by === "day" ? "Ngày" : by === "channel" ? "Kênh" : "Nhóm", value: (x) => lab(x.label) }, { label: "Doanh thu", value: (x) => x.revenue }, { label: "Giá vốn", value: (x) => x.cogs }, { label: "Lãi gộp", value: (x) => x.gross }]} />
         <a className="btn ghost sm" href={downloadHref(`/reports/export/orders.csv?from=${from}&to=${to}`)} download="orders.csv">Xuất CSV đơn hàng</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/export/pnl.csv?from=${from}&to=${to}&groupBy=${by}`)} download="pnl.csv">Xuất CSV lãi lỗ</a>
         <a className="btn ghost sm" href={downloadHref(`/reports/pnl.pdf?from=${from}&to=${to}&groupBy=${by}`)} download data-testid="pnl-pdf">Tải PDF lãi lỗ</a>
-        <a className="btn ghost sm" href={downloadHref(`/reports/export/daily.csv?day=${to}`)} download="daily.csv">Xuất CSV theo ngày ({to})</a></>} />
+        <a className="btn ghost sm" href={downloadHref(`/reports/export/daily.csv?day=${to}`)} download="daily.csv">Xuất CSV theo ngày ({fmtDay(to)})</a></>} />
       <FilterBar>
         <DateRangeFilter value={range} onChange={setRange} />
         <Segmented value={by} onChange={setBy} options={[{ v: "day", label: "Theo ngày" }, { v: "channel", label: "Theo kênh" }, { v: "group", label: "Theo nhóm hàng" }]} />
@@ -94,7 +94,7 @@ function Inv() {
   return (
     <div className="stack">
       <PageHeader subtitle={`Tồn kho tính đến ${asOf} · ${rows.length}/${all.length} mặt hàng`} actions={<>
-        <ExportButton filename={`ton-kho-${asOf}`} rows={rows} columns={[{ label: "Hàng", value: (x) => x.name }, { label: "Tồn đầu (milli)", value: (x) => x.openingMilli }, { label: "Nhập (milli)", value: (x) => x.inMilli }, { label: "Xuất bán (milli)", value: (x) => x.soldMilli }, { label: "Hao hụt (milli)", value: (x) => x.wasteMilli }, { label: "Tồn cuối (milli)", value: (x) => x.onHandMilli }, ...(hasVal ? [{ label: "Giá trị", value: (x: any) => x.stockValue }] : [])]} />
+        <ExportButton filename={`ton-kho-${asOf}`} rows={rows} columns={[{ label: "Hàng", value: (x) => x.name }, { label: "Tồn đầu (milli)", value: (x) => x.openingMilli }, { label: "Nhập (milli)", value: (x) => x.inMilli }, { label: "Xuất bán (milli)", value: (x) => x.soldMilli }, { label: "Hao hụt (milli)", value: (x) => x.wasteMilli }, { label: "Xuất dùng nội bộ (milli)", value: (x) => x.internalUseMilli }, { label: "Tồn cuối (milli)", value: (x) => x.onHandMilli }, ...(hasVal ? [{ label: "Giá trị", value: (x: any) => x.stockValue }] : [])]} />
         <a className="btn ghost sm" href={downloadHref(`/reports/export/inventory.csv?asOf=${asOf}`)} download="inventory.csv">Xuất CSV tồn kho</a></>} />
       <FilterBar>
         <label className="field"><span className="lbl">Tính đến ngày</span><input className="input" type="date" value={asOf} max={todayVN()} onChange={(e) => e.target.value && setAsOf(e.target.value)} /></label>
@@ -112,6 +112,7 @@ function Inv() {
         { key: "i", label: "Nhập", num: true, sort: (x) => x.inMilli, render: (x) => qtyText(x.inMilli, x.baseUnit) },
         { key: "x", label: "Xuất bán", num: true, sort: (x) => x.soldMilli, render: (x) => qtyText(x.soldMilli, x.baseUnit) },
         { key: "w", label: "Hao hụt", num: true, sort: (x) => x.wasteMilli, render: (x) => qtyText(x.wasteMilli, x.baseUnit) },
+        { key: "u", label: "Dùng nội bộ", num: true, sort: (x) => x.internalUseMilli, hideBelow: 1280, render: (x) => qtyText(x.internalUseMilli ?? 0, x.baseUnit) },
         { key: "c", label: "Tồn cuối", num: true, sort: (x) => x.onHandMilli, render: (x) => <b>{qtyText(x.onHandMilli, x.baseUnit)}</b> },
         { key: "v", label: "Giá trị", num: true, sort: (x) => x.stockValue, render: (x) => (x.stockValue != null ? money(x.stockValue) : "—") },
       ]} />}

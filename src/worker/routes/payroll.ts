@@ -14,6 +14,7 @@ import { getSettingInt } from "../services/settings";
 import { buildXlsx, XLSX_MIME } from "../services/xlsx";
 import { renderPayrollPdf, renderPayslipPdf } from "../services/report-pdf";
 import { periodValue, pick, type HistRow } from "../services/salary-history";
+import { loadCommissionInputs } from "../services/commission";
 import { calculatePayslip, loadPayrollSettings, type PayslipInput, type TimesheetDayInput } from "../services/payroll-calc";
 
 /** Lương (M9): tính, duyệt, chi, phiếu lương, tạm ứng, báo cáo chi phí. Công thức ở services/payroll-calc.ts. */
@@ -82,11 +83,13 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const hist = (await db.prepare(`SELECT id, employee_id, field, ref_id, old_value, new_value, effective_date FROM employee_salary_history ORDER BY id`).all<HistRow>()).results;
   const entries = (await db.prepare(`SELECT * FROM payroll_entries WHERE period = ? ORDER BY id`).bind(period).all<any>()).results;
   const advs = (await db.prepare(`SELECT * FROM salary_advances WHERE deduct_period = ? AND status = 'paid' AND (cash_voucher_id IS NULL OR cash_voucher_id IN (SELECT id FROM cash_vouchers WHERE status = 'posted')) ORDER BY id`).bind(period).all<any>()).results;
+  // Cơ sở thưởng doanh số (kiểu cũ): doanh số HÀNG = total − charges_total (không gồm thu khác: phí đóng gói, giỏ quà...) — cùng cơ sở hoa hồng theo quy tắc và báo cáo người bán.
+  // Trả hàng chỉ trừ khi ĐƠN GỐC là kênh pos (đơn giao tại quầy/MXH/sỉ chưa từng được cộng nên không bị trừ oan).
   const sales = (
     await db
       .prepare(
-        `SELECT created_by AS uid, SUM(total) AS t FROM orders WHERE kind='sale' AND status='completed' AND channel='pos' AND created_by IS NOT NULL
-            AND completed_at >= ? AND completed_at < ? GROUP BY created_by`,
+        `SELECT COALESCE(seller_id, created_by) AS uid, SUM(total - charges_total) AS t FROM orders WHERE kind='sale' AND status='completed' AND channel='pos' AND COALESCE(seller_id, created_by) IS NOT NULL
+            AND completed_at >= ? AND completed_at < ? GROUP BY COALESCE(seller_id, created_by)`,
       )
       .bind(fromIso, toIso)
       .all<any>()
@@ -94,8 +97,22 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const returns = (
     await db
       .prepare(
-        `SELECT so.created_by AS uid, SUM(ABS(r.total)) AS t FROM orders r JOIN orders so ON so.id = r.original_order_id
-          WHERE r.kind='return' AND r.status='completed' AND so.created_by IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY so.created_by`,
+        `SELECT COALESCE(so.seller_id, so.created_by, r.created_by) AS uid, SUM(ABS(r.total) - r.charges_total) AS t FROM orders r LEFT JOIN orders so ON so.id = r.original_order_id
+          WHERE r.kind='return' AND r.status='completed' AND COALESCE(so.channel, r.channel)='pos' AND COALESCE(so.seller_id, so.created_by, r.created_by) IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY COALESCE(so.seller_id, so.created_by, r.created_by)`,
+      )
+      .bind(fromIso, toIso)
+      .all<any>()
+  ).results;
+  // C2-05: huỷ (void) đơn POS đã hoàn tất ở kỳ lương ĐÃ DUYỆT/CHI → thu hồi vào kỳ có ngày huỷ (như trả hàng); kỳ gốc chưa duyệt thì đơn huỷ đơn giản không còn trong kỳ
+  const voids = (
+    await db
+      .prepare(
+        `SELECT COALESCE(o.seller_id, o.created_by) AS uid, SUM(o.total - o.charges_total) AS t FROM orders o
+          WHERE o.status='cancelled' AND o.kind='sale' AND o.channel='pos' AND o.completed_at IS NOT NULL AND COALESCE(o.seller_id, o.created_by) IS NOT NULL
+            AND o.voided_at >= ? AND o.voided_at < ?
+            AND substr(datetime(o.completed_at, '+7 hours'), 1, 7) <> substr(datetime(o.voided_at, '+7 hours'), 1, 7)
+            AND EXISTS (SELECT 1 FROM payroll_periods pp WHERE pp.period = substr(datetime(o.completed_at, '+7 hours'), 1, 7) AND pp.status IN ('approved','paid'))
+          GROUP BY COALESCE(o.seller_id, o.created_by)`,
       )
       .bind(fromIso, toIso)
       .all<any>()
@@ -103,7 +120,10 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const salesBy = new Map<number, number>();
   for (const s of sales) salesBy.set(s.uid, (salesBy.get(s.uid) ?? 0) + s.t);
   for (const r of returns) salesBy.set(r.uid, (salesBy.get(r.uid) ?? 0) - r.t);
+  for (const v of voids) salesBy.set(v.uid, (salesBy.get(v.uid) ?? 0) - v.t);
   const hrSettingRows = (await db.prepare(`SELECT key, value FROM settings WHERE key LIKE 'hr.%' ORDER BY key`).all<any>()).results;
+  // Hoa hồng theo quy tắc (services/commission.ts): null khi kỳ không có quy tắc nào → giữ thưởng doanh số cũ
+  const commission = await loadCommissionInputs(db, period, new Map(emps.filter((e) => e.user_id).map((e) => [e.user_id as number, e.id as number])));
   // Phạt/thưởng theo ca (bảng chấm công) chưa huỷ, theo work_date của kỳ
   const incidents = (
     await db
@@ -114,7 +134,7 @@ async function loadPayrollInputs(db: D1Database, period: string) {
       .bind(first, last)
       .all<any>()
   ).results;
-  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows, incidents };
+  return { period, first, last, settings, emps, days, adjs, allw, hist, entries, advs, salesBy, hrSettingRows, incidents, commission };
 }
 type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
 
@@ -122,6 +142,7 @@ type PayrollInputs = Awaited<ReturnType<typeof loadPayrollInputs>>;
 async function inputsHash(inp: PayrollInputs): Promise<string> {
   const parts: unknown[] = [inp.emps, inp.days, inp.adjs, inp.allw, inp.hist, inp.entries, inp.advs, inp.hrSettingRows, inp.settings.salesBonusBp > 0 ? [...inp.salesBy.entries()] : null];
   if (inp.incidents.length) parts.push(inp.incidents); // chỉ thêm khi có → hash các kỳ cũ không đổi
+  if (inp.commission) parts.push({ commission: inp.commission.hashData }); // chỉ khi có quy tắc hoa hồng → kỳ không dùng quy tắc giữ nguyên hash
   const payload = JSON.stringify(parts);
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -182,6 +203,7 @@ async function calculatePeriod(c: Ctx, period: string) {
       ],
       advances: advs.filter((a) => a.employee_id === e.id).map((a) => ({ amount: a.amount, date: a.advance_date })),
       salesRevenue: e.user_id ? Math.max(0, salesBy.get(e.user_id) ?? 0) : 0,
+      commission: inp.commission ? { parts: (e.user_id && inp.commission.bySeller.get(e.user_id)?.parts) || [] } : undefined,
     };
     const p = calculatePayslip(input, settings);
     totalNet += p.net;

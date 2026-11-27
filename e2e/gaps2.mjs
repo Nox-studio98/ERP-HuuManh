@@ -70,7 +70,7 @@ try {
   await go("/b2b-orders");
   await page.getByRole("tab", { name: "Đơn lặp" }).click();
   await page.getByTestId("recurring").waitFor();
-  await btn(page, "+ Mẫu đơn lặp").click();
+  await btn(page, "+ Mẫu đơn lặp").first().click(); // nút ở đầu trang (trạng thái rỗng cũng có nút cùng tên)
   const d2 = dlg();
   await d2.getByLabel("Gõ tên, mã hoặc SĐT khách…").fill(cName).catch(async () => { await d2.getByPlaceholder("Gõ tên, mã hoặc SĐT khách…").fill(cName); });
   await d2.getByRole("option", { name: new RegExp(cName) }).click();

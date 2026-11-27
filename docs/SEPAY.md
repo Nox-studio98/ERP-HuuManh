@@ -40,6 +40,28 @@ Danh sách chưa khớp / chờ hoàn / đã khớp / đã hoàn / bỏ qua / "Q
 ### Đối soát (an toàn khi lỡ webhook)
 Cron mỗi 30 phút gọi `GET {sepay.api_base}/transactions?since_id=<con trỏ>&transaction_date_sort=asc&transfer_type=in&per_page=100` với `SEPAY_API_KEY`; con trỏ lưu `sepay_state.api_cursor`. Chỉ chạy khi có secret và `sepay.enabled = 1`. Cùng logic khớp với webhook; giao dịch webhook đã xử lý được nhận ra (cùng tài khoản + số tiền + thời điểm + mã [+ mã tham chiếu]) và **không xử lý lại**. Cũng xử lý lại các sự kiện kẹt ở "đang xử lý". Có thể bấm tay: `POST /api/v1/sepay/reconcile` (cần `finance.write`).
 
+### Sổ quỹ và khoản chờ xử lý (migration 0045)
+
+**Nguyên tắc:** số dư quỹ ngân hàng luôn khớp tiền SePay báo về. Bất biến: *Σ tiền vào đúng tài khoản cửa hàng − Σ đã hoàn = mức tăng số dư quỹ ngân hàng* (test `test/sepay-ledger.test.ts` kiểm sau mỗi kịch bản).
+
+| Tình huống | Ghi sổ |
+|---|---|
+| Khớp ngay đơn web `DH`, hoá đơn sỉ `HDS` | ghi thẳng chứng từ thật (`payments` / phiếu thu công nợ), **không** qua khoản chờ |
+| Chưa khớp / chờ hoàn (sai tiền, mã lạ, không mã, đơn đã trả…), QR quầy đã nhận tiền | cùng batch với việc lưu sự kiện: **phiếu thu** vào quỹ ngân hàng, khoản mục `CK_CHO_XL` "Chuyển khoản chờ xử lý" (`pnl_line = transfer` → không vào lãi lỗ), `ref_type = sepay_event`, `ref_id` = id sự kiện. Ngày ghi = thời điểm giao dịch; kỳ đã khoá → ghi vào hôm nay, ghi chú nêu rõ; hôm nay cũng khoá → chỉ lưu sự kiện (xem "Dữ liệu cũ") |
+| **Gán** đơn / hoá đơn | một batch: chứng từ thật + **phiếu chi** `CK_CHO_XL_RA` cùng quỹ → ròng quỹ không đổi lần hai, khoản chờ về 0 |
+| QR quầy: thu ngân hoàn tất đơn bằng QR đã nhận | `payments` của đơn + phiếu chi khỏi khoản chờ trong cùng batch POS. QR hết ca / huỷ / không tạo đơn: tiền vẫn ở khoản chờ cho kế toán |
+| **Đã hoàn** | phiếu chi hoàn tiền từ quỹ ngân hàng (ghi mã giao dịch hoàn nếu có + lý do); cần `finance.write`; kiểm khoá sổ |
+| **Bỏ qua** | tiền đã nằm trong quỹ nên **bắt buộc chọn**: khoản mục thu thật (phiếu chi khỏi chờ + phiếu thu khoản mục đó — có thể vào lãi lỗ tuỳ khoản mục), hoặc `keepInHold` giữ ở "Chuyển khoản chờ xử lý" kèm lý do. Không chọn → 422 `category_required` |
+| Không phải tiền vào tài khoản cửa hàng (sai tài khoản, tiền ra, SePay đang tắt, chưa cấu hình tài khoản) | không lập phiếu |
+
+Chống ghi trùng: phiếu thu chờ đi cùng claim `received → unmatched` của sự kiện (`assertStmt`) và `onceStmt('sepay.hold_in', id)`; webhook gửi lại cùng `id` hoặc đối soát cron gặp lại giao dịch webhook đã có (nhận ra qua tài khoản + tiền + thời điểm + mã [+ tham chiếu]) không xử lý lại. Gán / Đã hoàn / Bỏ qua chạy sau claim có điều kiện trạng thái và chốt chặn `sepay.hold_state` (trạng thái phiếu chờ không đổi từ lúc đọc) → hai người cùng bấm thì người sau nhận 409.
+
+**Nhập sao kê** (`POST /bank-transactions/import`): dòng trùng một giao dịch SePay đã ghi vào quỹ — cùng quỹ ngân hàng, cùng số tiền, cùng ngày VN, và mã tham chiếu khi cả hai có (khác hẳn thì không trùng) — được tự đánh dấu `matched` với `matched_type = sepay`, `sepay_event_id` (màn Ngân hàng hiện nhãn "Đã ghi qua SePay"); không tạo phiếu thu / thanh toán. Nhiều ứng viên → không tự quyết (`sepayCandidates` trong kết quả). Khớp tay (`/bank-transactions/:id/match`) và `online-orders/:id/mark-paid` bằng `bankTxnId` cho dòng có ứng viên SePay → 409 `already_recorded_by_sepay`; chọn đúng giao dịch SePay bằng `{ "sepayEventId": n }` (`GET /bank-transactions/:id/sepay-candidates` liệt kê). Lưu ý: nên nhập sao kê **sau** khi SePay đã báo giao dịch (thường là vậy); nếu sao kê được nhập và khớp đơn trước khi webhook về thì giao dịch SePay muộn sẽ thành "chờ hoàn" và vào khoản chờ — hãy "Bỏ qua" nó với lý do.
+
+**Màn Giao dịch SePay:** ô KPI "Chuyển khoản chờ xử lý (trong quỹ)" (bấm để xem từng phiếu thu/chi của khoản chờ: `GET /sepay/hold`), cột "Sổ quỹ" cho từng giao dịch. **Gán / Đã hoàn / Bỏ qua** cập nhật sổ như bảng trên.
+
+**Dữ liệu cũ (trước 0045):** migration **không** lập phiếu hồi tố. Sự kiện `unmatched` / `refund_pending` (và QR quầy đã nhận nhưng chưa tạo đơn) có từ trước chưa có phiếu chờ nên số dư quỹ đang thiếu khoản đó; màn Giao dịch SePay hiện banner đỏ + nút **"Ghi các giao dịch chờ cũ vào sổ"** (`GET/POST /sepay/ledger/backfill`, quyền `finance.write`): xem trước (số giao dịch + tổng tiền), bấm ghi thì mỗi sự kiện một batch (`onceStmt` + audit `sepay.ledger_backfill`); số xem trước phải khớp lúc ghi (409 `preview_changed`). Cũng dùng được cho giao dịch lưu lúc kỳ hiện tại đang khoá sổ. Sự kiện cũ chưa có phiếu mà được Gán / Đã hoàn thì **không** lập phiếu chi (tiền chưa từng vào quỹ). Sự kiện cũ đã "Bỏ qua" / "Đã hoàn" không được hồi tố (tiền đã ra khỏi tài khoản hoặc kế toán đã tự xử lý): nếu còn lệch, lập phiếu thu tay.
+
 ## 1b. Ngân hàng nhận tiền (Cài đặt → Online/website)
 
 Chọn ở ô **Ngân hàng nhận tiền**: danh sách chỉ gồm 12 ngân hàng SePay hỗ trợ webhook (nguồn và ngày lấy ghi trong `src/worker/lib/vn-banks.ts`). Mã BIN dùng tạo VietQR lấy tự động, không gõ tay.
@@ -94,7 +116,8 @@ Với dev local: `wrangler dev`, endpoint `http://localhost:<cổng>/api/integra
 - Màn **Giao dịch SePay**: mỗi ngày xem "Chưa khớp" / "Chờ hoàn" (KPI trên đầu), xử lý và ghi lý do.
 - my.sepay.vn → webhook → **Lịch sử gửi** và nhãn **Xác thực tự động** trong những ngày đầu (tìm "Thất bại" bất thường).
 - Cảnh báo lỗi webhook liên tiếp đã bật (§3); đối soát cron chạy (`sepay_state.api_cursor` thay đổi theo thời gian).
-- Audit: `sepay.matched` (qua `sepay.order_paid`, phiếu thu), `sepay.unmatched`, `sepay.refund_pending`, `sepay.assign`, `sepay.refunded`, `sepay.ignored`.
+- Audit: `sepay.matched` (qua `sepay.order_paid`, phiếu thu), `sepay.unmatched`, `sepay.refund_pending`, `sepay.assign`, `sepay.refunded`, `sepay.ignored`, `sepay.ledger_backfill`, `bank.sepay_link_auto` / `bank.sepay_link_manual`.
+- Đối chiếu sổ: số dư "Chuyển khoản chờ xử lý" phải bằng tổng các giao dịch còn ở "Cần xử lý" (+ QR quầy chưa tạo đơn + các khoản "Bỏ qua" giữ ở khoản chờ).
 - Nghi lộ secret: tạo lại ở my.sepay.vn, `wrangler secret put`, rà `sepay_events` bất thường.
 
 ## 7. Các bước go-live (theo hướng dẫn SePay)

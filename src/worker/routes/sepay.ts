@@ -8,6 +8,7 @@ import { camel } from "../services/debt-ledger";
 import { parseBody, pageParams, likeOf } from "../services/http";
 import { assignEvent, ensurePayCode, invoiceState, resolveEvent, sepayConfig } from "../services/sepay";
 import { reconcileSepay } from "../services/sepay-reconcile";
+import { HOLD_IN, HOLD_OUT, holdSummary, legacyPost, legacyPreview } from "../services/sepay-ledger";
 import { buildVietQr } from "../../shop/worker/lib/vietqr";
 import { bankByBin, bankByGateway } from "../lib/vn-banks";
 
@@ -34,8 +35,10 @@ sepayRoutes.get("/sepay/events", requirePerm("finance.view"), async (c) => {
   const { results } = await c.env.DB
     .prepare(
       `SELECT e.id, e.sepay_id, e.source, e.txn_at, e.account_number, e.gateway, e.code, e.amount, e.reference_code, e.content, e.status, e.reason, e.kind, e.ref_id, e.ref_code,
-              e.resolution, e.resolved_at, e.created_at, u.full_name AS resolved_by_name
-         FROM sepay_events e LEFT JOIN users u ON u.id = e.resolved_by ${where} ORDER BY e.id DESC LIMIT ?`,
+              e.resolution, e.resolved_at, e.created_at, u.full_name AS resolved_by_name,
+              e.hold_in_voucher_id, e.hold_out_voucher_id, hi.code AS hold_in_code, ho.code AS hold_out_code
+         FROM sepay_events e LEFT JOIN users u ON u.id = e.resolved_by
+         LEFT JOIN cash_vouchers hi ON hi.id = e.hold_in_voucher_id LEFT JOIN cash_vouchers ho ON ho.id = e.hold_out_voucher_id ${where} ORDER BY e.id DESC LIMIT ?`,
     )
     .bind(...params, limit + 1)
     .all<any>();
@@ -47,8 +50,30 @@ sepayRoutes.get("/sepay/events", requirePerm("finance.view"), async (c) => {
   return c.json({
     items,
     nextCursor: results.length > limit ? String(items[items.length - 1].id) : null,
-    summary: { unmatched: { count: by("unmatched").n, amount: by("unmatched").amount }, refundPending: { count: by("refund_pending").n, amount: by("refund_pending").amount } },
+    summary: {
+      unmatched: { count: by("unmatched").n, amount: by("unmatched").amount }, refundPending: { count: by("refund_pending").n, amount: by("refund_pending").amount },
+      hold: await holdSummary(c.env.DB),
+    },
   });
+});
+
+/** Khoản "Chuyển khoản chờ xử lý": số dư + từng phiếu thu/chi (mới nhất trước). */
+sepayRoutes.get("/sepay/hold", requirePerm("finance.view"), async (c) => {
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT v.id, v.code, v.direction, v.amount, v.created_at, v.note, v.ref_id AS event_id, e.status AS event_status, e.code AS pay_code
+         FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id LEFT JOIN sepay_events e ON e.id = v.ref_id AND v.ref_type = 'sepay_event'
+        WHERE cc.code IN ('${HOLD_IN}','${HOLD_OUT}') AND v.status = 'posted' ORDER BY v.id DESC LIMIT 100`,
+    )
+    .all<any>();
+  return c.json({ summary: await holdSummary(c.env.DB), items: results.map(camel) });
+});
+
+/** Dữ liệu cũ (trước khi có sổ khoản chờ): xem trước rồi ghi một lần. */
+sepayRoutes.get("/sepay/ledger/backfill", requirePerm("finance.write"), async (c) => c.json(await legacyPreview(c.env.DB)));
+sepayRoutes.post("/sepay/ledger/backfill", requirePerm("finance.write"), async (c) => {
+  const body = await parseBody(c, z.object({ expectedCount: z.number().int().min(0), expectedAmount: z.number().int().min(0) }));
+  return c.json(await legacyPost(c, { count: body.expectedCount, amount: body.expectedAmount }));
 });
 
 sepayRoutes.post("/sepay/events/:id/assign", requirePerm("finance.write"), async (c) => {
@@ -58,8 +83,11 @@ sepayRoutes.post("/sepay/events/:id/assign", requirePerm("finance.write"), async
 });
 
 sepayRoutes.post("/sepay/events/:id/resolve", requirePerm("finance.write"), async (c) => {
-  const body = await parseBody(c, z.object({ action: z.enum(["refunded", "ignored"]), reason: z.string().trim().min(3).max(300) }));
-  await resolveEvent(c, Number(c.req.param("id")), body.action, body.reason);
+  const body = await parseBody(c, z.object({
+    action: z.enum(["refunded", "ignored"]), reason: z.string().trim().min(3).max(300),
+    categoryId: z.number().int().positive().optional(), keepInHold: z.boolean().optional(), refundRef: z.string().trim().max(100).optional(),
+  }));
+  await resolveEvent(c, Number(c.req.param("id")), body.action, body.reason, { categoryId: body.categoryId, keepInHold: body.keepInHold, refundRef: body.refundRef });
   return c.json({ ok: true });
 });
 

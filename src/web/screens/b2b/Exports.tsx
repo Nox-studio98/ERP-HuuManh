@@ -2,7 +2,7 @@ import { useState } from "react";
 import { get, items } from "../../api";
 import { Card, useAsync } from "../../components/ui";
 import { DateRangeFilter, FilterBar, FilterSelect, PageHeader, type DateRange } from "../../components/list";
-import { downloadHref, todayVN } from "../../format";
+import { downloadHref, fmtDay, todayVN } from "../../format";
 import { useCan } from "../../store";
 
 const FILES: { name: string; title: string; hint: string; pdf?: string }[] = [
@@ -29,7 +29,7 @@ export default function Exports() {
         {FILES.map((f) => (
           <Card key={f.name} className="export-card">
             <div className="export-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" style={{ stroke: "currentColor", fill: "none", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }}><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13l6 5M15 13l-6 5" /></svg></div>
-            <div style={{ minWidth: 0, flex: 1 }}><b>{f.title}</b><div className="small muted">{f.hint}</div><div className="small muted" style={{ marginTop: 4 }}>{from === to ? from : `${from} → ${to}`}{f.name === "so-quy" && fund ? " · 1 quỹ" : ""}</div></div>
+            <div style={{ minWidth: 0, flex: 1 }}><b>{f.title}</b><div className="small muted">{f.hint}</div><div className="small muted" style={{ marginTop: 4 }}>{from === to ? fmtDay(from) : `${fmtDay(from)} → ${fmtDay(to)}`}{f.name === "so-quy" && fund ? " · 1 quỹ" : ""}</div></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "stretch", textAlign: "center" }}>
               <a className="btn soft" href={downloadHref(`/exports/${f.name}.xlsx${qs(f.name)}`)} download data-testid={`export-${f.name}`}>Tải Excel</a>
               {f.pdf && can("debt.view") && <a className="btn ghost" href={downloadHref(`/debts/aging.pdf?side=${f.pdf}&asOf=${to}`)} download data-testid={`export-${f.name}-pdf`}>Tải PDF</a>}

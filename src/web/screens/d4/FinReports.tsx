@@ -87,8 +87,9 @@ function CashFlow({ from, to }: { from: string; to: string }) {
         <Card title="Chi theo nhóm">{d.outflows.length ? <HBars color="var(--warn)" rows={d.outflows.map((x: any) => ({ label: x.category, value: x.amount }))} /> : <div className="muted">Không có khoản chi trong kỳ.</div>}</Card>
       </div>
       <Card title="Theo quỹ">
-        <div className="scrollx"><table className="tbl"><thead><tr><th>Quỹ</th><th className="r">Đầu kỳ</th><th className="r">Thu</th><th className="r">Chi</th><th className="r">Cuối kỳ</th></tr></thead>
-          <tbody>{d.byFund.map((f: any) => <tr key={f.fundId}><td>{f.name}</td><td className="r">{money(f.opening)}</td><td className="r">{money(f.inflow)}</td><td className="r">{money(f.outflow)}</td><td className="r"><b>{money(f.closing)}</b></td></tr>)}</tbody></table></div>
+        <div className="scrollx"><table className="tbl"><thead><tr><th>Quỹ</th><th className="r">Đầu kỳ</th><th className="r">Thu</th><th className="r">Chi</th><th className="r">Chuyển vào</th><th className="r">Chuyển ra</th><th className="r">Cuối kỳ</th></tr></thead>
+          <tbody>{d.byFund.map((f: any) => <tr key={f.fundId}><td>{f.name}</td><td className="r">{money(f.opening)}</td><td className="r">{money(f.inflow - (f.transferIn ?? 0))}</td><td className="r">{money(f.outflow - (f.transferOut ?? 0))}</td><td className="r">{f.transferIn ? money(f.transferIn) : "—"}</td><td className="r">{f.transferOut ? money(f.transferOut) : "—"}</td><td className="r"><b>{money(f.closing)}</b></td></tr>)}</tbody></table></div>
+        <div className="small muted">Chuyển giữa các quỹ: vào {money(d.transfers?.inflow ?? 0)}, ra {money(d.transfers?.outflow ?? 0)}. Đây là chuyển tiền nội bộ, không tính vào tổng thu và tổng chi của cửa hàng.</div>
       </Card>
     </div>
   );
@@ -188,7 +189,7 @@ function Vat({ period }: { period: string }) {
 }
 
 // ---------------------------------------------------------------- ngân sách
-const LINES: Record<string, string> = { revenue: "Doanh thu", cogs: "Giá vốn", opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác" };
+const LINES: Record<string, string> = { revenue: "Doanh thu", cogs: "Giá vốn", opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt & chênh lệch kiểm kê", other: "Khác" };
 function Budget({ period }: { period: string }) {
   const can = useCan();
   const r = useAsync(() => get("/reports/budget-vs-actual", { period }), [period]);

@@ -265,8 +265,8 @@ export function PaymentSheet({ partnerType, partnerId, partnerName, direction, o
         <div className="stack">
           <MoneyInput label="Số tiền (₫)" value={amount} onChange={setAmount} />
           <div className="grid2">
-            <Select label="Quỹ" value={fid} onChange={(e) => setFundId(e.target.value)}>{(funds.data ?? []).map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select>
             <Select label="Hình thức" value={method} onChange={(e) => { setMethod(e.target.value); setFundId(""); }}><option value="cash">Tiền mặt</option><option value="transfer">Chuyển khoản</option></Select>
+            <div style={{ gridColumn: "1 / -1", minWidth: 0 }}><Select label="Quỹ" value={fid} onChange={(e) => setFundId(e.target.value)}>{(funds.data ?? []).map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           </div>
           <Input label="Mã tham chiếu / số giao dịch (tuỳ chọn)" value={ref} onChange={(e) => setRef(e.target.value)} />
           <Segmented value={mode} onChange={(m) => { setMode(m); setAlloc({}); }} options={[{ v: "auto", label: "Tự gạch (cũ nhất trước)" }, { v: "manual", label: "Chọn hoá đơn" }]} />

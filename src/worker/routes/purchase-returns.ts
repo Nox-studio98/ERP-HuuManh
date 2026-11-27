@@ -206,7 +206,7 @@ export async function planReturnPost(c: Ctx, id: number): Promise<D1PreparedStat
     adjCode = await nextCode(db, "DCN");
     stmts.push(
       db
-        .prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by) VALUES (?, 'return_credit', 'supplier', ?, ?, 'posted', ?, ?)`)
+        .prepare(`INSERT INTO debt_adjustments(code, type, partner_type, partner_id, amount, status, reason, created_by, posted_at) VALUES (?, 'return_credit', 'supplier', ?, ?, 'posted', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`)
         .bind(adjCode, ret.supplier_id, credited, `Trả hàng NCC ${ret.code}: ${ret.reason}`.slice(0, 300), actor.id),
       allocStmt(db, { kind: "bill", id: bill.id }, credited, { adjustmentCode: adjCode }), // trigger alloc_bill_not_over chặn gạch vượt
     );

@@ -6,6 +6,7 @@ import { requirePerm, can } from "../lib/rbac";
 import { AppError, notFound } from "../lib/errors";
 import { vnDate, vnDayRangeUtc } from "../lib/time";
 import { salesSummary } from "../services/salesreport";
+import { cancelledOrders, cashFlow, paymentBreakdown } from "../services/shift-report";
 import { pnlAdjustments } from "../services/finance-reports";
 import { renderPnlPdf } from "../services/report-pdf";
 import { audit } from "../lib/audit";
@@ -46,6 +47,8 @@ async function pnl(c: Ctx) {
     )
     .bind(...p)
     .first<{ sales: number; returns: number }>();
+  // B2: thu khác (ròng sau hoàn) đã nằm trong doanh thu — báo riêng một dòng
+  const otherCharges = (await db.prepare(`SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
   const cost = await db
     .prepare(
       `SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN ol.cost_amount ELSE -ol.cost_amount END),0) AS cogs,
@@ -83,6 +86,7 @@ async function pnl(c: Ctx) {
   const adj = await pnlAdjustments(db, fromIso, toIso);
   if (adj.badDebt) expenses.badDebt = (expenses.badDebt ?? 0) + adj.badDebt;
   if (adj.stockCount) expenses.stockCount = (expenses.stockCount ?? 0) + adj.stockCount;
+  if (adj.internalUse) expenses.internalUse = (expenses.internalUse ?? 0) + adj.internalUse; // xuất dùng nội bộ theo giá vốn lô
   if (adj.purchaseVariance) expenses.purchaseVariance = (expenses.purchaseVariance ?? 0) + adj.purchaseVariance; // B-09
   const otherIncome = {
     forfeitedDeposits: adj.forfeitedDeposits,
@@ -120,6 +124,20 @@ async function pnl(c: Ctx) {
     ).results.map((r) => ({ ...r, shipping: 0 }));
     // A-08: dòng đơn online mang giảm giá đã phân bổ; phí giao hàng (doanh thu cấp đơn) báo riêng để tổng breakdown = doanh thu tổng
     const SHIP = `CASE WHEN o.kind='sale' THEN o.shipping_fee WHEN o.channel IN ('online','social') THEN o.total - o.subtotal ELSE 0 END`;
+    // B2: thu khác (phí đóng gói, giỏ quà...) — doanh thu cấp đơn, tách riêng như phí giao; phiếu trả chỉ trừ phần đã hoàn
+    const OTHER = `CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END`;
+    if (groupBy === "group") {
+      const oc = (await db.prepare(`SELECT COALESCE(SUM(${OTHER}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
+      if (oc) rows.push({ key: "Thu khác", revenue: oc, cogs: 0, shipping: 0, otherCharges: oc } as any);
+    } else {
+      const oth = (await db.prepare(`SELECT ${keyExpr} AS key, COALESCE(SUM(${OTHER}),0) AS s FROM orders o WHERE ${W} GROUP BY key`).bind(...p).all<{ key: string; s: number }>()).results;
+      for (const x of oth) {
+        const r = rows.find((y) => y.key === x.key) as any;
+        if (!r || !x.s) continue;
+        r.otherCharges = x.s;
+        r.revenue += x.s;
+      }
+    }
     if (groupBy === "group") {
       const sh = (await db.prepare(`SELECT COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
       if (sh) rows.push({ key: "Phí giao hàng", revenue: sh, cogs: 0, shipping: sh });
@@ -139,6 +157,7 @@ async function pnl(c: Ctx) {
     salesTotal: rev!.sales,
     returnsTotal: rev!.returns,
     revenue,
+    otherCharges,
     cogs,
     grossProfit,
     expenses,
@@ -150,7 +169,7 @@ async function pnl(c: Ctx) {
   };
 }
 
-const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua" };
+const EXP_NAMES: Record<string, string> = { opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Khác", badDebt: "Xoá nợ khó đòi", stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua", internalUse: "Xuất dùng nội bộ" };
 reportRoutes.get("/reports/pnl", requirePerm("reports.view"), async (c) => c.json(await pnl(c)));
 // C-28: PDF lãi lỗ — cùng quyền và cùng số liệu với màn xem
 reportRoutes.get("/reports/pnl.pdf", requirePerm("reports.view"), async (c) => {
@@ -174,9 +193,10 @@ async function inventoryReport(c: Ctx) {
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='sale' THEN -m.qty_delta_milli END),0) AS soldMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='return' THEN m.qty_delta_milli END),0) AS returnedMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -m.qty_delta_milli END),0) AS wasteMilli,
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='internal_use' THEN -m.qty_delta_milli END),0) AS internalUseMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type IN ('assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS assembleMilli,
-         -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt + Lắp ráp + Điều chỉnh = Tồn cuối
-         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
+         -- B-14: mọi loại biến động còn lại (điều chỉnh, kiểm kê, xuất chuyển...) để Tồn đầu + Nhập − Bán + Trả − Hao hụt − Xuất dùng nội bộ + Lắp ráp + Điều chỉnh = Tồn cuối
+         COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type NOT IN ('receipt','transfer_in','sale','return','waste','internal_use','assemble_in','assemble_out') THEN m.qty_delta_milli END),0) AS adjustMilli,
          COALESCE(SUM(m.qty_delta_milli),0) AS onHandMilli,
          COALESCE(SUM(CASE WHEN m.at >= ?1 AND m.move_type='waste' THEN -${valueSql('m.qty_delta_milli','m.unit_cost')} END),0) AS wasteValue,
          COALESCE(SUM(${valueSql('m.qty_delta_milli','m.unit_cost')}),0) AS stockValue
@@ -207,8 +227,8 @@ async function dailyReport(c: Ctx) {
   const shifts = (
     await db
       .prepare(
-        `SELECT s.id, s.user_id, u.full_name AS cashier_name, s.status, s.opening_cash, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason
-           FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.opened_at >= ? AND s.opened_at < ?`,
+        `SELECT s.id, s.user_id, u.full_name AS cashier_name, s.status, s.opening_cash, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason, s.opened_at, s.closed_at
+           FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.opened_at >= ? AND s.opened_at < ? ORDER BY s.id`,
       )
       .bind(r.from, r.to)
       .all()
@@ -217,7 +237,23 @@ async function dailyReport(c: Ctx) {
     .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS total FROM orders WHERE kind='sale' AND status='cancelled' AND voided_by IS NOT NULL AND created_at >= ? AND created_at < ?`)
     .bind(r.from, r.to)
     .first();
-  return { day, ...summary, vouchers, shifts, voided };
+  // Báo cáo cuối ngày (bổ sung, giữ nguyên các khoá cũ): theo hình thức thanh toán, trả hàng, huỷ, thu/chi quỹ ròng; giá vốn/lãi gộp chỉ khi có prices.view_cost
+  const byPayment = await paymentBreakdown(db, `o.completed_at >= ? AND o.completed_at < ?`, [r.from, r.to]);
+  const flow = await cashFlow(db, r.from, r.to, { sensitive: can(c.get("user").role, "hr.sensitive") });
+  const cancelled = await cancelledOrders(db, r.from, r.to);
+  const out: Record<string, unknown> = {
+    day, ...summary, vouchers, shifts, voided, byPayment, cashFlow: flow, cancelled,
+    returns: { count: summary.returnCount, total: summary.returnTotal, byMethod: byPayment.filter((p) => p.refunded > 0).map((p) => ({ method: p.method, amount: p.refunded })) },
+  };
+  if (can(c.get("user").role, "prices.view_cost")) {
+    const cost = await db
+      .prepare(`SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN ol.cost_amount ELSE -ol.cost_amount END),0) AS cogs FROM order_lines ol JOIN orders o ON o.id = ol.order_id WHERE o.status='completed' AND o.completed_at >= ? AND o.completed_at < ?`)
+      .bind(r.from, r.to)
+      .first<{ cogs: number }>();
+    out.cogs = cost?.cogs ?? 0;
+    out.grossProfit = summary.revenue - (cost?.cogs ?? 0);
+  }
+  return out as any;
 }
 reportRoutes.get("/reports/daily", requirePerm("reports.view"), async (c) => c.json(await dailyReport(c)));
 
@@ -245,8 +281,8 @@ reportRoutes.get("/reports/export/:file", requirePerm("reports.view"), async (c)
     ]);
   } else if (name === "inventory") {
     const r = await inventoryReport(c);
-    csv = toCsv(["Mã", "Tên", "ĐVT", "Tồn đầu (milli)", "Nhập", "Bán", "Trả", "Hao hụt", "Điều chỉnh", "Tồn cuối (milli)", "Giá trị tồn"],
-      r.items.map((i: any) => [i.sku, i.name, i.baseUnit, i.openingMilli, i.inMilli, i.soldMilli, i.returnedMilli, i.wasteMilli, i.adjustMilli, i.onHandMilli, i.stockValue]));
+    csv = toCsv(["Mã", "Tên", "ĐVT", "Tồn đầu (milli)", "Nhập", "Bán", "Trả", "Hao hụt", "Xuất dùng nội bộ", "Điều chỉnh", "Tồn cuối (milli)", "Giá trị tồn"],
+      r.items.map((i: any) => [i.sku, i.name, i.baseUnit, i.openingMilli, i.inMilli, i.soldMilli, i.returnedMilli, i.wasteMilli, i.internalUseMilli, i.adjustMilli, i.onHandMilli, i.stockValue]));
   } else if (name === "daily") {
     const r = await dailyReport(c);
     csv = toCsv(["Ngày", "Số đơn", "Doanh thu bán", "Trả hàng", "Doanh thu thuần"], [[r.day, r.saleCount, r.saleTotal, r.returnTotal, r.revenue]]);

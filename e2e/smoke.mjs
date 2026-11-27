@@ -169,7 +169,7 @@ try {
   await o.page.getByLabel("Tìm hàng").fill("Dưa lưới");
   const priceInput = o.page.locator('input[aria-label="Giá mới Dưa lưới Đài Loan"]:visible');
   await priceInput.waitFor();
-  const cur = parseInt(await priceInput.getAttribute("placeholder"), 10);
+  const cur = parseInt((await priceInput.getAttribute("placeholder")).replace(/\D/g, ""), 10);
   assert(cur > 0, `Dưa lưới đã có giá bán hiện hành (${vnd(cur)})`);
   const newPrice = (cur / 1000) % 2 ? cur + 1000 : cur - 1000; // dao động để chạy lại nhiều lần không trôi giá
   await priceInput.fill(String(newPrice));

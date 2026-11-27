@@ -8,6 +8,7 @@ import { assertStmt, onceStmt } from "../services/guard";
 import { nextCode } from "../lib/codes";
 import { currentAvgCost, resolvePrice } from "../services/pricing";
 import { deviceIdOf, guarded, pageParams, parseBody } from "../services/http";
+import { imageUrl } from "../services/online-media";
 
 export const productRoutes = new Hono<AppBindings>();
 
@@ -95,6 +96,10 @@ productRoutes.get("/products", requirePerm("inventory.view"), async (c) => {
     binds.push(`%${q}%`, `%${q}%`, q);
   }
   if (groupId) (where.push("p.group_id = ?"), binds.push(groupId));
+  // ids=1,2,3: lấy đúng các mã (màn POS dùng khi sao chép đơn / quét mã) — chỉ thêm bộ lọc, không đổi hành vi cũ
+  const ids = (c.req.query("ids") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 100);
+  if (c.req.query("ids") != null && !ids.length) where.push("0");
+  if (ids.length) (where.push(`p.id IN (${ids.map(() => "?").join(",")})`), binds.push(...ids));
   if (active === "0" || active === "1") (where.push("p.active = ?"), binds.push(Number(active)));
   const { results } = await db
     .prepare(`SELECT p.* FROM products p WHERE ${where.join(" AND ")} ORDER BY p.id LIMIT ?`)
@@ -114,7 +119,9 @@ productRoutes.get("/products", requirePerm("inventory.view"), async (c) => {
         )
         .bind(p.id, now)
         .first<{ q: number }>();
-      const item: any = { ...shape(p, unitMap.get(p.id) ?? []), availableMilli: av?.q ?? 0 };
+      let firstImage: string | null = null;
+      try { firstImage = (JSON.parse(p.images_json ?? "[]") as string[])[0] ?? null; } catch { /* ảnh hỏng → coi như chưa có */ }
+      const item: any = { ...shape(p, unitMap.get(p.id) ?? []), availableMilli: av?.q ?? 0, imageUrl: imageUrl(firstImage) };
       if (seePrice) item.price = await resolvePrice(db, p.id, { channel: "pos" }).then((r) => r.unitPrice, () => null);
       if (seeCost) item.avgCost = await currentAvgCost(db, p.id);
       return item;

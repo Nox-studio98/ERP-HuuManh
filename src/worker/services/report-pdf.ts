@@ -130,7 +130,7 @@ export async function renderReportPdf(env: Env, report: PdfReport): Promise<Uint
 // ---------------------------------------------------------------- báo cáo lãi lỗ
 const EXP_NAMES: Record<string, string> = {
   opex: "Chi phí vận hành", payroll: "Lương", shrinkage: "Hao hụt", other: "Chi khác", badDebt: "Xoá nợ khó đòi",
-  stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua",
+  stockCount: "Chênh lệch kiểm kê", purchaseVariance: "Chênh lệch giá mua", internalUse: "Xuất dùng nội bộ",
 };
 const money = (n: number) => fmtVnd(n);
 const GROUP_NAMES: Record<string, string> = { day: "ngày", channel: "kênh bán", group: "nhóm hàng" };

@@ -2,11 +2,11 @@
  * Bộ component danh sách chuẩn (xem docs/UI-KIT.md): PageHeader, FilterBar (DateRangeFilter, SearchInput, FilterSelect),
  * KpiRow, ExportButton, DetailPanel + SplitLayout. DataTable / EmptyState nằm ở ui.tsx.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { get, items as asItems } from "../api";
 import { downloadCsv } from "../csv";
 import { todayVN } from "../format";
-import { Button, Sheet } from "./ui";
+import { Button, Sheet, type Col } from "./ui";
 
 /* ---------------- PageHeader ---------------- */
 /** Tiêu đề màn hình nằm ở thanh trên cùng (tự lấy từ menu). PageHeader chỉ thêm phụ đề + nút thao tác bên phải. `title` chỉ dùng cho màn con (vd. "Đơn DS-001"). */
@@ -147,6 +147,58 @@ export function ExportButton<T>({ filename, rows, columns, disabled, label = "Xu
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style={{ stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }}><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>
       {label}
     </Button>
+  );
+}
+
+
+/* ---------------- Chọn cột hiển thị (nhớ theo thiết bị) ---------------- */
+const colsStoreKey = (k: string) => "hm.cols." + k;
+function loadHidden(key: string): string[] {
+  try { const v = JSON.parse(localStorage.getItem(colsStoreKey(key)) ?? "null"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; }
+}
+/**
+ * Cột bật/tắt được cho DataTable. `columnsKey` định danh bảng (lưu localStorage theo thiết bị, lỗi lưu thì bỏ qua).
+ * Cột `title` luôn hiện. `defaultHidden`: cột tắt sẵn ở bản "Mặc định". Dùng: `const cp = useColumnPrefs("orders", cols); <DataTable cols={cp.cols} />` + `{cp.menu}` ở thanh công cụ.
+ */
+export function useColumnPrefs<T>(columnsKey: string, cols: Col<T>[], defaultHidden: string[] = []) {
+  const [hidden, setHidden] = useState<string[]>(() => { try { return localStorage.getItem(colsStoreKey(columnsKey)) == null ? defaultHidden : loadHidden(columnsKey); } catch { return defaultHidden; } });
+  const save = (h: string[]) => { setHidden(h); try { localStorage.setItem(colsStoreKey(columnsKey), JSON.stringify(h)); } catch { /* bỏ qua */ } };
+  const fixed = (c: Col<T>) => !!c.title;
+  const visible = useMemo(() => cols.filter((c) => fixed(c) || !hidden.includes(c.key)), [cols, hidden]); // eslint-disable-line
+  const menu = <ColumnsMenu cols={cols.map((c) => ({ key: c.key, label: c.label, fixed: fixed(c) }))} hidden={hidden}
+    onToggle={(k) => save(hidden.includes(k) ? hidden.filter((x) => x !== k) : [...hidden, k])} onReset={() => { setHidden(defaultHidden); try { localStorage.removeItem(colsStoreKey(columnsKey)); } catch { /* bỏ qua */ } }} />;
+  return { cols: visible, hidden, menu };
+}
+
+export function ColumnsMenu({ cols, hidden, onToggle, onReset }: { cols: { key: string; label: string; fixed?: boolean }[]; hidden: string[]; onToggle: (key: string) => void; onReset: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [open]);
+  return (
+    <div className="pop-wrap" ref={ref}>
+      <Button variant="ghost" size="sm" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style={{ stroke: "currentColor", fill: "none", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }}><path d="M4 5h16v14H4zM9 5v14M15 5v14" /></svg>
+        Cột{hidden.length ? ` (${cols.length - hidden.length}/${cols.length})` : ""}
+      </Button>
+      {open && (
+        <div className="pop" role="group" aria-label="Chọn cột hiển thị">
+          {cols.map((c) => (
+            <label key={c.key} className="pop-item" style={{ cursor: c.fixed ? "default" : "pointer" }}>
+              <input type="checkbox" checked={c.fixed || !hidden.includes(c.key)} disabled={c.fixed} onChange={() => onToggle(c.key)} />
+              <span>{c.label}</span>
+            </label>
+          ))}
+          <hr />
+          <button type="button" className="pop-item" onClick={onReset}>Mặc định</button>
+        </div>
+      )}
+    </div>
   );
 }
 

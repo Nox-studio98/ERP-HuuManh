@@ -85,6 +85,8 @@ export interface PayslipInput {
   entries: { kind: "bonus" | "penalty" | "allowance" | "adjustment"; amount: number; taxable: boolean; reason: string; sourcePeriod?: string | null }[];
   advances: { amount: number; date?: string }[];
   salesRevenue: number; // doanh thu POS hoàn tất trừ trả hàng
+  /** Có (kể cả rỗng) khi kỳ có quy tắc hoa hồng (services/commission.ts): thưởng doanh số = Σ từng quy tắc, thay cho salesRevenue × salesBonusBp. */
+  commission?: { parts: { name: string; rateBp: number; revenue: number; amount: number }[] };
 }
 
 export interface PayslipLine {
@@ -182,11 +184,25 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
     const regularMinutes = Math.max(0, sum(input.days.map((d) => Math.max(0, d.workedMinutes - d.overtimeMinutes))) + input.adjustMinutes.work);
     basePay = Math.round((e.hourlyRate * regularMinutes) / 60);
     lines.push({ label: "Lương theo giờ", amount: basePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(regularMinutes / 60).toFixed(2)} giờ thường (đã trừ giờ tăng ca, trả riêng)` });
+    // C-24: phép có lương của NV lương giờ = số giờ ca đã xếp ngày đó (không có ca → 8 giờ) × phần ngày phép
+    const leaveMinutes = sum(input.days.map((d) => (d.leavePaidX10 > 0 ? Math.round(((d.scheduledMinutes || 480) * Math.min(10, d.leavePaidX10)) / 10) : 0)));
+    if (leaveMinutes > 0) {
+      const leavePay = Math.round((e.hourlyRate * leaveMinutes) / 60);
+      basePay += leavePay;
+      lines.push({ label: "Phép có lương", amount: leavePay, group: "income", note: `${fmt(e.hourlyRate)} × ${(leaveMinutes / 60).toFixed(2)} giờ (giờ ca đã xếp của ngày phép, không có ca tính 8 giờ; phép ${leaveX10 / 10} ngày)` });
+    }
   } else {
     // C-24: phút điều chỉnh công quy đổi 480 phút = 1 ca (trước đây lương theo ca bỏ qua điều chỉnh)
     const adjShifts = input.adjustMinutes.work / 480;
     basePay = Math.round(e.shiftRate * (shifts + adjShifts));
     lines.push({ label: "Lương theo ca", amount: basePay, group: "income", note: `${fmt(e.shiftRate)} × ${shifts} ca${input.adjustMinutes.work ? ` ${adjShifts >= 0 ? "+" : "−"} ${Math.abs(Math.round(adjShifts * 100) / 100)} ca điều chỉnh công (${input.adjustMinutes.work} phút / 480)` : ""}` });
+    // C-24: phép có lương của NV lương ca = 1 ca mỗi ngày phép (nửa ngày = 0,5 ca); đơn giá ca không phụ thuộc độ dài ca
+    const leaveShifts = sum(input.days.map((d) => Math.min(10, d.leavePaidX10))) / 10;
+    if (leaveShifts > 0) {
+      const leavePay = Math.round(e.shiftRate * leaveShifts);
+      basePay += leavePay;
+      lines.push({ label: "Phép có lương", amount: leavePay, group: "income", note: `${fmt(e.shiftRate)} × ${Math.round(leaveShifts * 100) / 100} ca (1 ca mỗi ngày phép có lương)` });
+    }
   }
 
   // ---- Tăng ca ----
@@ -273,8 +289,16 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
       lines.push({ label: `Điều chỉnh${en.sourcePeriod ? ` kỳ ${en.sourcePeriod}` : ""}: ${en.reason}`, amount: en.amount, group: en.amount >= 0 ? "income" : "deduction" });
     }
   }
-  const salesBonus = s.salesBonusBp > 0 ? Math.round((input.salesRevenue * s.salesBonusBp) / 10000) : 0;
-  if (salesBonus !== 0) lines.push({ label: "Thưởng doanh số", amount: salesBonus, group: "income", note: `${fmt(input.salesRevenue)} × ${s.salesBonusBp / 100}%` });
+  let salesBonus = s.salesBonusBp > 0 ? Math.round((input.salesRevenue * s.salesBonusBp) / 10000) : 0;
+  if (input.commission) {
+    const parts = input.commission.parts.filter((p) => p.amount !== 0 || p.revenue !== 0);
+    const total = sum(parts.map((p) => p.amount));
+    salesBonus = Math.max(0, total);
+    for (const p of parts) {
+      lines.push({ label: `Hoa hồng: ${p.name}`, amount: total < 0 ? 0 : p.amount, group: "income", note: `${fmt(p.revenue)} × ${p.rateBp / 100}%${p.revenue < 0 ? " (trả hàng nhiều hơn bán)" : ""}` });
+    }
+    if (total < 0) lines.push({ label: "Hoa hồng âm (trả hàng nhiều hơn bán), tính 0", amount: 0, group: "info" });
+  } else if (salesBonus !== 0) lines.push({ label: "Thưởng doanh số", amount: salesBonus, group: "income", note: `${fmt(input.salesRevenue)} × ${s.salesBonusBp / 100}%` });
 
   const gross = basePay + allowances + overtimePay + bonus + salesBonus - penalties + adjustments;
   lines.push({ label: "Tổng thu nhập (gross)", amount: gross, group: "info" });

@@ -125,7 +125,8 @@ tr.bad td { background: var(--warn-soft); }
 .numpad button:active { background: var(--accent-soft); }
 
 /* pos */
-.pos { display: grid; gap: var(--s-4); }
+.pos { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); }
+.pos > * { min-width: 0; } /* chip nhóm hàng cuộn ngang không được kéo giãn cột lưới (mobile) */
 .pos-cart { display: none; } .pos.show-cart .pos-cart { display: block; } .pos.show-cart .pos-products { display: none; }
 .pos-products { display: block; }
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-2); }
@@ -162,7 +163,7 @@ tr.bad td { background: var(--warn-soft); }
 .logo { width: 64px; height: 64px; border-radius: 16px; }
 
 /* receipt / label + print */
-.receipt { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; background: #fff; color: #111; padding: var(--s-4); border-radius: var(--r-md); border: 1px dashed #bbb; }
+.receipt { font-family: inherit; font-variant-numeric: tabular-nums; /* Be Vietnam Pro: font monospace hệ thống thiếu dấu tiếng Việt */ font-size: .85rem; background: #fff; color: #111; padding: var(--s-4); border-radius: var(--r-md); border: 1px dashed #bbb; }
 .receipt .l { display: flex; justify-content: space-between; gap: 8px; }
 .receipt hr { border: 0; border-top: 1px dashed #999; margin: 8px 0; }
 .label-card { background: #fff; color: #111; border: 1px solid #ccc; border-radius: var(--r-md); padding: var(--s-4); text-align: center; }
@@ -629,6 +630,11 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .ex-pick { display: flex; justify-content: space-between; align-items: center; gap: var(--s-2); min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ex-pick:hover, .ex-pick:focus-visible { border-color: var(--accent); }
 .ex-sum { padding: var(--s-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.qr-line { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.qr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); }
+@media (max-width: 420px) { .qr-grid { grid-template-columns: 1fr; } }
+.oc-line { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.oc-line .oc-tag { font-size: 12px; color: var(--muted); }
 /* Ô tick đơn bổ sung khi giao thiếu (A-27) */
 .backorder-check { display: flex; align-items: flex-start; gap: var(--s-2); min-height: 44px; padding: var(--s-2) var(--s-3); border: 1px dashed var(--border); border-radius: var(--r-md); }
 .backorder-check input { width: 22px; height: 22px; margin-top: 2px; flex: none; }
@@ -764,3 +770,127 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .bd-info { display: grid; grid-template-columns: 96px 1fr; gap: var(--s-2) var(--s-3); align-items: baseline; }
 @media (max-width: 1023px) { .bd-hm { display: none; } .bd-actions .btn { padding: 0 var(--s-3); } .bd-bar { gap: 6px; } }
 @media (max-width: 1023px) { .bd-selbar { flex-wrap: nowrap; gap: var(--s-2); padding: 8px 12px; width: 100%; justify-content: space-between; } .bd-selbar .btn { white-space: nowrap; padding: 0 var(--s-3); } }
+
+/* POS — nhiều hoá đơn (tab), lọc nhóm hàng, lưới ảnh */
+.pos-tabs { grid-column: 1 / -1; display: flex; gap: var(--s-2); align-items: center; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; min-width: 0; }
+.pos-tabs::-webkit-scrollbar { display: none; }
+.pos-tab { flex: 0 0 auto; display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); overflow: hidden; }
+.pos-tab.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pos-tab-main { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 var(--s-3) 0 var(--s-4); background: none; border: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.pos-tab-main .long { display: none; }
+.pos-tab-n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: .75rem; line-height: 20px; text-align: center; font-weight: 700; }
+.pos-tab-x { min-height: 40px; width: 34px; background: none; border: 0; color: inherit; opacity: .6; font-size: 1.1rem; cursor: pointer; }
+.pos-tab-x:hover { opacity: 1; }
+.pos-tab-add { flex: 0 0 auto; min-height: 40px; min-width: 40px; padding: 0 var(--s-3); border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+.pos-tab-add:disabled { opacity: .4; cursor: not-allowed; }
+.pos-tab-add .kbd-hint { font-weight: 400; }
+@media (min-width: 768px) { .pos-tab-main .long { display: inline; } .pos-tab-main .short { display: none; } }
+/* Hàng tìm sản phẩm + nút (Quét mã, Thu nợ, cài đặt): điện thoại cho ô tìm chiếm cả dòng, các nút xuống dòng dưới */
+@media (max-width: 600px) { .pos-searchrow { flex-wrap: wrap; } .pos-searchrow > .grow { flex: 1 1 100%; } }
+.pos-filter { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; margin-top: var(--s-1); }
+.pos-filter .chips.scroll { margin-top: 0; }
+@media (min-width: 768px) { .pos-filter { flex-direction: row; align-items: flex-start; justify-content: space-between; } .pos-filter .chips { flex: 1 1 auto; } .pos-filter .seg { flex: none; } }
+.pgrid.photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.ptile.photo { padding: 0; overflow: hidden; gap: 0; min-height: 0; }
+.ptile.photo > :not(.pimg) { margin: 0 var(--s-3); }
+.ptile.photo .n { margin-top: var(--s-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ptile.photo .p { padding-bottom: var(--s-3); margin-top: 6px; }
+.ptile.photo .small { font-size: .78rem; }
+.pimg { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--surface-2, var(--border)); }
+.pimg.ph { display: flex; align-items: center; justify-content: center; font-size: 2.2rem; font-weight: 700; }
+@media (min-width: 1280px) { .pgrid.photos { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); } }
+
+/* ===== Báo cáo cuối ngày / phiếu bàn giao ca: bản in A4 + 80mm ===== */
+.rpt-doc { display: none; }
+@media print {
+  .rpt-doc { display: block; background: #fff; color: #000; font-family: "Be Vietnam Pro", system-ui, sans-serif; }
+  body:has(.rpt-doc) * { visibility: hidden; }
+  body:has(.rpt-doc) .rpt-doc, body:has(.rpt-doc) .rpt-doc * { visibility: visible; }
+  body:has(.rpt-doc) .rpt-doc { position: absolute; left: 0; top: 0; }
+  .rpt-store { text-align: center; font-weight: 700; }
+  .rpt-title { text-align: center; font-weight: 700; margin: 2px 0; }
+  .rpt-meta { text-align: center; margin-bottom: 6px; }
+  .rpt-h { font-weight: 700; margin: 8px 0 3px; }
+  .rpt-kv { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+  .rpt-kv.b { font-weight: 700; }
+  .rpt-kv > span:last-child { text-align: right; white-space: nowrap; }
+  .rpt-table { width: 100%; border-collapse: collapse; }
+  .rpt-table th { text-align: left; font-weight: 700; }
+  .rpt-table .r { text-align: right; white-space: nowrap; }
+  .rpt-table tfoot td { font-weight: 700; }
+  .rpt-note { margin-top: 3px; font-style: italic; }
+  .rpt-foot { margin-top: 12px; }
+  .rpt-sec { break-inside: avoid; }
+  /* A4 */
+  .print-area.rpt-doc.paper-a4 { width: 100%; font-size: 11.5pt; }
+  .paper-a4 .rpt-store { font-size: 14pt; }
+  .paper-a4 .rpt-title { font-size: 16pt; }
+  .paper-a4 .rpt-table th, .paper-a4 .rpt-table td { border: 1px solid #000; padding: 3px 6px; }
+  .paper-a4 .rpt-kv { border-bottom: 1px dotted #888; }
+  /* giấy nhiệt 80mm */
+  .print-area.rpt-doc.paper-80 { width: 72mm; font-size: 9.5pt; } /* giữ Be Vietnam Pro: font monospace hệ thống thường thiếu dấu tiếng Việt */
+  .rpt-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; text-align: center; min-height: 24mm; }
+  .rpt-sign > div { display: flex; flex-direction: column; gap: 2px; }
+  .rpt-sign span { font-size: .85em; font-style: italic; }
+  .paper-80 .rpt-table { table-layout: fixed; }
+  .paper-80 .rpt-table th, .paper-80 .rpt-table td { padding: 1px 2px; border-bottom: 1px dashed #666; font-size: 8pt; overflow-wrap: anywhere; }
+  .paper-80 .rpt-table td.r, .paper-80 .rpt-table th.r { overflow-wrap: normal; }
+  .paper-80 .rpt-table th:first-child, .paper-80 .rpt-table td:first-child { width: 32%; }
+  .paper-80 .rpt-h { border-top: 1px dashed #000; padding-top: 4px; }
+}
+/* Nhập Excel hàng loạt (screens/Import.tsx) */
+.imp-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .imp-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.imp-drop { border: 2px dashed var(--border); border-radius: var(--r-lg); padding: var(--s-5) var(--s-4); text-align: center; background: var(--surface-2); transition: border-color .15s, background .15s; }
+.imp-drop.drag { border-color: var(--accent); background: var(--accent-soft); }
+.imp-cols summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.imp-cols ul { list-style: none; margin: var(--s-2) 0; padding: 0; display: grid; gap: var(--s-2); }
+.imp-bar { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: space-between; }
+.imp-mode { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.imp-notes { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.imp-confirm { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+
+/* ===== Audit UX 27/11/2026: chỉ áp dụng ≤ 767px (điện thoại); PC giữ nguyên ===== */
+@media (max-width: 767px) {
+  /* Dải tab / khoảng ngày: xuống dòng thay vì bị cắt chữ ở mép phải */
+  .seg { flex-wrap: wrap; overflow-x: visible; }
+  .seg button { flex: 1 0 auto; }
+  .daterange .seg button { min-height: 40px; }
+  .daterange .seg { gap: 3px; }
+  /* Vùng chạm tối thiểu 40px cho nút điều hướng ‹ › / nút phụ */
+  .btn.sm { min-height: 40px; }
+  .btn.sm.ghost[aria-label], .btn.ghost.sm[aria-label] { min-width: 40px; }
+  .bd-nav .btn { min-height: 40px; min-width: 40px; }
+  input[type="checkbox"], input[type="radio"] { min-width: 22px; min-height: 22px; }
+  label:has(> input[type="checkbox"]), label.check, .check-row { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; gap: 8px; }
+  /* Checkbox trần trong bảng/danh sách: bọc label .check-hit để vùng chạm >= 40x40 (không đổi bố cục PC) */
+  .check-hit { min-width: 40px; min-height: 40px; }
+  .check-hit > input[type="checkbox"] { width: 22px; height: 22px; }
+  .pos-tab-x { min-width: 40px; }
+}
+@media (max-width: 480px) {
+  .kpi .v { font-size: 1.12rem; overflow-wrap: break-word; }
+  .sheet .stmt { font-size: .8rem; min-width: 0; }
+  .sheet .stmt th, .sheet .stmt td { padding: 6px 4px; }
+  .sheet .stmt .code .muted { display: none; }
+}
+/* ===== UX rest: POS 390px ===== */
+/* Nút Thanh toán dính đáy, nằm trên tab bar (chừa chiều cao tab bar + safe-area) */
+.pos-paybar { position: sticky; bottom: calc(var(--tab-h) + env(safe-area-inset-bottom)); z-index: 5; background: var(--surface); padding: var(--s-2) 0 var(--s-1); margin-top: var(--s-1); }
+@media (min-width: 900px) { .pos-paybar { position: static; padding: 0; margin: 0; } }
+/* Giỏ gọn trên điện thoại: bước số lượng, ô đơn vị và ô Giảm không xuống dòng */
+@media (max-width: 899px) {
+  .pos-cart .cartline .row.wrap { flex-wrap: nowrap; gap: var(--s-1); }
+  .pos-cart .qty button { width: 38px; height: 38px; }
+  .pos-cart .qty input { width: 44px; height: 38px; }
+  .pos-cart .cartline select.input { width: 66px !important; min-height: 38px; padding: 0 4px; }
+  .pos-cart .cartline .input[placeholder^="Giảm"] { width: 76px !important; min-height: 38px !important; }
+  .pos-cart .cartline .btn.sm { padding: 0 var(--s-2); min-height: 38px; }
+}
+/* Hình thức thanh toán: lưới đều 2×2 trên màn hẹp, không để "Thẻ" rơi lẻ */
+.chips.pay-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chips.pay-methods .chip { padding: 0 var(--s-2); white-space: nowrap; }
+@media (min-width: 560px) { .chips.pay-methods { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* Checkbox trần trong bảng: label bọc làm vùng chạm (kích thước tối thiểu ở @media 767px) */
+.check-hit { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; vertical-align: middle; }

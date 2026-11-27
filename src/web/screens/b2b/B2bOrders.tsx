@@ -207,7 +207,7 @@ function OrderDetail({ id }: { id: number }) {
     <div className="stack">
       <Back to="/b2b-orders" label="Đơn sỉ" />
       <div className="page-head">
-        <div style={{ minWidth: 0 }}><h2 style={{ margin: 0 }}>Đơn {d.code}</h2><div className="muted small"><Lnk to={`/customers/${d.customerId}`}>{d.customerName}</Lnk> · giao {ymd(d.deliveryDate)}{d.address ? ` · ${d.addressLabel}: ${d.address}` : ""}</div></div>
+        <div style={{ minWidth: 0 }}><h2 style={{ margin: 0 }}>Đơn {d.code}</h2><div className="muted small"><Lnk to={`/customers/${d.customerId}`}>{d.customerName}</Lnk> · giao {ymd(d.deliveryDate)}{d.address ? ` · giao tới “${d.addressLabel}” — ${d.address}` : ""}</div></div>
         <Badge tone={orderTone(d.status)}>{ORDER_STATUS[d.status] ?? d.status}</Badge>
       </div>
       {(blocked || (d.status === "new" && d.credit && (d.credit.overdueCount > 0 || d.credit.available < d.total))) && !blocked && (

@@ -5,6 +5,7 @@ import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader,
 import { toast } from "../../components/toast";
 import { money, ROLES, todayVN } from "../../format";
 import { useAuth, useCan } from "../../store";
+import Handover from "./Handover";
 import { Confirm, EMP_STATUS, PAY_TYPE, dmy, errCode, useLeaveTypes } from "./kit";
 
 const EMPTY = { fullName: "", position: "Nhân viên bán hàng", hireDate: todayVN(), payType: "monthly", baseSalary: 0, hourlyRate: 0, shiftRate: 0, insuranceSalary: 0, dependents: 0, annualLeaveDays: 12, locationExempt: false, pitEnabled: false, phone: "", email: "", idNumber: "", dob: "", address: "", bankName: "", bankAccount: "", note: "" };
@@ -76,7 +77,7 @@ export default function Employees() {
 
 function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; sens: boolean; manage: boolean; onClose: () => void; onChanged: () => void; onEdit: (e: any) => void }) {
   const d = useAsync(() => get("/employees/" + id), [id]);
-  const [term, setTerm] = useState(false);
+  const [term, setTerm] = useState(false), [ho, setHo] = useState(false);
   const [ct, setCt] = useState<false | "new" | any>(false);
   const [al, setAl] = useState(false);
   const e = d.data;
@@ -90,7 +91,7 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
             {e.username && <Badge tone="info">TK: {e.username}</Badge>}
             {e.locationExempt && <Badge>Miễn vị trí</Badge>}
             <span className="grow" />
-            {manage && e.status === "active" && <><Button size="sm" variant="soft" onClick={() => onEdit(e)}>Sửa hồ sơ</Button><Button size="sm" variant="danger" onClick={() => setTerm(true)}>Cho nghỉ việc</Button></>}
+            {manage && e.status === "active" && <><Button size="sm" variant="soft" onClick={() => onEdit(e)}>Sửa hồ sơ</Button><Button size="sm" variant="soft" onClick={() => setHo(true)} data-testid="open-handover">Chuyển việc</Button><Button size="sm" variant="danger" onClick={() => setTerm(true)}>Cho nghỉ việc</Button></>}
           </div>
           <div className="grid2">
             <KV l="Vị trí" v={e.position} /><KV l="Ngày vào làm" v={dmy(e.hireDate)} />
@@ -129,7 +130,8 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
               </div>
             ))}
           </Card>
-          {term && <Terminate e={e} onClose={() => setTerm(false)} onDone={() => { setTerm(false); reload(); }} />}
+          {term && <Terminate e={e} onClose={() => setTerm(false)} onDone={() => { setTerm(false); reload(); }} onHandover={() => { setTerm(false); setHo(true); }} />}
+          {ho && <Handover employeeId={e.id} userId={e.userId} onClose={() => setHo(false)} onDone={() => setHo(false)} />}
           {ct && <ContractForm id={e.id} sens={sens} contract={ct === "new" ? null : ct} onClose={() => setCt(false)} onDone={() => { setCt(false); reload(); }} />}
           {al && <AllowanceForm id={e.id} onClose={() => setAl(false)} onDone={() => { setAl(false); reload(); }} />}
         </div>
@@ -139,7 +141,7 @@ function Detail({ id, sens, manage, onClose, onChanged, onEdit }: { id: number; 
 }
 const KV = ({ l, v }: { l: string; v?: string | null }) => <div><div className="small muted">{l}</div><div>{v || "—"}</div></div>;
 
-function Terminate({ e, onClose, onDone }: { e: any; onClose: () => void; onDone: () => void }) {
+function Terminate({ e, onClose, onDone, onHandover }: { e: any; onClose: () => void; onDone: () => void; onHandover: () => void }) {
   const [date, setDate] = useState(todayVN()), [reason, setReason] = useState(""), [busy, setBusy] = useState(false), [force, setForce] = useState(false), [pend, setPend] = useState(false);
   return (
     <Confirm title={`Cho ${e.fullName} nghỉ việc`} danger confirmLabel="Xác nhận nghỉ việc" busy={busy} disabled={!reason.trim() || !date} onClose={onClose}
@@ -147,7 +149,7 @@ function Terminate({ e, onClose, onDone }: { e: any; onClose: () => void; onDone
       <Banner>{e.username ? <>Tài khoản <b>{e.username}</b> sẽ bị <b>khoá ngay</b> và mọi phiên đăng nhập đang mở bị thu hồi. </> : null}Các ca sau ngày nghỉ sẽ bị huỷ. Lịch sử chấm công và lương vẫn được giữ.</Banner>
       <Input label="Ngày nghỉ việc" type="date" value={date} onChange={(x) => setDate(x.target.value)} />
       <TextArea label="Lý do" rows={2} value={reason} onChange={(x) => setReason(x.target.value)} />
-      {pend && <Banner tone="danger"><label className="row"><input type="checkbox" checked={force} onChange={(x) => setForce(x.target.checked)} /> Nhân viên còn yêu cầu/đơn đang chờ xử lý. Vẫn cho nghỉ việc (ghi nhận vào nhật ký).</label></Banner>}
+      {pend && <Banner tone="danger"><label className="row"><input type="checkbox" checked={force} onChange={(x) => setForce(x.target.checked)} /> Nhân viên còn yêu cầu/đơn đang chờ xử lý. Vẫn cho nghỉ việc (ghi nhận vào nhật ký).</label><div style={{ marginTop: 8 }}><Button size="sm" variant="soft" onClick={onHandover} data-testid="terminate-handover">Chuyển việc cho người khác</Button></div></Banner>}
     </Confirm>
   );
 }

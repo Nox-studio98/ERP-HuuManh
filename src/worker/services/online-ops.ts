@@ -13,7 +13,7 @@ import { consumeForDeliveryStmts, planReservations, releaseOrderStmts, reserveSt
 import { enqueueJobStmt, kickJobs } from "./outbox";
 import { CUSTOMER_LABEL, newTrackingToken, normalizeVi, transitionStmts, type OnlineStatus } from "./online-orders";
 import { assertStmt } from "./guard";
-import { guardStmts, notifyJob, paidNet, refundObligation, refundPlan, runOrderBatch } from "./online-payments";
+import { allocateRefund, cashRefundShift, guardStmts, notifyJob, paidNet, refundLineStmts, refundObligation, refundPlan, runOrderBatch } from "./online-payments";
 import { assertPeriodOpen } from "./period";
 import { unitFactor } from "./http";
 import { repriceAfterPack } from "./pack-reprice";
@@ -196,7 +196,7 @@ export async function overrideWeight(c: Ctx, id: number, reason: string) {
 // ---------------------------------------------------------------- ship (EC-05)
 
 /** Chia một phân bổ lô cho nhiều dòng theo thứ tự. */
-function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
+export function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
   const pool = alloc.map((a) => ({ ...a }));
   let i = 0;
   return qtys.map((q) => {
@@ -213,7 +213,7 @@ function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
   });
 }
 
-export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; trackingNo?: string }) {
+export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; trackingNo?: string; extra?: D1PreparedStatement[] }) {
   const db = c.env.DB;
   const user = c.get("user");
   const o = await loadOpsOrder(db, id);
@@ -262,6 +262,7 @@ export async function shipOrder(c: Ctx, id: number, input: { carrier?: string; t
   });
   const stmts: D1PreparedStatement[] = [t[0], ...consume, ...t.slice(1)];
   stmts.push(
+    ...(input.extra ?? []), // vd. giao hàng tại quầy: ghi tiền trả trước vào két ca cùng batch với bước chuyển "Đang giao"
     notifyJob(db, id, { status: "shipping" }),
     auditStmt(c, { action: "online_order.ship", entity: "order", entityId: id, before: { status: "preparing" }, after: { status: "shipping", costTotal, carrier: input.carrier ?? null, restockedBefore: !!already } }),
   );
@@ -295,8 +296,9 @@ export async function deliverOrder(c: Ctx, id: number) {
   } else if (o.payment_method === "cod" && o.payment_status !== "paid") {
     const fund = await db.prepare(`SELECT id FROM funds WHERE type='cod_clearing' AND active=1 ORDER BY id LIMIT 1`).first<{ id: number }>();
     if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ chờ đối soát COD (cod_clearing)");
-    t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công", extraSet: "payment_status = ?3, paid_total = paid_total + ?4", extraBinds: ["paid", o.total] });
-    stmts.push(t[0], db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.total, fund.id, o.code), ...t.slice(1));
+    t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công", extraSet: "payment_status = ?3, paid_total = paid_total + ?4", extraBinds: ["paid", o.total - (o.paid_total ?? 0)] });
+    // Đơn giao từ quầy (B3) đã trả trước một phần: COD chỉ thu phần còn lại (đơn COD thường paid_total = 0 nên không đổi)
+    stmts.push(t[0], db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?, 'cod', ?, ?, ?, 'confirmed')`).bind(id, o.total - (o.paid_total ?? 0), fund.id, o.code), ...t.slice(1));
   } else {
     t = transitionStmts(db, id, o.status, "completed", staff(c), { note: "Giao hàng thành công" });
     if (prepaid) stmts.push(assertStmt(db, "order.diff_none", `SELECT diff_status <> 'pending' FROM orders WHERE id = ?`, [id]));
@@ -623,10 +625,14 @@ export async function refundDiff(c: Ctx, id: number) {
   const amount = -o.diff_amount;
   const p = await paidNet(db, id);
   if (p.net < amount) throw conflict("nothing_to_refund", "Số đã thu của đơn không đủ để hoàn", { paid: p.net, amount });
+  const lines = await allocateRefund(db, id, amount); // B-N2: hoàn theo từng dòng thu gốc
+  if (lines.reduce((s, l) => s + l.amount, 0) !== amount) throw conflict("nothing_to_refund", "Số đã thu của đơn không đủ để hoàn", { paid: p.net, amount });
+  const sh = await cashRefundShift(db, id, c.get("user").id);
   await runOrderBatch(db, id, o.status, [
     assertStmt(db, "order.diff_refund", `SELECT diff_status = 'pending' AND diff_amount = ? AND status = ? FROM orders WHERE id = ?`, [o.diff_amount, o.status, id]),
     assertStmt(db, "order.refund", `SELECT COALESCE(SUM(amount), 0) >= ? FROM payments WHERE order_id = ? AND status = 'confirmed'`, [amount, id]),
-    db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(id, p.method, -amount, p.fundId, "refund_diff"),
+    ...(sh.assertShift ? [assertStmt(db, "order.refund.shift_open", `SELECT status = 'open' FROM shifts WHERE id = ?`, [sh.assertShift])] : []),
+    ...refundLineStmts(db, id, lines, "refund_diff", sh.shiftId),
     db.prepare(`UPDATE orders SET paid_total = paid_total - ?, diff_status = 'settled', diff_note = ? WHERE id = ?`).bind(amount, `Đã hoàn ${amount}đ chênh lệch cân`, id),
     db.prepare(`INSERT INTO order_events(order_id, status, note, actor_type, actor_id) VALUES (?,?,?, 'staff', ?)`).bind(id, o.status, `Đã hoàn ${amount}đ chênh lệch khối lượng`, c.get("user").id),
     auditStmt(c, { action: "online_order.diff_refund", entity: "order", entityId: id, before: { diffAmount: o.diff_amount, diffStatus: "pending" }, after: { diffStatus: "settled", refunded: amount } }),
@@ -710,14 +716,14 @@ export async function refundOrder(c: Ctx, id: number) {
   if (o.status !== "cancelled" && o.status !== "returned" && !(o.status === "completed" && o.refund_due > 0)) throw conflict("not_refundable", "Chỉ hoàn tiền cho đơn đã huỷ hoặc đã trả hàng");
   await assertPeriodOpen(db, new Date(), "hoàn tiền"); // B-08
   if (!(o.refund_due > 0)) throw conflict("nothing_to_refund", "Đơn không còn khoản tiền cần hoàn");
-  const refund = await refundPlan(db, id, o.total, 0, o.refund_due);
+  const refund = await refundPlan(db, id, o.total, 0, o.refund_due, "refund", c.get("user").id);
   if (!refund) throw conflict("nothing_to_refund", "Đơn không còn khoản tiền cần hoàn");
   const [g1, g2] = guardStmts(db, id, o.status);
   await runOrderBatch(db, id, o.status, [
     g1,
     assertStmt(db, "order.refund_due", `SELECT refund_due >= ? FROM orders WHERE id = ?`, [refund.amount, id]),
     refund.guard,
-    refund.stmt,
+    ...refund.stmts,
     db.prepare(`UPDATE orders SET payment_status=?, paid_total = paid_total - ?, refund_due = refund_due - ? WHERE id=?`).bind(refund.status, refund.amount, refund.amount, id),
     g2,
     auditStmt(c, { action: "online_order.refund", entity: "order", entityId: id, before: { refundDue: o.refund_due }, after: { amount: refund.amount, status: refund.status } }),
@@ -743,6 +749,14 @@ export interface SocialOrderInput {
   note?: string | null;
   shippingFee?: number;
   acceptPreorder?: boolean;
+  /** Giao hàng tại quầy (B3): đánh dấu nguồn + ca tạo + người giao, ghi cùng lúc tạo đơn. */
+  pos?: {
+    shiftId: number; delivererUserId?: number | null; zoneId?: number | null;
+    /** Giảm giá tay (VND, đã gồm phần chia của giảm giá cả đơn) theo từng dòng items — ghi order_lines.discount + orders.discount; tổng đơn = tiền hàng − giảm giá + phí giao. */
+    lineDiscounts?: number[];
+    /** Phiếu duyệt bán dưới giá vốn (ghi vào các dòng bị lỗ để truy vết như POS). */
+    belowCostApprovalId?: number | null;
+  };
 }
 
 export async function findZone(db: D1Database, district: string) {
@@ -810,7 +824,9 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
     slotCapacity = slot.capacity;
     if ((await slotUsed(db, b.slotDate, b.slotId)) >= slot.capacity) throw conflict("slot_full", "Khung giờ giao đã đầy");
   }
-  const total = subtotal + shippingFee;
+  const lineDisc = items.map((_, i) => Math.min(b.pos?.lineDiscounts?.[i] ?? 0, lineAmount(items[i].unitPrice, items[i].qtyMilli)));
+  const discountTotal = lineDisc.reduce((s, x) => s + x, 0);
+  const total = subtotal - discountTotal + shippingFee;
   const code = await nextOnlineCode(db);
   const token = newTrackingToken();
   const status: OnlineStatus = b.paymentMethod === "transfer" ? "awaiting_payment" : "new";
@@ -820,12 +836,14 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   try {
     const r = await db
       .prepare(
-        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, shipping_fee, total, note, created_by,
-                            tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id, payment_method, estimated_total)
-         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, discount, shipping_fee, total, note, created_by,
+                            tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id, payment_method, estimated_total,
+                            source, pos_shift_id, deliverer_user_id)
+         VALUES (?,?,'social','sale',?,?, 'draft', ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?)`,
       )
-      .bind(code, b.clientUuid ?? null, storeId, b.customerId ?? null, isPre, subtotal, shippingFee, total, b.note ?? null, user.id,
-        token, b.receiverName, b.receiverPhone, address, zone?.id ?? null, b.slotDate ?? null, b.slotId ?? null, b.paymentMethod, total)
+      .bind(code, b.clientUuid ?? null, storeId, b.customerId ?? null, isPre, subtotal, discountTotal, shippingFee, total, b.note ?? null, user.id,
+        token, b.receiverName, b.receiverPhone, address, b.pos?.zoneId ?? zone?.id ?? null, b.slotDate ?? null, b.slotId ?? null, b.paymentMethod, total,
+        b.pos ? "pos" : null, b.pos?.shiftId ?? null, b.pos?.delivererUserId ?? null)
       .run();
     orderId = r.meta.last_row_id as number;
   } catch (e) {
@@ -837,10 +855,10 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   }
   const cancelDraft = () => db.prepare(`UPDATE orders SET status='cancelled' WHERE id=? AND status='draft'`).bind(orderId).run();
   try {
-    for (const i of items) {
+    for (const [k, i] of items.entries()) {
       const r = await db
-        .prepare(`INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, ordered_qty_milli, preorder_milli) VALUES (?,?,?,?,?,?,0,?,?,?) RETURNING id`)
-        .bind(orderId, i.productId, i.unit, i.qtyMilli, i.unitPrice, i.priceListId, lineAmount(i.unitPrice, i.qtyMilli), i.qtyMilli, i.preorder)
+        .prepare(`INSERT INTO order_lines(order_id, product_id, unit, qty_milli, unit_price, price_list_id, discount, line_total, ordered_qty_milli, preorder_milli, below_cost_approval_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id`)
+        .bind(orderId, i.productId, i.unit, i.qtyMilli, i.unitPrice, i.priceListId, lineDisc[k], lineAmount(i.unitPrice, i.qtyMilli) - lineDisc[k], i.qtyMilli, i.preorder, lineDisc[k] > 0 ? b.pos?.belowCostApprovalId ?? null : null)
         .first<{ id: number }>();
       i.lineId = r!.id;
     }
@@ -864,7 +882,7 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
       }
       stmts.push(
         enqueueJobStmt(db, "notify.staff_new_order", "order", orderId, {}),
-        auditStmt(c, { action: "online_order.create_social", entity: "order", entityId: orderId, after: { code, total, lines: items.length, paymentMethod: b.paymentMethod, preorder: !!isPre } }),
+        auditStmt(c, { action: "online_order.create_social", entity: "order", entityId: orderId, after: { code, total, ...(discountTotal ? { discount: discountTotal } : {}), lines: items.length, paymentMethod: b.paymentMethod, preorder: !!isPre } }),
       );
       await db.batch(stmts);
     };

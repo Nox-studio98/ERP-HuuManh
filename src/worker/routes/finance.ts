@@ -8,6 +8,7 @@ import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { vnDayRangeUtc, vnPeriod, parseDayRange } from "../lib/time";
 import { getSettingInt } from "../services/settings";
+import { cashFormula } from "../services/shift-report";
 import { approveVoucher, cancelPendingVoucher } from "../services/vouchers";
 import { assertStmt } from "../services/guard";
 import { FUND_ORDER_OK } from "../services/fund-sql";
@@ -205,20 +206,21 @@ financeRoutes.get("/reconcile/shifts", requirePerm("finance.shift_reconcile"), a
   }
   const { results } = await c.env.DB
     .prepare(
-      `SELECT s.*, u.full_name AS cashier_name,
-              s.opening_cash + COALESCE((SELECT SUM(p.amount) FROM payments p JOIN orders o ON o.id = p.order_id
-                 WHERE o.shift_id = s.id AND o.status='completed' AND p.method='cash' AND p.status='confirmed'),0) AS computed_expected
+      `SELECT s.*, u.full_name AS cashier_name
          FROM shifts s JOIN users u ON u.id = s.user_id ${where} ORDER BY s.id DESC LIMIT 200`,
     )
     .bind(...params)
     .all<any>();
-  return c.json({
-    items: results.map((s) => ({
+  // PA-3: ca đang mở dùng đúng cashFormula (nguồn duy nhất của tiền mặt dự kiến); ca đã chốt lấy số đã lưu
+  const items = [];
+  for (const s of results) {
+    items.push({
       ...s,
-      expected_cash: s.status === "closed" ? s.expected_cash : s.computed_expected,
+      expected_cash: s.status === "closed" ? s.expected_cash : (await cashFormula(c.env.DB, s)).expected,
       diff: s.status === "closed" ? s.diff_cash : null,
-    })),
-  });
+    });
+  }
+  return c.json({ items });
 });
 
 financeRoutes.get("/periods", requirePerm("finance.view"), async (c) => {

@@ -88,3 +88,21 @@ Base `/api`. Đơn vị giá hiển thị = đơn vị chính sản phẩm (`bas
 - `POST /online-orders/:id/pack`: với đơn `transfer`/`gateway` đã `paid`, `diffAmount = total_mới − paid_total`; `diffStatus` = `pending` (≠ 0) hoặc `none`. Response thêm `diffAmount`. Dương = **"Thu thêm"** (cho phép ship; `deliver` ghi phiếu `payments` method `cod` quỹ `cod_clearing` đúng phần chênh, `paid_total += chênh`, `diffStatus='settled'`); âm = **"Hoàn lại"** (`deliver` bị chặn 409 `diff_unsettled` tới khi `refund-diff` hoặc `waive-diff`).
 - `GET /online-orders` (item) thêm `diffAmount` (chỉ khi pending), `diffStatus`. `GET /online-orders/:id` thêm `diffAmount`, `diffStatus`, `diffNote`, `diffKind` (`collect`|`refund`|null), `returns[]`, `returnedTotal`, `fullyReturned`.
 - Shop `GET /api/me/orders/:code` / `GET /api/orders/track/:token`: thêm `diffAmount`, `diffKind` (`collect`|`refund`), `returnedTotal`.
+
+
+## POS-KV đợt B3 — bán giao hàng tại quầy (migration 0040, `routes/pos-delivery.ts`)
+
+Đơn giao từ quầy là đơn online kênh `social` có `orders.source='pos'`, `pos_shift_id` (ca tạo; KHÔNG ghi `shift_id` nên không lẫn doanh thu POS thường), `deliverer_user_id` (nhân viên giao; xe ngoài dùng `carrier`/`carrier_tracking_no`). Doanh thu ghi khi giao xong (luồng `deliver` sẵn có).
+
+| Method | Path | Quyền | Mô tả |
+|---|---|---|---|
+| POST | /pos/delivery-orders | pos.sell + ca đang mở | Body: `{clientUuid?, customerId?, receiver:{name, phone, address, district?, zoneId?}, lines:[{productId, unit, qty}], shippingFee, deliverer:{userId}\|{carrier, trackingNo?}, prepay:[{method:cash\|transfer\|qr\|card\|ewallet, amount, ref?}], cod, note?}`. Giá theo bảng giá kênh online (không áp giảm giá tay). `prepay + cod` phải = `tiền hàng + shippingFee` → sai **422 `payment_mismatch`** `{total, prepay, cod}`. Không có ca mở → 409 `no_open_shift`; kỳ khoá → 423; thiếu tồn → 409 `insufficient_stock` (chưa ghi gì). Chạy đúng các bước sẵn có: `createSocialOrder` (giữ hàng FEFO) → `confirm` → `prepare` → `pack` (khối lượng thực = số đã cân) → `ship` (xuất kho đúng lô); tiền trả trước (`payments` vào quỹ của ca / quỹ ngân hàng theo hình thức) + `paid_total` + audit `pos_delivery.create` nằm CÙNG batch với bước `ship` (kèm `assertStmt` ca còn mở + tổng đơn). Lỗi giữa chừng → tự huỷ đơn (nhả giữ hàng). Response 201 `{id, code, status:'shipping', total, prepay, cod, trackingToken, trackingUrl, created:true}`; gửi lại cùng `clientUuid` → 200 `{..., created:false}` |
+| POST | /pos/delivery-quote | pos.sell | `{customerId?, lines[]}` → `{subtotal}` (tạm tính theo đúng cách tạo đơn giao, dùng cho sheet giao hàng) |
+| GET | /pos/delivery-zones | pos.sell | `{items:[{id, name, districts[], fee, freeOver, minOrder}]}` gợi ý phí giao |
+| GET | /pos/deliverers | pos.sell | `{items:[{id, fullName}]}` nhân viên đang hoạt động (chọn người giao) |
+| GET | /pos/delivery-addresses?customerId= | pos.sell | `{receiverName, receiverPhone (null nếu thiếu customers.view_pii), items:[{label, address}]}` gợi ý từ địa chỉ khách lẻ + sổ địa chỉ khách sỉ |
+
+- `GET /online-orders?source=pos` lọc đơn từ quầy; item thêm `source`, `carrier`, `carrierTrackingNo`; `GET /online-orders/:id` thêm `source`, `delivererUserId`, `posShiftId`.
+- COD: `deliver` thu phần còn lại `total − paid_total` vào quỹ chờ đối soát COD (đơn COD thường `paid_total=0` nên không đổi); trả trước đủ → `payment_status='paid'`, không có dòng COD.
+- Tiền mặt dự kiến của ca (`cashFormula`, `services/shift-report.ts`) cộng thêm `payments` tiền mặt của các đơn có `pos_shift_id = ca` (khách đã đưa tiền tại quầy dù đơn chưa hoàn tất).
+- `shipOrder(c, id, {carrier, trackingNo, extra?})` nhận thêm `extra` (statements ghi cùng batch "Đang giao").

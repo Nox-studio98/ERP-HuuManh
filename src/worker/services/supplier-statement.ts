@@ -22,7 +22,7 @@ export async function supplierStatement(db: D1Database, supplierId: number, from
     await db.prepare(`SELECT id, code, paid_at, amount, method FROM debt_payments WHERE partner_type = 'supplier' AND partner_id = ? AND direction = 'out' AND status = 'posted'`).bind(supplierId).all<any>()
   ).results;
   for (const r of pays) ev.push({ date: vnDate(new Date(r.paid_at)), ord: 1, id: r.id, docType: "payment", docCode: r.code, debit: 0, credit: r.amount, method: r.method });
-  const adjs = (await db.prepare(`SELECT id, code, type, created_at, amount FROM debt_adjustments WHERE partner_type = 'supplier' AND partner_id = ? AND status = 'posted'`).bind(supplierId).all<any>()).results;
+  const adjs = (await db.prepare(`SELECT id, code, type, COALESCE(posted_at, created_at) AS created_at, amount FROM debt_adjustments WHERE partner_type = 'supplier' AND partner_id = ? AND status = 'posted'`).bind(supplierId).all<any>()).results;
   for (const r of adjs) ev.push({ date: vnDate(new Date(r.created_at)), ord: 2, id: r.id, docType: r.type, docCode: r.code, debit: 0, credit: r.amount });
   ev.sort((a, b) => a.date.localeCompare(b.date) || a.ord - b.ord || a.id - b.id);
 

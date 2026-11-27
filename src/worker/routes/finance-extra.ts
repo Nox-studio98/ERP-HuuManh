@@ -7,7 +7,7 @@ import { AppError } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { vnDate, vnDayRangeUtc, vnPeriod } from "../lib/time";
 import { parseBody, guarded } from "../services/http";
-import { cashFlow, pnlByChannel, revenueByChannel, shrinkage, voucherCosts } from "../services/finance-reports";
+import { cashFlow, pnlAdjustments, pnlByChannel, revenueByChannel, shrinkage, voucherCosts } from "../services/finance-reports";
 
 export const financeExtraRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -108,7 +108,9 @@ financeExtraRoutes.get("/reports/vat", requirePerm("reports.view"), async (c) =>
     await db
       .prepare(
         `SELECT vat_rate_bp AS rateBp, COUNT(*) AS count, SUM(subtotal) AS base, SUM(vat_amount) AS vat
-           FROM invoices WHERE status <> 'cancelled' AND is_opening = 0 AND substr(issue_date,1,7) = ? GROUP BY vat_rate_bp ORDER BY vat_rate_bp`,
+           FROM invoices WHERE status <> 'cancelled' AND is_opening = 0 AND substr(issue_date,1,7) = ?
+            AND NOT EXISTS (SELECT 1 FROM orders po WHERE po.id = invoices.order_id AND po.channel = 'pos')
+          GROUP BY vat_rate_bp ORDER BY vat_rate_bp`,
       )
       .bind(period)
       .all<{ rateBp: number; count: number; base: number; vat: number }>()
@@ -123,7 +125,7 @@ financeExtraRoutes.get("/reports/vat", requirePerm("reports.view"), async (c) =>
     output: { count: byRate.reduce((s, r) => s + r.count, 0), base: byRate.reduce((s, r) => s + r.base, 0), vat: outVat, byRate },
     input: { count: inp!.count, total: inp!.total, vat: inp!.vat },
     payable: outVat - inp!.vat,
-    notice: "[Cần xác nhận hình thức kinh doanh] Số liệu tham khảo từ hoá đơn bán B2B và hoá đơn mua đã ghi nhận (không gồm số dư đầu kỳ và doanh thu bán lẻ POS/online); thuế phải nộp thực tế theo hình thức kê khai của cửa hàng.",
+    notice: "[Cần xác nhận hình thức kinh doanh] Số liệu tham khảo từ hoá đơn bán B2B và hoá đơn mua đã ghi nhận (không gồm số dư đầu kỳ, doanh thu bán lẻ POS/online và hoá đơn phải thu nội bộ sinh từ ghi nợ POS, kể cả hoá đơn điều chỉnh khi huỷ/trả); thuế phải nộp thực tế theo hình thức kê khai của cửa hàng.",
   });
 });
 
@@ -200,6 +202,20 @@ financeExtraRoutes.get("/reports/budget-vs-actual", requirePerm("reports.view"),
   };
   for (const r of costs) lineActual[r.line] = (lineActual[r.line] ?? 0) + r.amount;
   if (shrink) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + shrink;
+  // Chênh lệch kiểm kê/điều chỉnh tồn tính vào dòng hao hụt như /reports/pnl (giảm = chi phí, tăng = giảm chi phí)
+  const adj = await pnlAdjustments(db, fromIso, toIso);
+  const { stockCount, internalUse } = adj;
+  // PA-8: khớp /reports/pnl cùng kỳ — chiết khấu thanh toán giảm doanh thu; xoá nợ khó đòi và chênh lệch giá mua là chi phí khác
+  if (adj.paymentDiscount) lineActual.revenue -= adj.paymentDiscount;
+  if (adj.badDebt) lineActual.other = (lineActual.other ?? 0) + adj.badDebt;
+  if (adj.purchaseVariance) lineActual.other = (lineActual.other ?? 0) + adj.purchaseVariance;
+  if (stockCount) lineActual.shrinkage = (lineActual.shrinkage ?? 0) + stockCount;
+  // Xuất dùng nội bộ là chi phí vận hành (giá vốn lô) như trên /reports/pnl
+  if (internalUse) lineActual.opex = (lineActual.opex ?? 0) + internalUse;
+  lineActual.stockCount = stockCount;
+  lineActual.badDebt = adj.badDebt;
+  lineActual.purchaseVariance = adj.purchaseVariance;
+  lineActual.paymentDiscount = adj.paymentDiscount;
 
   const catAct = (
     await db

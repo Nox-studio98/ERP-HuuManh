@@ -1,6 +1,6 @@
 # Handoff — ERP Hữu Mạnh (cập nhật 24/11/2026)
 
-> **Bàn giao mới nhất (26/11/2026): xem `docs/BAN-GIAO.md`** — trạng thái PR/nhánh, việc tiếp theo theo ưu tiên, quyết định đã chốt, cách thiết lập lại khi chuyển tài khoản. Các PR đã gộp sau ngày 24/11: #16 giao diện PC 2B+2C, #17 sửa 34 lỗi audit, #18 phần còn lại + SePay, #19 PO tự động + cổng NCC, #20 chọn ngân hàng SePay. PR #21 (Bảng chấm công) đang chờ gộp.
+> **Bàn giao mới nhất (26/11/2026): xem `docs/BAN-GIAO.md`** — trạng thái PR/nhánh, việc tiếp theo theo ưu tiên, quyết định đã chốt, cách thiết lập lại khi chuyển tài khoản. Các PR đã gộp sau ngày 24/11: #16 giao diện PC 2B+2C, #17 sửa 34 lỗi audit, #18 phần còn lại + SePay, #19 PO tự động + cổng NCC, #20 chọn ngân hàng SePay. #21 Bảng chấm công dạng lưới, #22 tài liệu bàn giao (gộp 26/11).
 
 Tài liệu bàn giao trạng thái dự án sau **Đợt 1–4, phần bổ sung, audit bảo mật và audit nghiệp vụ**. Đọc kèm: **`docs/GO-LIVE.md` (kế hoạch go-live)**, **`docs/WIP-UX-PC.md` (việc đang dở: giao diện PC)**, `docs/UI-KIT.md`, `docs/audit/README.md` (đánh giá nghiệp vụ), `README.md` (cài đặt, lệnh), `docs/ARCHITECTURE.md`, `docs/SECOPS.md`, hợp đồng API `docs/API.md`, `docs/API-dot2.md`, `docs/API-dot3.md`, `docs/API-dot4.md`.
 
