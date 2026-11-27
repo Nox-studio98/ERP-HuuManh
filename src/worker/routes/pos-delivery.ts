@@ -9,7 +9,10 @@ import { assertStmt } from "../services/guard";
 import { assertPeriodOpen } from "../services/period";
 import { resolvePrice } from "../services/pricing";
 import { unitFactor } from "../services/http";
-import { cancelOrder, confirmOrder, createSocialOrder, packOrder, prepareOrder, shipOrder } from "../services/online-ops";
+import { allocateFefo, allocationCost } from "../services/stock";
+import { getSettingInt } from "../services/settings";
+import { cartHashOf, requireDiscountApproval } from "../services/discount-approval";
+import { cancelOrder, confirmOrder, createSocialOrder, packOrder, prepareOrder, shipOrder, splitAlloc } from "../services/online-ops";
 
 /**
  * POS-KV đợt B3: bán giao hàng tại quầy (docs/POS-KV-B.md).
@@ -36,7 +39,9 @@ const deliverySchema = z.object({
     productId: z.number().int().positive(),
     unit: z.string().min(1).max(20),
     qty: z.number().positive().max(1_000_000),
+    discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm tay trên dòng (như POS)
   })).min(1).max(100),
+  discount: z.number().int().min(0).max(MAX_VND).optional(), // VND, giảm tay cả đơn (như POS)
   shippingFee: z.number().int().min(0).max(10_000_000),
   deliverer: z.union([
     z.object({ userId: z.number().int().positive() }),
@@ -45,6 +50,9 @@ const deliverySchema = z.object({
   prepay: z.array(z.object({ method: z.enum(METHODS), amount: z.number().int().positive().max(MAX_VND), ref: z.string().trim().max(100).optional() })).max(5).default([]),
   cod: z.number().int().min(0).max(MAX_VND).default(0),
   note: z.string().trim().max(500).nullish(),
+  // A-29: giảm giá vượt ngưỡng / bán dưới vốn → quản lý duyệt (approvalId) hoặc người có quyền tự duyệt ghi lý do
+  approvalId: z.number().int().positive().optional(),
+  overrideReason: z.string().trim().min(3).max(300).optional(),
 });
 
 /** C2-02: người được giao hàng = tài khoản đang hoạt động của người làm tại cửa hàng (chủ, quản lý, thu ngân, thủ kho, nhân viên online, nhân viên chung; không phải kế toán) và chưa nghỉ việc. */
@@ -60,24 +68,38 @@ async function fundFor(db: D1Database, storeId: number, method: string, shift: {
   throw new AppError(422, "no_fund", "Chưa cấu hình quỹ ngân hàng cho hình thức thanh toán này");
 }
 
-/** Tạm tính theo bảng giá kênh online (đúng như createSocialOrder sẽ tính). */
-async function quoteSubtotal(db: D1Database, customerId: number | null, lines: { productId: number; unit: string; qty: number }[]) {
+/** Tạm tính theo bảng giá kênh online (đúng như createSocialOrder sẽ tính) + giảm giá tay chia theo dòng như POS (giảm dòng, rồi giảm cả đơn chia theo tỷ lệ). */
+async function quote(db: D1Database, customerId: number | null, lines: { productId: number; unit: string; qty: number; discount?: number }[], orderDiscount = 0) {
   const group = customerId ? (await db.prepare(`SELECT customer_group_id FROM customers WHERE id = ?`).bind(customerId).first<{ customer_group_id: number | null }>())?.customer_group_id ?? null : null;
-  let subtotal = 0;
+  const items: { gross: number; qtyMilli: number; discount: number }[] = [];
   for (const l of lines) {
     const factor = await unitFactor(db, l.productId, l.unit);
     const price = await resolvePrice(db, l.productId, { channel: "online", customerGroupId: group, customerId });
-    subtotal += lineAmount(price.unitPrice, toMilli(l.qty, factor));
+    const qtyMilli = toMilli(l.qty, factor);
+    const gross = lineAmount(price.unitPrice, qtyMilli);
+    items.push({ gross, qtyMilli, discount: Math.min(l.discount ?? 0, gross) });
   }
-  return subtotal;
+  const baseSum = items.reduce((s, i) => s + i.gross - i.discount, 0);
+  if (orderDiscount > baseSum) throw new AppError(422, "discount_too_large", "Giảm giá lớn hơn giá trị đơn");
+  let given = 0;
+  items.forEach((it, idx) => {
+    const share = idx === items.length - 1 ? orderDiscount - given : baseSum > 0 ? Math.floor((orderDiscount * (it.gross - it.discount)) / baseSum) : 0;
+    given += share;
+    it.discount += share;
+  });
+  const subtotal = items.reduce((s, i) => s + i.gross, 0);
+  const discount = items.reduce((s, i) => s + i.discount, 0);
+  return { items, subtotal, discount };
 }
 
 /** Link tra cứu của khách: tuyệt đối nếu cấu hình SHOP_BASE_URL, không thì đường dẫn tương đối. */
 const trackUrl = (env: { SHOP_BASE_URL?: string }, token: string) => `${(env.SHOP_BASE_URL ?? "").replace(/\/$/, "")}/track/${token}`;
 
 posDeliveryRoutes.post("/pos/delivery-quote", requirePerm("pos.sell"), async (c) => {
-  const b = z.object({ customerId: z.number().int().positive().nullish(), lines: deliverySchema.shape.lines }).parse(await c.req.json().catch(() => ({})));
-  return c.json({ subtotal: await quoteSubtotal(c.env.DB, b.customerId ?? null, b.lines) });
+  const b = z.object({ customerId: z.number().int().positive().nullish(), lines: deliverySchema.shape.lines, discount: deliverySchema.shape.discount }).parse(await c.req.json().catch(() => ({})));
+  const q = await quote(c.env.DB, b.customerId ?? null, b.lines, b.discount ?? 0);
+  // subtotal = tiền hàng theo giá online (trước giảm giá tay); net = sau giảm giá tay
+  return c.json({ subtotal: q.subtotal, discount: q.discount, net: q.subtotal - q.discount });
 });
 
 posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c) => {
@@ -119,8 +141,35 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
   }
 
   // Tổng dự tính (cùng cách tính với createSocialOrder) để chặn sai lệch thanh toán TRƯỚC khi giữ hàng
-  const subtotal = await quoteSubtotal(db, b.customerId ?? null, b.lines);
-  const total = subtotal + b.shippingFee;
+  const q = await quote(db, b.customerId ?? null, b.lines, b.discount ?? 0);
+  const subtotal = q.subtotal;
+  const total = subtotal - q.discount + b.shippingFee;
+
+  // A-29: giảm giá tay vượt ngưỡng % bảng giá hoặc bán dưới giá vốn → cần duyệt (quản lý/chủ tự duyệt phải ghi lý do). Không trả giá vốn cho client.
+  let approvalUsed: number | null = null;
+  let belowCost = false;
+  let selfApproved: string[] = [];
+  if (q.discount > 0) {
+    const discountBp = await getSettingInt(db, "approval.discount_pct_bp", 1000);
+    const reasons: string[] = [];
+    if (subtotal > 0 && (q.discount * 10000) / subtotal > discountBp) reasons.push("discount");
+    const byProduct = new Map<number, number[]>();
+    b.lines.forEach((l, i) => byProduct.set(l.productId, [...(byProduct.get(l.productId) ?? []), i]));
+    const costs: number[] = new Array(b.lines.length).fill(0);
+    for (const [pid, idxs] of byProduct) {
+      const alloc = await allocateFefo(db, pid, idxs.reduce((s, i) => s + q.items[i].qtyMilli, 0), storeId);
+      splitAlloc(alloc, idxs.map((i) => q.items[i].qtyMilli)).forEach((a, k) => (costs[idxs[k]] = allocationCost(a)));
+    }
+    if (q.items.some((it, i) => it.discount > 0 && it.gross - it.discount < costs[i])) (reasons.push("below_cost"), (belowCost = true));
+    if (reasons.length) {
+      if (!can(user.role, "approvals.decide")) {
+        const hash = await cartHashOf({ k: "pos_delivery", l: b.lines.map((l) => [l.productId, l.unit, l.qty, l.discount ?? 0]), d: b.discount ?? 0, c: b.customerId ?? null });
+        approvalUsed = await requireDiscountApproval(c, b.clientUuid ?? "", b.approvalId, reasons, { total, discountValue: q.discount, source: "pos_delivery" }, hash);
+      } else if (!b.overrideReason) {
+        throw new AppError(422, "override_reason_required", "Bán dưới giá vốn hoặc giảm giá vượt ngưỡng cần nhập lý do", { reasons });
+      } else selfApproved = reasons;
+    }
+  }
   const prepayTotal = b.prepay.reduce((s, p) => s + p.amount, 0);
   if (prepayTotal + b.cod !== total) {
     throw new AppError(422, "payment_mismatch", "Trả trước + thu hộ COD phải bằng tổng đơn", { total, prepay: prepayTotal, cod: b.cod });
@@ -139,11 +188,11 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
     receiverPhone: b.receiver.phone,
     addressLine: b.receiver.address,
     district: b.receiver.district ?? "",
-    items: b.lines,
+    items: b.lines.map((l) => ({ productId: l.productId, unit: l.unit, qty: l.qty })),
     paymentMethod: "cod",
     note: b.note ?? null,
     shippingFee: b.shippingFee,
-    pos: { shiftId: shift.id, delivererUserId, zoneId: b.receiver.zoneId ?? null },
+    pos: { shiftId: shift.id, delivererUserId, zoneId: b.receiver.zoneId ?? null, lineDiscounts: q.items.map((i) => i.discount), belowCostApprovalId: belowCost ? approvalUsed : null },
   });
   const id = created.id;
   if (!created.created) {
@@ -164,13 +213,16 @@ posDeliveryRoutes.post("/pos/delivery-orders", requirePerm("pos.sell"), async (c
     const pay: D1PreparedStatement[] = [
       assertStmt(db, "pos_delivery.shift_open", `SELECT status = 'open' FROM shifts WHERE id = ?`, [shift.id]),
       assertStmt(db, "pos_delivery.total", `SELECT total = ? FROM orders WHERE id = ?`, [total, id]),
+      ...(approvalUsed ? [assertStmt(db, "pos_delivery.approval", `SELECT status = 'approved' AND ref_id IS NULL FROM approvals WHERE id = ?`, [approvalUsed])] : []),
       ...b.prepay.map((p) =>
         db.prepare(`INSERT INTO payments(order_id, method, amount, fund_id, ref, status) VALUES (?,?,?,?,?, 'confirmed')`).bind(id, p.method, p.amount, payFunds.get(p.method)!, p.ref ?? null),
       ),
       db.prepare(`UPDATE orders SET paid_total = ?, payment_status = ? WHERE id = ?`).bind(prepayTotal, b.cod === 0 ? "paid" : "unpaid", id),
+      ...(approvalUsed ? [db.prepare(`UPDATE approvals SET ref_type='order', ref_id=? WHERE id=? AND ref_id IS NULL`).bind(String(id), approvalUsed)] : []),
+      ...(selfApproved.length ? [auditStmt(c, { action: "order.self_approve", entity: "order", entityId: id, after: { reasons: selfApproved, total, source: "pos_delivery" }, reason: b.overrideReason })] : []),
       auditStmt(c, {
         action: "pos_delivery.create", entity: "order", entityId: id,
-        after: { code: o.code, total, prepay: b.prepay.map((p) => ({ method: p.method, amount: p.amount })), cod: b.cod, shiftId: shift.id, deliverer: delivererUserId ?? carrier, trackingNo: trackingNo ?? null },
+        after: { code: o.code, total, ...(q.discount ? { discount: q.discount, approvalId: approvalUsed } : {}), prepay: b.prepay.map((p) => ({ method: p.method, amount: p.amount })), cod: b.cod, shiftId: shift.id, deliverer: delivererUserId ?? carrier, trackingNo: trackingNo ?? null },
       }),
     ];
     // 3) → "Đang giao": xuất kho đúng lô (FEFO) + ghi tiền trả trước vào két ca, cùng một batch

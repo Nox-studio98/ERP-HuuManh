@@ -7,6 +7,7 @@ import { buildXlsx, XLSX_MIME } from "../services/xlsx";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, parseImportFile } from "../services/import-parse";
 import { IMPORT_KINDS, ImportFileError, templateRows, type ImportKind, type ImportMode, type KindDef } from "../services/import-excel";
 import { guarded } from "../services/http";
+import { COUNT_IMPORT_COLS, COUNT_IMPORT_NOTES, analyzeCountImport, type CountDoc } from "../services/import-count";
 
 /**
  * Nhập hàng loạt từ Excel/CSV (hàng hoá, khách sỉ, nhà cung cấp). Luồng hai bước:
@@ -124,4 +125,89 @@ importRoutes.post("/imports/:kind/commit", guard, async (c) => {
     throw e;
   }
   return c.json({ kind: d.kind, filename, mode, created: built.created, updated: built.updated, skipped: built.skipped, errors: errorRows }, 201);
+});
+
+// ---------------------------------------------------------------- kết quả kiểm kho → phiếu kiểm kê nháp
+async function loadCountDraft(c: Ctx): Promise<CountDoc & { type: string }> {
+  const id = Number(c.req.param("id"));
+  const d = Number.isInteger(id) ? await c.env.DB.prepare(`SELECT id, code, type, status, location_id FROM stock_docs WHERE id = ?`).bind(id).first<any>() : null;
+  if (!d) throw notFound("not_found", "Không tìm thấy chứng từ");
+  if (d.type !== "count") throw new AppError(422, "not_count_doc", "Chỉ nhập kết quả vào phiếu kiểm kê");
+  if (d.status !== "draft") throw conflict("doc_not_draft", "Phiếu kiểm kê không còn ở trạng thái nháp");
+  return d;
+}
+
+importRoutes.get("/stock-docs/:id/count-import", requirePerm("inventory.write"), async (c) => {
+  await loadCountDraft(c);
+  return c.json({
+    title: "Nhập kết quả kiểm kho", notes: COUNT_IMPORT_NOTES, limits: { maxBytes: IMPORT_MAX_BYTES, maxRows: IMPORT_MAX_ROWS },
+    columns: COUNT_IMPORT_COLS.map((x) => ({ key: x.key, header: x.header, required: x.key === "qty", hint: x.hint })),
+  });
+});
+
+/** Mẫu = danh sách lô còn tồn tại vị trí của phiếu (cột Số đếm để trống). */
+async function countTemplate(c: Ctx) {
+  const d = await loadCountDraft(c);
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT l.lot_code, p.sku, p.name, p.base_unit, l.qty_on_hand_milli FROM lots l JOIN products p ON p.id = l.product_id
+        WHERE l.location_id = ? AND l.status <> 'closed' AND l.qty_on_hand_milli > 0 ORDER BY p.name, l.received_at, l.id LIMIT ?`,
+    )
+    .bind(d.location_id, IMPORT_MAX_ROWS)
+    .all<any>();
+  const header = ["Mã lô", "Mã hàng", "Tên hàng", "Đơn vị", "Tồn hệ thống", "Số đếm"];
+  const rows = results.map((r) => [r.lot_code, r.sku, r.name, r.base_unit, r.qty_on_hand_milli / 1000, ""]);
+  return { d, header, rows };
+}
+importRoutes.get("/stock-docs/:id/count-import/template.xlsx", requirePerm("inventory.write"), async (c) => {
+  const { d, header, rows } = await countTemplate(c);
+  const bytes = buildXlsx([
+    { name: "Kiểm kê", columns: header.map((h, i) => ({ header: h, type: "text" as const, width: i === 2 ? 36 : 16 })), rows },
+    { name: "Hướng dẫn", columns: [{ header: "Cột", type: "text", width: 18 }, { header: "Ý nghĩa", type: "text", width: 100 }], rows: [...COUNT_IMPORT_COLS.map((x) => [x.header, x.hint]), ["Lưu ý", `Tối đa ${IMPORT_MAX_ROWS} dòng. Để trống Số đếm với lô chưa đếm.`], ...COUNT_IMPORT_NOTES.map((n) => ["", n])] },
+  ]);
+  return new Response(bytes as BodyInit, { status: 200, headers: { "content-type": XLSX_MIME, "content-disposition": `attachment; filename="kiem-kho-${d.code}.xlsx"`, "cache-control": "no-store" } });
+});
+importRoutes.get("/stock-docs/:id/count-import/template.csv", requirePerm("inventory.write"), async (c) => {
+  const { d, header, rows } = await countTemplate(c);
+  const csv = "\uFEFF" + [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  return new Response(csv, { status: 200, headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="kiem-kho-${d.code}.csv"`, "cache-control": "no-store" } });
+});
+
+async function analyzeCount(c: Ctx) {
+  const d = await loadCountDraft(c);
+  const { bytes, filename } = await readUpload(c);
+  const sheet = parseImportFile(bytes, filename);
+  try {
+    return { d, bytes, filename, sheet, a: await analyzeCountImport(c, d, sheet) };
+  } catch (e) {
+    if (e instanceof ImportFileError) throw new AppError(422, "missing_columns", e.message);
+    throw e;
+  }
+}
+const countSummary = (rows: { status: string; diffQty: number | null; warnings: string[] }[]) => ({
+  lines: rows.length,
+  ok: rows.filter((r) => r.status === "ok").length,
+  skip: rows.filter((r) => r.status === "skip").length,
+  error: rows.filter((r) => r.status === "error").length,
+  withDiff: rows.filter((r) => r.status === "ok" && !!r.diffQty).length,
+  warned: rows.filter((r) => r.status === "ok" && r.warnings.length).length,
+});
+
+importRoutes.post("/stock-docs/:id/count-import/preview", requirePerm("inventory.write"), async (c) => {
+  const { d, filename, sheet, a } = await analyzeCount(c);
+  return c.json({ docId: d.id, docCode: d.code, filename, format: sheet.format, summary: countSummary(a.rows), ignoredColumns: a.ignoredColumns, rows: a.rows });
+});
+
+importRoutes.post("/stock-docs/:id/count-import/commit", requirePerm("inventory.write"), async (c) => {
+  const { d, bytes, filename, a } = await analyzeCount(c);
+  const built = a.build({ fileHash: await sha256(bytes), filename });
+  const errors = a.rows.filter((r) => r.status === "error").length;
+  if (built.written + built.updated === 0) throw new AppError(422, "nothing_to_import", errors ? "Không có dòng hợp lệ nào để ghi — hãy sửa các dòng lỗi rồi tải lại" : "Không có dòng nào có số đếm để ghi", { errors });
+  try {
+    await guarded(() => c.env.DB.batch(built.stmts), "Phiếu hoặc tồn lô vừa thay đổi — hãy xem trước lại");
+  } catch (e) {
+    if (String((e as Error)?.message ?? "").includes("once_keys")) throw conflict("already_done", "File này đã được nhập vào phiếu rồi (cùng nội dung).");
+    throw e;
+  }
+  return c.json({ docId: d.id, docCode: d.code, filename, added: built.written, overwritten: built.updated, skipped: a.rows.filter((r) => r.status === "skip").length, errors }, 201);
 });

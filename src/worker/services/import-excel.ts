@@ -44,10 +44,10 @@ export interface KindDef {
 }
 
 // ---------------------------------------------------------------- tiện ích chung
-const nfc = (s: string) => s.normalize("NFC").replace(/\s+/g, " ").trim();
+export const nfc = (s: string) => s.normalize("NFC").replace(/\s+/g, " ").trim();
 const lc = (s: string) => nfc(s).toLowerCase();
 
-function mapColumns(cols: ColDef[], sheet: ParsedSheet) {
+export function mapColumns(cols: ColDef[], sheet: ParsedSheet) {
   const byNorm = new Map<string, ColDef>();
   for (const c of cols) { byNorm.set(normHeader(c.header), c); for (const a of c.aliases ?? []) byNorm.set(normHeader(a), c); }
   const idx = new Map<string, number>();
@@ -67,7 +67,7 @@ export function missingColumnsError(missing: string[]) {
 }
 
 /** Đọc một dòng thành {khoá: chuỗi} + ghi lỗi công thức (xlsx) / ký tự công thức (csv, ô chữ). */
-function readRow(sheet: ParsedSheet, cols: ColDef[], idx: Map<string, number>, row: { line: number; cells: string[] }, errors: string[]) {
+export function readRow(sheet: ParsedSheet, cols: ColDef[], idx: Map<string, number>, row: { line: number; cells: string[] }, errors: string[]) {
   const f: Record<string, string> = {};
   for (const c of cols) {
     const i = idx.get(c.key);
@@ -114,7 +114,7 @@ const intIn = (s: string, min: number, max: number): number | null | undefined =
   return n >= min && n <= max ? n : undefined;
 };
 
-const sampleRows = (cols: ColDef[]) => {
+export const sampleRows = (cols: ColDef[]) => {
   const n = Math.max(...cols.map((c) => c.example.length));
   return Array.from({ length: n }, (_, i) => cols.map((c) => c.example[i] ?? ""));
 };
