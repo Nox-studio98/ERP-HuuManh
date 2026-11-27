@@ -12,7 +12,7 @@ Tài liệu này dành cho **người/tài khoản tiếp nhận** (kể cả m�
 | **Bảng chấm công dạng lưới (kiểu KiotViet)** | ✅ **Đã gộp** (26/11/2026) | PR [#21](https://github.com/Nox-studio98/ERP-HuuManh/pull/21) |
 | Nhập nhanh đơn sỉ (Zalo + bảng nhiều chi nhánh + đọc ảnh) | ⏸ **Làm sau** — chỉ làm khi mọi phần khác đã sửa chuẩn; hiện có thiết kế + PoC, chưa code | nhánh `claude/zalo-order-design` (`docs/ZALO-ORDER.md`, `docs/concept-nhap-nhanh-don-si.html`, `tools/ocr-poc/`) — chưa có PR |
 | **PR #23 (nhánh `claude/dazzling-ptolemy-f44jju`)** | 🟡 **CI xanh, chờ chủ dự án đồng ý gộp** | PR [#23](https://github.com/Nox-studio98/ERP-HuuManh/pull/23) — nội dung ở mục 1b |
-| Bán hàng tại quầy theo KiotViet — đợt A (A1–A6) | ✅ Xong trong PR #23 (E2E `e2e/pos-kv.mjs`); đợt B chưa làm | `docs/POS-KV.md` |
+| Bán hàng tại quầy theo KiotViet — đợt A (A1–A6) và đợt B (bán nợ khách lẻ, thu khác, giao hàng tại quầy) | ✅ Xong trong PR #23 (E2E `pos-kv`, `pos-kv-b`, `pos-kv-b-delivery`) | `docs/POS-KV.md`, `docs/POS-KV-B.md` |
 | Tài liệu bàn giao (file này, hướng dẫn Bảng chấm công, script E2E) | ✅ **Đã gộp** (26/11/2026) | PR [#22](https://github.com/Nox-studio98/ERP-HuuManh/pull/22) |
 | Bản demo | Chưa có PR #18–#23 — sau khi gộp #23 cần **tạo release** `demo-YYYY-MM-DD` | xem mục 6 |
 
@@ -25,6 +25,7 @@ Kiểm thử ở thời điểm gộp #21 (nhánh `claude/hr-board`): `tsc` sạ
 - **Khách lẻ** (migration 0034, 0037): danh sách, chi tiết, sửa, ngừng, gộp khách trùng; trigger hoàn/thu hồi điểm tra sổ theo đơn.
 - **Báo cáo bán hàng** (người bán, hàng hoá, khách, NCC) + **hoa hồng theo quy tắc** vào bảng lương (migration 0036; không có quy tắc → giữ thưởng doanh số % cũ).
 - **Nhập Excel/CSV** hàng hoá, khách sỉ, NCC; **xuất dùng nội bộ** (chi phí trong lãi lỗ, cột riêng trong nhập-xuất-tồn); **chuyển tiền giữa các quỹ** (không vào lãi lỗ, không tính vào thu/chi của báo cáo cuối ngày) (migration 0035).
+- **POS-KV đợt B** (`docs/POS-KV-B.md`, migration 0038–0040): bán nợ khách lẻ (hoá đơn phải thu + QR `HDS` trên phiếu; thu ngân tự ghi nợ ≤ 500.000đ trong hạn mức, vượt ngưỡng hoặc vượt hạn mức → quản lý duyệt `order.credit` dùng một lần; hạn mức 0 = chưa được bán nợ; thu nợ tại quầy vào tiền mặt dự kiến ca), thu khác trên hoá đơn (loại phí cấu hình ở Cài đặt; trả một phần không hoàn phí), bán giao hàng tại quầy (đơn online `source='pos'` sang thẳng "Đang giao", trả trước vào két ca, COD vào quỹ chờ đối soát, doanh thu khi giao xong).
 - Đối chiếu KiotViet trong mã: `docs/KIOTVIET-KHOANG-TRONG.md`.
 - Giả định đã chọn, cần chủ xác nhận: hoa hồng chỉ tính đơn tại quầy; chỉ chủ sửa quy tắc hoa hồng; màn khách lẻ dùng quyền xem khách sỉ (thủ kho thấy danh sách, SĐT bị che); chuyển quỹ không cho quỹ nguồn âm và không dùng quỹ chờ đối soát; nhập Excel tối đa 1000 dòng/lần.
 
