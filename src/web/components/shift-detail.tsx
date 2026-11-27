@@ -42,7 +42,7 @@ export function ShiftDetailBody({ s }: { s: ShiftSummary }) {
       </Card>
       <Card title={`Phiếu thu / chi của quầy trong ca (${s.vouchers.items.length})`}>
         {s.vouchers.items.length === 0 ? <div className="hint">Không có phiếu thu/chi.</div> : (
-          <DataTable rows={s.vouchers.items} rowKey={(v: any) => v.code} cols={[
+          <DataTable rows={s.vouchers.items} rowKey={(v: any) => v.code + v.direction} cols={[
             { key: "c", label: "Phiếu", title: true, render: (v: any) => <>{v.code} <Badge tone={v.direction === "in" ? "ok" : "warn"}>{v.direction === "in" ? "Thu" : "Chi"}</Badge></> },
             { key: "k", label: "Khoản mục", render: (v: any) => <>{v.category}{v.inExpected ? <> <Badge tone="info">tính vào két</Badge></> : null}</> },
             { key: "a", label: "Số tiền", right: true, num: true, render: (v: any) => money(v.amount) },

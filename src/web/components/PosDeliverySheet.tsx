@@ -35,7 +35,7 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
   const [method, setMethod] = useState<(typeof PAY_METHODS)[number]>("cash");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const [uid] = useState(() => uuid());
+  const [uid, setUid] = useState(() => uuid());
   const [res, setRes] = useState<Result | null>(null);
   const [snap, setSnap] = useState<{ name: string; phone: string; address: string; deliverer: string; lines: DeliveryLine[] } | null>(null);
 
@@ -74,11 +74,20 @@ export function PosDeliverySheet({ lines, customer, hasManualDiscount, onClose, 
         prepay: prepay > 0 ? [{ method, amount: prepay }] : [],
         cod,
         ...(note.trim() ? { note: note.trim() } : {}),
-      });
+      }) as Result & { status?: string };
+      // B-N1: chỉ coi là thành công (và in phiếu) khi đơn thật sự ở "Đang giao"
+      if (r.status !== "shipping") {
+        setUid(uuid());
+        toast(`Đơn ${r.code ?? ""} chưa sang "Đang giao" (trạng thái: ${r.status ?? "không rõ"}) — chưa in phiếu, hãy kiểm tra ở màn Đơn online rồi tạo lại`, "error");
+        return;
+      }
       setSnap({ name: name.trim(), phone: phone.trim(), address: address.trim(), deliverer: who === "staff" ? staff.data?.find((s) => s.id === staffId)?.fullName ?? "" : `${carrier.trim()}${tracking.trim() ? ` · ${tracking.trim()}` : ""}`, lines });
       setRes(r as Result);
       toast(`Đã tạo đơn giao ${(r as Result).code} — đang giao`, "ok");
     } catch (e) {
+      // Máy chủ đã trả lỗi → lần này không tạo được đơn: lần thử sau dùng mã mới (không gửi lại mã của lần đã thất bại/đã huỷ).
+      // Lỗi mạng (không có phản hồi) thì giữ mã để gửi lại vẫn idempotent, tránh tạo trùng đơn.
+      if (e instanceof ApiError) setUid(uuid());
       if (e instanceof ApiError && e.code === "payment_mismatch") { quote.reload(); toast("Tổng đơn vừa thay đổi, đã cập nhật lại — kiểm tra rồi bấm tạo lại", "error"); }
     } finally { setBusy(false); }
   };

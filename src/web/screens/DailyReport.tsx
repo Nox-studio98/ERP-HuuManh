@@ -90,7 +90,7 @@ export default function DailyReport() {
                   {(d.cashFlow?.byCategory ?? []).length === 0 ? <div className="hint">Không có phiếu thu/chi.</div> : (
                     <DataTable rows={d.cashFlow.byCategory} rowKey={(c: any) => c.direction + c.category} cols={[
                       { key: "c", label: "Khoản mục", title: true, render: (c: any) => <>{c.category} <Badge tone={c.transfer ? "info" : c.direction === "in" ? "ok" : "warn"}>{c.transfer ? "Chuyển quỹ" : c.direction === "in" ? "Thu" : "Chi"}</Badge></> },
-                      { key: "n", label: "Số phiếu", right: true, num: true, render: (c: any) => c.count },
+                      { key: "n", label: "Số phiếu", right: true, num: true, render: (c: any) => c.count || "—" },
                       { key: "a", label: "Số tiền", right: true, num: true, render: (c: any) => money(c.amount) },
                     ]} />
                   )}
