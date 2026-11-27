@@ -59,13 +59,13 @@ function Sellers({ q, cost }: { q: Q; cost: boolean }) {
         { label: "Giá trị TB / đơn", value: money(t?.saleCount ? Math.round(t.sales / t.saleCount) : 0) },
         ...(cost ? [{ label: "Lãi gộp", value: money(t?.grossProfit ?? 0), tone: "ok" as const, sub: `Biên ${pct(t?.grossProfit ?? 0, t?.revenue ?? 0)}` }] : []),
       ]} />
-      {d?.basis === "lines" && <div className="small muted">Đang lọc theo nhóm hàng: số liệu tính trên dòng hàng của nhóm, không gồm phí giao hàng.</div>}
+      <div className="small muted">Doanh thu không gồm thu khác (cùng cơ sở hoa hồng và thưởng doanh số). Thu khác (phí đóng gói, giỏ quà...) hiển thị riêng ở cột "Thu khác"{d?.groupId != null ? "; khi lọc theo nhóm hàng, số liệu tính trên dòng hàng của nhóm (không gồm phí giao) và cột này không áp dụng" : ""}.</div>
       {!rows.length ? <Card>{EMPTY}</Card> : (
         <>
           <Card title="Doanh thu thuần theo người bán"><BarChart width={wide ? 1000 : 560} height={wide ? 220 : 180} maxBar={wide ? 56 : 44} labelMax={wide ? 14 : 9} data={rows.slice(0, 10).map((x) => ({ label: x.sellerName, value: x.revenue }))} /></Card>
           <div className="row" style={{ justifyContent: "flex-end" }}><ExportButton filename={`ban-hang-theo-nguoi-ban_${q.from}_${q.to}`} rows={rows} columns={[
               { label: "Người bán", value: (x) => x.sellerName }, { label: "Số đơn", value: (x) => x.saleCount }, { label: "Doanh thu bán", value: (x) => x.sales }, { label: "Trả hàng", value: (x) => x.returns },
-              { label: "Doanh thu thuần", value: (x) => x.revenue }, { label: "TB / đơn", value: (x) => x.avgOrder }, ...(cost ? [{ label: "Giá vốn", value: (x: any) => x.cogs }, { label: "Lãi gộp", value: (x: any) => x.grossProfit }] : []),
+              { label: "Doanh thu thuần", value: (x) => x.revenue }, { label: "Thu khác", value: (x) => x.otherCharges ?? 0 }, { label: "TB / đơn", value: (x) => x.avgOrder }, ...(cost ? [{ label: "Giá vốn", value: (x: any) => x.cogs }, { label: "Lãi gộp", value: (x: any) => x.grossProfit }] : []),
             ]} /></div>
           <DataTable rows={rows} rowKey={(x) => x.sellerId ?? "none"} defaultSort={{ key: "rev", dir: "desc" }}
                         cols={[
@@ -74,6 +74,7 @@ function Sellers({ q, cost }: { q: Q; cost: boolean }) {
               { key: "s", label: "Doanh thu bán", num: true, hideBelow: 1024, sort: (x) => x.sales, render: (x) => money(x.sales) },
               { key: "r", label: "Trả hàng", num: true, sort: (x) => x.returns, render: (x) => (x.returns ? <span style={{ color: "var(--danger)" }}>{money(-x.returns)}</span> : "—") },
               { key: "rev", label: "Doanh thu thuần", num: true, sort: (x) => x.revenue, render: (x) => <b>{money(x.revenue)}</b> },
+              { key: "oc", label: "Thu khác", num: true, hideBelow: 1024, sort: (x) => x.otherCharges ?? 0, render: (x) => (x.otherCharges ? money(x.otherCharges) : "—") },
               { key: "a", label: "TB / đơn", num: true, hideBelow: 1280, sort: (x) => x.avgOrder, render: (x) => money(x.avgOrder) },
               ...(cost ? [{ key: "g", label: "Lãi gộp", num: true, sort: (x: any) => x.grossProfit, render: (x: any) => money(x.grossProfit) }, { key: "m", label: "Biên", num: true, hideBelow: 1280 as const, sort: (x: any) => (x.revenue ? x.grossProfit / x.revenue : -1), render: (x: any) => (x.revenue ? <Badge tone={x.grossProfit / x.revenue < 0.1 ? "warn" : "ok"}>{pct(x.grossProfit, x.revenue)}</Badge> : "—") }] : []),
             ]} />

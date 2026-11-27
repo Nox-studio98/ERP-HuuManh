@@ -301,25 +301,30 @@ async function analyzeProducts(c: Ctx, sheet: ParsedSheet): Promise<Analysis> {
           if (it.minStockMilli != null) { sets.push("min_stock_milli = ?"); binds.push(it.minStockMilli); }
           body.push(db.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ?`).bind(...binds, it.existing.id));
         }
+        // B-N4: hàng đã có → dùng mã đúng như trong DB (so khớp không phân biệt hoa/thường, nhưng products.sku phân biệt)
+        const dbSku = it.existing ? it.existing.sku : it.sku;
         for (const u of it.units) {
           body.push(
             db.prepare(`INSERT INTO product_units(product_id, unit, factor_milli, barcode) SELECT id, ?, ?, ? FROM products WHERE sku = ?
                         ON CONFLICT(product_id, unit) DO UPDATE SET factor_milli = excluded.factor_milli, barcode = COALESCE(excluded.barcode, product_units.barcode)`)
-              .bind(u.unit, u.factorMilli, u.barcode, it.sku),
+              .bind(u.unit, u.factorMilli, u.barcode, dbSku),
           );
         }
         if (baseList && it.price != null && (!it.existing || it.priceChanged)) {
           const pid = `(SELECT id FROM products WHERE sku = ?)`;
           if (canApprovePrice) {
             body.push(
-              db.prepare(`UPDATE prices SET effective_to = ? WHERE price_list_id = ? AND product_id = ${pid} AND status = 'active' AND effective_to IS NULL AND effective_from < ?`).bind(now, baseList.id, it.sku, now),
-              db.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by, approved_by, note) SELECT ?, id, ?, ?, 'active', ?, ?, 'Nhập từ Excel' FROM products WHERE sku = ?`).bind(baseList.id, it.price, now, user.id, user.id, it.sku),
+              db.prepare(`UPDATE prices SET effective_to = ? WHERE price_list_id = ? AND product_id = ${pid} AND status = 'active' AND effective_to IS NULL AND effective_from < ?`).bind(now, baseList.id, dbSku, now),
+              db.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by, approved_by, note) SELECT ?, id, ?, ?, 'active', ?, ?, 'Nhập từ Excel' FROM products WHERE sku = ?`).bind(baseList.id, it.price, now, user.id, user.id, dbSku),
             );
           } else {
             body.push(
-              db.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by, note) SELECT ?, id, ?, ?, 'pending', ?, 'Nhập từ Excel' FROM products WHERE sku = ?`).bind(baseList.id, it.price, now, user.id, it.sku),
-              db.prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('price.activate','price',CAST(last_insert_rowid() AS TEXT),?,'Giá nhập từ Excel',?)`)
-                .bind(JSON.stringify({ priceListId: baseList.id, sku: it.sku, unitPrice: it.price, effectiveFrom: now, belowCost: false }), user.id),
+              db.prepare(`INSERT INTO prices(price_list_id, product_id, unit_price, effective_from, status, created_by, note) SELECT ?, id, ?, ?, 'pending', ?, 'Nhập từ Excel' FROM products WHERE sku = ?`).bind(baseList.id, it.price, now, user.id, dbSku),
+              // B-N4: trỏ đúng bản ghi giá vừa tạo (không dùng last_insert_rowid() — INSERT…SELECT 0 dòng sẽ trỏ nhầm bản ghi trước)
+              db.prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by)
+                          SELECT 'price.activate','price',CAST(p.id AS TEXT),?,'Giá nhập từ Excel',? FROM prices p
+                           WHERE p.price_list_id = ? AND p.product_id = ${pid} AND p.status = 'pending' AND p.effective_from = ? AND p.created_by = ? ORDER BY p.id DESC LIMIT 1`)
+                .bind(JSON.stringify({ priceListId: baseList.id, sku: dbSku, unitPrice: it.price, effectiveFrom: now, belowCost: false }), user.id, baseList.id, dbSku, now, user.id),
             );
           }
         }

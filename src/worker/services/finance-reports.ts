@@ -206,7 +206,7 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
   const counted = (f: { id: number; type: string }) => !!fundId || !CLEARING_FUND_TYPES.includes(f.type);
   const fundIds = funds.filter(counted).map((f) => f.id);
   if (!fundIds.length) {
-    return { opening: 0, inflows: [], outflows: [], totalInflow: 0, totalOutflow: 0, closing: 0, byFund: allFunds.map((f) => ({ fundId: f.id, code: f.code, name: f.name, type: f.type, opening: 0, inflow: 0, outflow: 0, closing: 0, counted: false })) };
+    return { opening: 0, inflows: [], outflows: [], totalInflow: 0, totalOutflow: 0, closing: 0, transfers: { inflow: 0, outflow: 0, label: "Chuyển giữa các quỹ" }, byFund: allFunds.map((f) => ({ fundId: f.id, code: f.code, name: f.name, type: f.type, opening: 0, inflow: 0, outflow: 0, transferIn: 0, transferOut: 0, closing: 0, counted: false })) };
   }
   const inList = fundIds.map(() => "?").join(",");
   const PAY = `p.status='confirmed' AND ${FUND_ORDER_OK} AND p.fund_id IN (${inList})`;
@@ -242,20 +242,33 @@ export async function cashFlow(db: D1Database, fromIso: string, toIso: string, f
     .prepare(
       `SELECT v.fund_id, v.direction AS dir,
               CASE WHEN dp.id IS NOT NULL THEN (CASE WHEN dp.direction='in' THEN 'Thu công nợ khách hàng' ELSE 'Trả công nợ nhà cung cấp' END) ELSE cc.name END AS category,
-              SUM(v.amount) AS amount
+              CASE WHEN v.ref_type = 'fund_transfer' THEN 1 ELSE 0 END AS is_transfer, SUM(v.amount) AS amount
          FROM cash_vouchers v JOIN cash_categories cc ON cc.id = v.category_id LEFT JOIN debt_payments dp ON dp.cash_voucher_id = v.id
-        WHERE v.status='posted' AND v.fund_id IN (${inList}) AND v.created_at >= ? AND v.created_at < ? GROUP BY v.fund_id, v.direction, category`,
+        WHERE v.status='posted' AND v.fund_id IN (${inList}) AND v.created_at >= ? AND v.created_at < ? GROUP BY v.fund_id, v.direction, category, is_transfer`,
     )
     .bind(...fundIds, fromIso, toIso)
     .all<any>()).results;
-  for (const r of vs) add(r.dir, r.category, r.fund_id, r.amount);
+  // PA-4: chuyển quỹ nội bộ không phải thu/chi của cửa hàng → báo riêng ("Chuyển giữa các quỹ"), không cộng vào tổng thu/chi;
+  // từng quỹ vẫn thấy vào/ra (inflowFund/outflowFund) để số dư khớp.
+  const transferIn = new Map<number, number>(), transferOut = new Map<number, number>();
+  for (const r of vs) {
+    if (r.is_transfer) {
+      const m = r.dir === "in" ? transferIn : transferOut, mf = r.dir === "in" ? inflowFund : outflowFund;
+      m.set(r.fund_id, (m.get(r.fund_id) ?? 0) + r.amount);
+      mf.set(r.fund_id, (mf.get(r.fund_id) ?? 0) + r.amount);
+    } else add(r.dir, r.category, r.fund_id, r.amount);
+  }
 
   const inflows = [...flows.values()].filter((f) => f.dir === "in").map((f) => ({ category: f.category, amount: f.amount }));
   const outflows = [...flows.values()].filter((f) => f.dir === "out").map((f) => ({ category: f.category, amount: f.amount }));
   const byFund = allFunds.map((f) => {
     const o = open.get(f.id) ?? 0, i = inflowFund.get(f.id) ?? 0, x = outflowFund.get(f.id) ?? 0;
-    return { fundId: f.id, code: f.code, name: f.name, type: f.type, opening: o, inflow: i, outflow: x, closing: o + i - x, counted: counted(f) };
+    return { fundId: f.id, code: f.code, name: f.name, type: f.type, opening: o, inflow: i, outflow: x, transferIn: transferIn.get(f.id) ?? 0, transferOut: transferOut.get(f.id) ?? 0, closing: o + i - x, counted: counted(f) };
   });
-  const sum = (k: "opening" | "inflow" | "outflow" | "closing") => byFund.filter((f) => f.counted).reduce((s, f) => s + f[k], 0);
-  return { opening: sum("opening"), inflows, outflows, totalInflow: sum("inflow"), totalOutflow: sum("outflow"), closing: sum("closing"), byFund };
+  const sum = (k: "opening" | "inflow" | "outflow" | "closing" | "transferIn" | "transferOut") => byFund.filter((f) => f.counted).reduce((s, f) => s + f[k], 0);
+  const tIn = sum("transferIn"), tOut = sum("transferOut");
+  return {
+    opening: sum("opening"), inflows, outflows, totalInflow: sum("inflow") - tIn, totalOutflow: sum("outflow") - tOut, closing: sum("closing"), byFund,
+    transfers: { inflow: tIn, outflow: tOut, label: "Chuyển giữa các quỹ" },
+  };
 }
