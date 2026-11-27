@@ -25,17 +25,17 @@ import { INVOICE_OUTSTANDING_SQL } from "../services/debt";
 
 export const posRoutes = new Hono<AppBindings>();
 
-type Ctx = Context<AppBindings>;
+export type Ctx = Context<AppBindings>;
 
 async function parseBody<T extends z.ZodTypeAny>(c: Ctx, schema: T): Promise<z.infer<T>> {
   const raw = await c.req.json().catch(() => ({}));
   return schema.parse(raw);
 }
 
-const MAX_VND = 10_000_000_000;
-const MAX_QTY = 1_000_000;
-const METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
-const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
+export const MAX_VND = 10_000_000_000;
+export const MAX_QTY = 1_000_000;
+export const METHODS = ["cash", "transfer", "qr", "card", "ewallet"] as const;
+export const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
 
 async function storeIdOf(c: Ctx) {
   const u = c.get("user");
@@ -44,12 +44,12 @@ async function storeIdOf(c: Ctx) {
   return s?.id ?? 1;
 }
 
-async function openShiftOf(db: D1Database, userId: number) {
+export async function openShiftOf(db: D1Database, userId: number) {
   return db.prepare(`SELECT * FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1`).bind(userId).first<any>();
 }
 
 /** Quỹ theo hình thức thanh toán: tiền mặt → quỹ của ca; còn lại → quỹ ngân hàng/ví đầu tiên đang hoạt động. */
-async function fundFor(db: D1Database, storeId: number, method: string, shift: { fund_id: number } | null) {
+export async function fundFor(db: D1Database, storeId: number, method: string, shift: { fund_id: number } | null) {
   if (method === "cash") {
     if (shift) return shift.fund_id;
     const f = await db.prepare(`SELECT id FROM funds WHERE type='cash' AND active=1 ORDER BY (store_id IS ?) DESC, id LIMIT 1`).bind(storeId).first<{ id: number }>();
@@ -64,7 +64,7 @@ async function fundFor(db: D1Database, storeId: number, method: string, shift: {
   throw new AppError(422, "no_fund", "Chưa cấu hình quỹ ngân hàng cho hình thức thanh toán này");
 }
 
-async function unitFactor(db: D1Database, productId: number, unit: string) {
+export async function unitFactor(db: D1Database, productId: number, unit: string) {
   const p = await db.prepare(`SELECT id, base_unit, active, name FROM products WHERE id = ?`).bind(productId).first<any>();
   if (!p || !p.active) throw new AppError(422, "product_not_found", "Mặt hàng không tồn tại hoặc đã ngừng bán", { productId });
   if (unit === p.base_unit) return { factor: 1000, product: p };
@@ -74,7 +74,7 @@ async function unitFactor(db: D1Database, productId: number, unit: string) {
 }
 
 /** Chia một phân bổ lô cho nhiều dòng cùng mặt hàng theo thứ tự. */
-function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
+export function splitAlloc(alloc: LotAllocation[], qtys: number[]): LotAllocation[][] {
   const pool = alloc.map((a) => ({ ...a }));
   let i = 0;
   return qtys.map((q) => {
@@ -239,7 +239,7 @@ async function assertSeller(db: D1Database, sellerId: number) {
 /** Số lần sửa thông tin (người bán/ghi chú) của đơn — dùng làm `version` chống sửa đồng thời, không cần cột riêng. */
 const metaVersionSql = `(SELECT COUNT(*) FROM audit_log WHERE action = 'order.meta' AND entity = 'order' AND entity_id = ?)`  /* bind chuỗi: D1 có thể bind số nguyên thành REAL */;
 
-async function getOrderFull(c: Ctx, orderId: number) {
+export async function getOrderFull(c: Ctx, orderId: number) {
   const db = c.env.DB;
   const role = c.get("user").role;
   const o = await db
@@ -284,8 +284,15 @@ async function getOrderFull(c: Ctx, orderId: number) {
     : o.kind === "return"
       ? await db.prepare(`SELECT id, code FROM orders WHERE exchange_return_order_id = ?`).bind(orderId).first<{ id: number; code: string }>()
       : null;
+  // Sửa hoá đơn: đơn mới ↔ đơn cũ đã được thay thế
+  const corrOf = o.corrected_from_order_id
+    ? await db.prepare(`SELECT id, code FROM orders WHERE id = ?`).bind(o.corrected_from_order_id).first<{ id: number; code: string }>()
+    : o.kind === "sale"
+      ? await db.prepare(`SELECT id, code FROM orders WHERE corrected_from_order_id = ? AND status <> 'cancelled'`).bind(orderId).first<{ id: number; code: string }>()
+      : null;
   return {
     ...rest,
+    correction: corrOf ? { role: o.corrected_from_order_id ? "replacement" : "replaced", linkedId: corrOf.id, linkedCode: corrOf.code } : null,
     // C2-01: SĐT / địa chỉ người nhận che như danh sách khi thiếu customers.view_pii
     receiver_phone: maskPhone(receiver_phone, role),
     ship_address: pii || !ship_address ? ship_address : "***",
@@ -742,7 +749,7 @@ posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
   const rows = (
     await c.env.DB
       .prepare(
-        `SELECT o.id, o.code, o.channel, o.kind, o.status, o.total, o.discount, o.paid_total, o.shift_id, o.customer_id, o.original_order_id, o.exchange_of_order_id, o.exchange_return_order_id,
+        `SELECT o.id, o.code, o.channel, o.kind, o.status, o.total, o.discount, o.paid_total, o.shift_id, o.customer_id, o.original_order_id, o.exchange_of_order_id, o.exchange_return_order_id, o.corrected_from_order_id,
                 o.created_at, o.completed_at, o.created_by AS cashier_id, u.full_name AS cashier_name,
                 COALESCE(o.seller_id, o.created_by) AS seller_id, COALESCE(sl.full_name, u.full_name) AS seller_name, o.note,
                 COALESCE(cu.name, o.receiver_name) AS customer_name, COALESCE(cu.phone, o.receiver_phone) AS customer_phone,
@@ -887,7 +894,7 @@ posRoutes.get("/pos/receipt/:id", requirePerm("orders.view"), async (c) => {
 
 // ===================== Trả hàng (EC-01) =====================
 
-const returnLineSchema = z.object({
+export const returnLineSchema = z.object({
   orderLineId: z.number().int().positive(),
   qty: z.number().positive().max(MAX_QTY),
   unit: z.string().min(1),
@@ -922,10 +929,10 @@ async function chargesRefundOf(db: D1Database, origId: number, claimed: Map<numb
   return left;
 }
 
-type PreparedReturn = { orig: any; qtyMilli: number; lineTotal: number; cost: number; alloc: LotAllocation[]; restock: boolean; reason: string };
+export type PreparedReturn = { orig: any; qtyMilli: number; lineTotal: number; cost: number; alloc: LotAllocation[]; restock: boolean; reason: string };
 
 /** Tính các dòng trả: quy đổi đơn vị, kiểm số đã trả, đi qua lô gốc, chia tiền theo dòng gốc. Dùng chung cho Trả hàng và Đổi hàng (A-13). */
-async function prepareReturnLines(db: D1Database, origId: number, lines: z.infer<typeof returnLineSchema>[]) {
+export async function prepareReturnLines(db: D1Database, origId: number, lines: z.infer<typeof returnLineSchema>[]) {
   const prepared: PreparedReturn[] = [];
   const claimed = new Map<number, number>();
   for (const l of lines) {
@@ -974,7 +981,7 @@ async function prepareReturnLines(db: D1Database, origId: number, lines: z.infer
 }
 
 /** A-16 (M1-09): lý do cần quản lý duyệt khi thu ngân trả/đổi hàng. Rỗng = thu ngân tự làm được. */
-async function returnApprovalReasons(db: D1Database, orig: any, shift: any, prepared: PreparedReturn[], total: number): Promise<string[]> {
+export async function returnApprovalReasons(db: D1Database, orig: any, shift: any, prepared: PreparedReturn[], total: number): Promise<string[]> {
   const reasons: string[] = [];
   if (!(shift && orig.shift_id === shift.id)) {
     const osh = orig.shift_id ? await db.prepare(`SELECT status FROM shifts WHERE id = ?`).bind(orig.shift_id).first<{ status: string }>() : null;
@@ -988,7 +995,7 @@ async function returnApprovalReasons(db: D1Database, orig: any, shift: any, prep
 }
 
 /** Chốt chặn trong batch (audit #2): trả đồng thời không được vượt số đã bán / số đã thu. */
-function returnGuardStmts(db: D1Database, origId: number, approvalUsed: number | null, claimed: Map<number, number>, total: number): D1PreparedStatement[] {
+export function returnGuardStmts(db: D1Database, origId: number, approvalUsed: number | null, claimed: Map<number, number>, total: number): D1PreparedStatement[] {
   return [
     assertStmt(db, "order.return.status", `SELECT status = 'completed' AND kind = 'sale' FROM orders WHERE id = ?`, [origId]),
     ...(approvalUsed ? [assertStmt(db, "order.return.approval", `SELECT status = 'approved' AND ref_id IS NULL FROM approvals WHERE id = ?`, [approvalUsed])] : []),
@@ -1010,7 +1017,7 @@ function returnGuardStmts(db: D1Database, origId: number, approvalUsed: number |
   ];
 }
 
-async function insertReturnLines(db: D1Database, retId: number, prepared: PreparedReturn[]) {
+export async function insertReturnLines(db: D1Database, retId: number, prepared: PreparedReturn[]) {
   const lineIds: number[] = [];
   for (const x of prepared) {
     const row = await db
@@ -1026,7 +1033,7 @@ async function insertReturnLines(db: D1Database, retId: number, prepared: Prepar
 }
 
 /** Thu hồi điểm + nhập lại đúng lô cho các dòng được chọn "nhập lại kho". */
-async function returnEffectStmts(db: D1Database, orig: any, origId: number, retId: number, code: string, prepared: PreparedReturn[], lineIds: number[], total: number, userId: number) {
+export async function returnEffectStmts(db: D1Database, orig: any, origId: number, retId: number, code: string, prepared: PreparedReturn[], lineIds: number[], total: number, userId: number) {
   const stmts: D1PreparedStatement[] = [];
   // Đợt 4: thu hồi điểm tích / hoàn điểm đã đổi / hoàn lượt voucher
   const priorRet = (

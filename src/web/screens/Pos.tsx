@@ -11,6 +11,7 @@ import { createScanDetector, loadScannerSettings, saveScannerSettings, type Scan
 import { QrImage } from "../components/QrImage";
 import { PosDeliverySheet } from "../components/PosDeliverySheet";
 import { PosDebtSheet } from "../components/PosDebtSheet";
+import { PosQuickReturnSheet } from "../components/PosQuickReturnSheet";
 import { useAuth, useCan } from "../store";
 import { reasonText } from "./d4/voucher-text";
 
@@ -103,6 +104,7 @@ function OpenShift({ onOpened, allowed }: { onOpened: () => void; allowed: boole
 
 function Sell({ shift }: { shift: any }) {
   const auth = useAuth();
+  const can = useCan();
   const [tabs, setTabs] = useState<Cart[]>(saved.tabs);
   const [activeId, setActiveId] = useState(saved.active);
   const tab = tabs.find((t) => t.id === activeId) ?? tabs[0];
@@ -121,6 +123,7 @@ function Sell({ shift }: { shift: any }) {
   const [pickCustomer, setPickCustomer] = useState(false);
   const [chargeSheet, setChargeSheet] = useState(false);
   const [debtSheet, setDebtSheet] = useState(false);
+  const [quickReturn, setQuickReturn] = useState(false);
   const [q, setQ] = useState("");
   const dq = useDebounced(q);
   const [groupId, setGroupId] = useState(0);
@@ -336,6 +339,7 @@ function Sell({ shift }: { shift: any }) {
           <div className="grow"><Input label="Tìm sản phẩm" type="search" data-pos-search value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hoặc mã…  (F2)" /></div>
           <Button variant="soft" style={{ alignSelf: "flex-end" }} onClick={() => setScan(true)}>Quét mã<span className="kbd-hint"> F4</span></Button>
           <Button variant="soft" style={{ alignSelf: "flex-end" }} data-testid="pos-debt-btn" title="Thu nợ khách lẻ" onClick={() => setDebtSheet(true)}>Thu nợ</Button>
+          {can("pos.return") && <Button variant="soft" style={{ alignSelf: "flex-end" }} data-testid="pos-quick-return-btn" title="Khách trả hàng không có hoá đơn" onClick={() => setQuickReturn(true)}>Trả hàng nhanh</Button>}
           <Button variant="ghost" style={{ alignSelf: "flex-end" }} aria-label="Cài đặt quầy" title="Cài đặt quầy" data-testid="pos-settings" onClick={() => setSettings(true)}>⚙</Button>
         </div>
         <div className="pos-filter">
@@ -454,6 +458,7 @@ function Sell({ shift }: { shift: any }) {
       {delivery && <PosDeliverySheet lines={lines.map((l) => ({ productId: l.product.id, name: l.product.name, unit: l.unit, qty: l.qty }))} customer={customer} hasManualDiscount={discount > 0 || lines.some((l) => l.discount > 0)} onClose={() => setDelivery(false)} onDone={() => { setDelivery(false); reset(); }} />}
       {chargeSheet && <ChargesSheet charges={charges} onChange={setCharges} onClose={() => setChargeSheet(false)} />}
       {debtSheet && <PosDebtSheet onClose={() => setDebtSheet(false)} />}
+      {quickReturn && <PosQuickReturnSheet customer={customer ? { id: customer.id, name: customer.name } : null} onClose={() => setQuickReturn(false)} onDone={() => setQuickReturn(false)} />}
       {pickCustomer && <CustomerSheet onClose={() => setPickCustomer(false)} onPick={(c) => { setCustomer(c); setPickCustomer(false); }} />}
       <Sheet open={!!receipt} onClose={() => setReceipt(null)} title="Hoá đơn" footer={<Button block onClick={() => setReceipt(null)}>Đơn mới</Button>}>
         {receipt && <Receipt order={receipt.order} names={receipt.names} />}

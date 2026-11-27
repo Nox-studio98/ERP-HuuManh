@@ -97,8 +97,8 @@ async function loadPayrollInputs(db: D1Database, period: string) {
   const returns = (
     await db
       .prepare(
-        `SELECT COALESCE(so.seller_id, so.created_by) AS uid, SUM(ABS(r.total) - r.charges_total) AS t FROM orders r JOIN orders so ON so.id = r.original_order_id
-          WHERE r.kind='return' AND r.status='completed' AND so.channel='pos' AND COALESCE(so.seller_id, so.created_by) IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY COALESCE(so.seller_id, so.created_by)`,
+        `SELECT COALESCE(so.seller_id, so.created_by, r.created_by) AS uid, SUM(ABS(r.total) - r.charges_total) AS t FROM orders r LEFT JOIN orders so ON so.id = r.original_order_id
+          WHERE r.kind='return' AND r.status='completed' AND COALESCE(so.channel, r.channel)='pos' AND COALESCE(so.seller_id, so.created_by, r.created_by) IS NOT NULL AND r.completed_at >= ? AND r.completed_at < ? GROUP BY COALESCE(so.seller_id, so.created_by, r.created_by)`,
       )
       .bind(fromIso, toIso)
       .all<any>()

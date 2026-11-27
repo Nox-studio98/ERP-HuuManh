@@ -47,13 +47,13 @@ export async function loadCommissionLines(db: D1Database, period: string): Promi
   const rows = (
     await db
       .prepare(
-        `SELECT CASE WHEN o.kind = 'sale' THEN COALESCE(o.seller_id, o.created_by) ELSE COALESCE(so.seller_id, so.created_by) END AS uid,
+        `SELECT CASE WHEN o.kind = 'sale' THEN COALESCE(o.seller_id, o.created_by) ELSE COALESCE(so.seller_id, so.created_by, o.seller_id, o.created_by) END AS uid,
                 ol.product_id AS productId, pr.group_id AS groupId, substr(datetime(o.completed_at, '+7 hours'), 1, 10) AS date,
                 SUM(CASE WHEN o.kind = 'sale' THEN ol.line_total ELSE -ol.line_total END) AS amount
            FROM order_lines ol JOIN orders o ON o.id = ol.order_id JOIN products pr ON pr.id = ol.product_id
            LEFT JOIN orders so ON so.id = o.original_order_id
           WHERE o.status = 'completed' AND o.completed_at >= ? AND o.completed_at < ?
-            AND ((o.kind = 'sale' AND o.channel = 'pos') OR (o.kind = 'return' AND so.channel = 'pos'))
+            AND ((o.kind = 'sale' AND o.channel = 'pos') OR (o.kind = 'return' AND COALESCE(so.channel, o.channel) = 'pos'))
           GROUP BY uid, ol.product_id, date HAVING uid IS NOT NULL ORDER BY uid, ol.product_id, date`,
       )
       .bind(fromIso, toIso)
