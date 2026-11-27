@@ -4,6 +4,7 @@ import { productRoutes } from "./products";
 import { inventoryRoutes } from "./inventory";
 import { priceRoutes } from "./prices";
 import { posRoutes } from "./pos";
+import { posCreditRoutes } from "./pos-credit";
 import { financeRoutes } from "./finance";
 import { reportRoutes } from "./reports";
 import { adminRoutes } from "./admin";
@@ -46,6 +47,7 @@ export function registerModuleRoutes(v1: Hono<AppBindings>) {
   v1.route("/", inventoryRoutes);
   v1.route("/", priceRoutes);
   v1.route("/", posRoutes);
+  v1.route("/", posCreditRoutes);
   v1.route("/", financeRoutes);
   v1.route("/", reportRoutes);
   v1.route("/", adminRoutes);

@@ -47,6 +47,8 @@ async function pnl(c: Ctx) {
     )
     .bind(...p)
     .first<{ sales: number; returns: number }>();
+  // B2: thu khác (ròng sau hoàn) đã nằm trong doanh thu — báo riêng một dòng
+  const otherCharges = (await db.prepare(`SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
   const cost = await db
     .prepare(
       `SELECT COALESCE(SUM(CASE WHEN o.kind='sale' THEN ol.cost_amount ELSE -ol.cost_amount END),0) AS cogs,
@@ -122,6 +124,20 @@ async function pnl(c: Ctx) {
     ).results.map((r) => ({ ...r, shipping: 0 }));
     // A-08: dòng đơn online mang giảm giá đã phân bổ; phí giao hàng (doanh thu cấp đơn) báo riêng để tổng breakdown = doanh thu tổng
     const SHIP = `CASE WHEN o.kind='sale' THEN o.shipping_fee WHEN o.channel IN ('online','social') THEN o.total - o.subtotal ELSE 0 END`;
+    // B2: thu khác (phí đóng gói, giỏ quà...) — doanh thu cấp đơn, tách riêng như phí giao; phiếu trả chỉ trừ phần đã hoàn
+    const OTHER = `CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END`;
+    if (groupBy === "group") {
+      const oc = (await db.prepare(`SELECT COALESCE(SUM(${OTHER}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
+      if (oc) rows.push({ key: "Thu khác", revenue: oc, cogs: 0, shipping: 0, otherCharges: oc } as any);
+    } else {
+      const oth = (await db.prepare(`SELECT ${keyExpr} AS key, COALESCE(SUM(${OTHER}),0) AS s FROM orders o WHERE ${W} GROUP BY key`).bind(...p).all<{ key: string; s: number }>()).results;
+      for (const x of oth) {
+        const r = rows.find((y) => y.key === x.key) as any;
+        if (!r || !x.s) continue;
+        r.otherCharges = x.s;
+        r.revenue += x.s;
+      }
+    }
     if (groupBy === "group") {
       const sh = (await db.prepare(`SELECT COALESCE(SUM(${SHIP}),0) AS s FROM orders o WHERE ${W}`).bind(...p).first<{ s: number }>())!.s;
       if (sh) rows.push({ key: "Phí giao hàng", revenue: sh, cogs: 0, shipping: sh });
@@ -141,6 +157,7 @@ async function pnl(c: Ctx) {
     salesTotal: rev!.sales,
     returnsTotal: rev!.returns,
     revenue,
+    otherCharges,
     cogs,
     grossProfit,
     expenses,

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { get, items, post, api } from "../api";
-import { Badge, Banner, Button, DataTable, EmptyState, Input, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
+import { Badge, Banner, Button, DataTable, EmptyState, Input, MoneyInput, Segmented, Select, Sheet, Spinner, TextArea, useAsync } from "../components/ui";
 import { DetailPanel, ExportButton, FilterBar, FilterSelect, KpiRow, PageHeader, SearchInput, SplitLayout, usePagedList } from "../components/list";
 import { toast } from "../components/toast";
-import { CHANNELS, ORDER_STATUS, fmtDate, fmtDateTime, money, num } from "../format";
+import { CHANNELS, METHODS, ORDER_STATUS, fmtDate, fmtDateTime, money, num } from "../format";
 import { navigate } from "../router";
 import { useCan } from "../store";
 
@@ -68,6 +68,7 @@ export default function RetailCustomers() {
                 { key: "p", label: "Điểm", num: true, sort: (c) => c.points, render: (c) => num(c.points) },
                 { key: "o", label: "Số đơn", num: true, hideBelow: 1280, sort: (c) => c.ordersCount, render: (c) => num(c.ordersCount) },
                 { key: "l", label: "Mua gần nhất", hideBelow: 1024, sort: (c) => c.lastPurchaseAt ?? "", render: (c) => <span className={c.lastPurchaseAt ? "" : "muted"}>{lastText(c.lastPurchaseAt)}</span> },
+                { key: "cr", label: "Hạn mức nợ", num: true, hideBelow: 1280, sort: (c) => c.creditLimit ?? 0, render: (c) => (c.creditLimit > 0 ? money(c.creditLimit) : <span className="muted">—</span>) },
                 { key: "s", label: "Tổng chi tiêu", num: true, sort: (c) => c.spend, render: (c) => <span className="money">{money(c.spend)}</span> },
               ]} />
           )}
@@ -79,8 +80,8 @@ export default function RetailCustomers() {
 function Detail({ id, groups, onClose, onChanged }: { id: number; groups: { id: number; name: string }[]; onClose: () => void; onChanged: () => void }) {
   const can = useCan();
   const d = useAsync(() => get(`/retail-customers/${id}`), [id]);
-  const [tab, setTab] = useState<"orders" | "points" | "web">("orders");
-  const [dlg, setDlg] = useState<null | "edit" | "merge" | "active">(null);
+  const [tab, setTab] = useState<"orders" | "points" | "debt" | "web">("orders");
+  const [dlg, setDlg] = useState<null | "edit" | "merge" | "active" | "credit">(null);
   const c = d.data;
   const done = () => { setDlg(null); d.reload(); onChanged(); };
   const write = can("b2b.write");
@@ -96,6 +97,8 @@ function Detail({ id, groups, onClose, onChanged }: { id: number; groups: { id: 
             <div className="kpi" style={{ gridColumn: "1 / -1" }}><div className="l">Tổng chi tiêu</div><div className="v money">{money(c.spend)}</div></div>
             <div className="kpi"><div className="l">Điểm</div><div className="v">{num(c.points)}</div></div>
             <div className="kpi"><div className="l">Mua gần nhất</div><div className="v nw" style={{ fontSize: "1.05rem" }}>{lastText(c.lastPurchaseAt)}</div></div>
+            <div className="kpi" data-testid="rc-credit-limit"><div className="l">Hạn mức nợ</div><div className="v" style={{ fontSize: "1.05rem" }}>{c.creditLimit > 0 ? money(c.creditLimit) : "Chưa cho nợ"}</div><div className="s small muted">kỳ hạn {c.paymentTermsDays > 0 ? `${c.paymentTermsDays} ngày` : "mặc định"}</div></div>
+            {c.debt && <div className="kpi" data-testid="rc-debt-out"><div className="l">Còn nợ</div><div className="v money" style={{ fontSize: "1.05rem", color: c.debt.overdueAmount > 0 ? "var(--danger)" : undefined }}>{money(c.debt.outstanding)}</div><div className="s small muted">{c.debt.overdueAmount > 0 ? `quá hạn ${money(c.debt.overdueAmount)}` : "chưa quá hạn"}</div></div>}
           </div>
           <div className="card flat stack" style={{ gap: 6 }}>
             <Row k="SĐT" v={c.phone} /><Row k="Email" v={c.email} /><Row k="Ngày sinh" v={birthdayText(c.birthday)} /><Row k="Giới tính" v={c.gender ? GENDER[c.gender] : null} />
@@ -105,11 +108,12 @@ function Detail({ id, groups, onClose, onChanged }: { id: number; groups: { id: 
           {write && (
             <div className="row wrap">
               <Button variant="soft" onClick={() => setDlg("edit")}>Sửa thông tin</Button>
+              {can("b2b.approve") && <Button variant="soft" data-testid="rc-credit-edit" onClick={() => setDlg("credit")}>Đặt hạn mức nợ</Button>}
               {c.active && <Button variant="ghost" onClick={() => setDlg("merge")}>Gộp khách trùng</Button>}
               <Button variant="ghost" onClick={() => setDlg("active")}>{c.active ? "Ngừng hoạt động" : "Kích hoạt lại"}</Button>
             </div>
           )}
-          <Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: `Đơn (${c.orders.length})` }, { v: "points", label: "Điểm" }, { v: "web", label: `Website (${c.shopAccounts.length})` }]} />
+          <Segmented value={tab} onChange={setTab} options={[{ v: "orders", label: `Đơn (${c.orders.length})` }, { v: "points", label: "Điểm" }, ...(c.debt ? [{ v: "debt" as const, label: c.debt.outstanding > 0 ? "Công nợ •" : "Công nợ" }] : []), { v: "web", label: `Website (${c.shopAccounts.length})` }]} />
           {tab === "orders" && (
             <DataTable rows={c.orders} rowKey={(o: any) => o.id} empty="Chưa có đơn hàng" onRowClick={can("orders.view") ? (o: any) => navigate(`/orders?open=${o.id}`) : undefined}
               cols={[
@@ -132,6 +136,31 @@ function Detail({ id, groups, onClose, onChanged }: { id: number; groups: { id: 
                 ]} />
             </div>
           )}
+          {tab === "debt" && c.debt && (
+            <div className="stack" data-testid="rc-debt-tab">
+              <div className="card flat stack" style={{ gap: 6 }}>
+                <div className="row between"><span className="muted small">Còn nợ</span><b className="money">{money(c.debt.outstanding)}</b></div>
+                <div className="row between"><span className="muted small">Còn được nợ thêm</span><span className="money">{money(c.debt.available)}</span></div>
+                {c.debt.unapplied > 0 && <div className="row between"><span className="muted small">Tiền đã thu chưa gạch</span><span className="money">{money(c.debt.unapplied)}</span></div>}
+                {c.debt.oldestOverdueDays > 0 && <div className="row between"><span className="muted small">Quá hạn lâu nhất</span><span style={{ color: "var(--danger)" }}>{c.debt.oldestOverdueDays} ngày</span></div>}
+              </div>
+              <DataTable rows={c.debt.invoices} rowKey={(i: any) => i.id} empty="Không có hoá đơn nợ"
+                cols={[
+                  { key: "c", label: "Hoá đơn", title: true, render: (i: any) => <span><b className="nw">{i.code}</b>{i.orderCode && <div className="small muted">đơn {i.orderCode}</div>}</span> },
+                  { key: "d", label: "Hạn trả", render: (i: any) => <span>{fmtDate(i.dueDate)}{i.overdueDays > 0 && <> <Badge tone="danger">quá {i.overdueDays} ngày</Badge></>}</span> },
+                  { key: "t", label: "Số tiền", num: true, hideMobile: true, render: (i: any) => money(i.total) },
+                  { key: "o", label: "Còn nợ", num: true, render: (i: any) => <b className="money">{money(i.outstanding)}</b> },
+                ]} />
+              <div className="small muted">Phiếu thu nợ gần đây</div>
+              <DataTable rows={c.debt.payments} rowKey={(p: any) => p.code} empty="Chưa có phiếu thu nợ"
+                cols={[
+                  { key: "c", label: "Phiếu", title: true, render: (p: any) => <span><b className="nw">{p.code}</b>{p.status !== "posted" && <> <Badge tone="warn">đã đảo</Badge></>}</span> },
+                  { key: "t", label: "Ngày", render: (p: any) => fmtDateTime(p.paidAt) },
+                  { key: "m", label: "Hình thức", hideMobile: true, render: (p: any) => METHODS[p.method] ?? p.method },
+                  { key: "a", label: "Số tiền", num: true, render: (p: any) => <span className="money">{money(p.amount)}</span> },
+                ]} />
+            </div>
+          )}
           {tab === "web" && (
             <DataTable rows={c.shopAccounts} rowKey={(a: any) => a.id} empty="Chưa liên kết tài khoản website"
               cols={[
@@ -140,6 +169,7 @@ function Detail({ id, groups, onClose, onChanged }: { id: number; groups: { id: 
                 { key: "s", label: "Trạng thái", render: (a: any) => <Badge tone={a.active ? "ok" : "warn"}>{a.active ? "Hoạt động" : "Khoá"}</Badge> },
               ]} />
           )}
+          {dlg === "credit" && <CreditSheet c={c} onClose={() => setDlg(null)} onDone={done} />}
           {dlg === "edit" && <EditSheet c={c} groups={groups} onClose={() => setDlg(null)} onDone={done} />}
           {dlg === "merge" && <MergeSheet c={c} onClose={() => setDlg(null)} onDone={() => { done(); }} />}
           {dlg === "active" && <ActiveSheet c={c} onClose={() => setDlg(null)} onDone={done} />}
@@ -180,6 +210,33 @@ function EditSheet({ c, groups, onClose, onDone }: { c: any; groups: { id: numbe
         <Select label="Nhóm khách" value={f.group} onChange={set("group")}><option value="">—</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
         <Input label="Địa chỉ" value={masked ? "" : f.address} disabled={masked} placeholder={masked ? "Đã ẩn" : ""} onChange={set("address")} />
         <TextArea label="Ghi chú" value={f.note} onChange={set("note")} />
+      </div>
+    </Sheet>
+  );
+}
+
+/** Đặt hạn mức nợ + kỳ hạn (quản lý/chủ). Quản lý nâng vượt ngưỡng → chờ chủ duyệt (A-10). */
+function CreditSheet({ c, onClose, onDone }: { c: any; onClose: () => void; onDone: () => void }) {
+  const [limit, setLimit] = useState<number>(c.creditLimit ?? 0), [terms, setTerms] = useState(String(c.paymentTermsDays ?? 0)), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
+  const t = Math.max(0, Math.min(365, Math.floor(Number(terms) || 0)));
+  const changed = limit !== (c.creditLimit ?? 0) || t !== (c.paymentTermsDays ?? 0);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: any = { version: c.version, reason: reason.trim() };
+      if (limit !== (c.creditLimit ?? 0)) body.creditLimit = limit;
+      if (t !== (c.paymentTermsDays ?? 0)) body.paymentTermsDays = t;
+      const r = await api(`/retail-customers/${c.id}/credit`, { method: "PUT", body });
+      toast(r?.creditApprovalPending ? "Đã gửi chủ duyệt phần vượt ngưỡng; phần còn lại đã lưu" : "Đã lưu hạn mức nợ", "ok"); onDone();
+    } catch { /* toast */ } finally { setBusy(false); }
+  };
+  return (
+    <Sheet open portal onClose={onClose} title="Hạn mức nợ khách lẻ" footer={<><Button variant="ghost" onClick={onClose}>Huỷ</Button><Button className="grow" loading={busy} disabled={!changed || reason.trim().length < 3} onClick={save}>Lưu</Button></>}>
+      <div className="stack">
+        <Banner tone="info">Hạn mức = tổng nợ tối đa khách được ghi nợ tại quầy. Để 0 là không cho nợ. Bán nợ chỉ chạy khi bật “Cho phép bán nợ khách lẻ” ở Cài đặt → Công nợ.</Banner>
+        <MoneyInput label="Hạn mức nợ (₫)" value={limit} onChange={setLimit} />
+        <Input label="Kỳ hạn trả (ngày)" type="number" min={0} max={365} value={terms} onChange={(e) => setTerms(e.target.value)} hint="0 = dùng kỳ hạn mặc định trong Cài đặt." />
+        <TextArea label="Lý do (bắt buộc)" value={reason} onChange={(e) => setReason(e.target.value)} />
       </div>
     </Sheet>
   );

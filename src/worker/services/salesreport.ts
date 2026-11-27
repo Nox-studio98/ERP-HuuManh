@@ -11,11 +11,12 @@ export async function salesSummary(db: D1Database, where: string, params: unknow
          COALESCE(SUM(CASE WHEN o.kind='sale' THEN 1 ELSE 0 END),0) AS saleCount,
          COALESCE(SUM(CASE WHEN o.kind='sale' THEN o.total ELSE 0 END),0) AS saleTotal,
          COALESCE(SUM(CASE WHEN o.kind='return' THEN 1 ELSE 0 END),0) AS returnCount,
-         COALESCE(SUM(CASE WHEN o.kind='return' THEN o.total ELSE 0 END),0) AS returnTotal
+         COALESCE(SUM(CASE WHEN o.kind='return' THEN o.total ELSE 0 END),0) AS returnTotal,
+         COALESCE(SUM(CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END),0) AS otherCharges
        FROM orders o WHERE ${base}`,
     )
     .bind(...params)
-    .first<{ saleCount: number; saleTotal: number; returnCount: number; returnTotal: number }>();
+    .first<{ saleCount: number; saleTotal: number; returnCount: number; returnTotal: number; otherCharges: number }>();
   const byChannel = await db
     .prepare(
       `SELECT o.channel, COUNT(*) AS orders, SUM(CASE WHEN o.kind='sale' THEN o.total ELSE -o.total END) AS revenue
@@ -47,6 +48,7 @@ export async function salesSummary(db: D1Database, where: string, params: unknow
     returnCount: totals!.returnCount,
     returnTotal: totals!.returnTotal,
     revenue: totals!.saleTotal - totals!.returnTotal,
+    otherCharges: totals!.otherCharges, // B2: thu khác (đã nằm trong doanh thu), ròng sau hoàn
     byChannel: byChannel.results,
     byMethod: byMethod.results,
     topProducts: top.results,

@@ -170,3 +170,47 @@ Một thao tác tạo **cặp phiếu liên kết** (phiếu chi quỹ nguồn +
 | GET | /fund-transfers?fundId=&status=posted\|reversed&from=&to=&cursor=&limit= | finance.view | `{items:[{id,code (CQ-…),fromFundId,fromFundName,toFundId,toFundName,amount,note,period,status,createdAt,createdByName,reversedAt,reverseReason,outVoucherId,outVoucherCode,inVoucherId,inVoucherCode}],nextCursor}` |
 | POST | /fund-transfers | finance.write | `{fromFundId,toFundId,amount,note?,idempotencyKey?}`. 422: `same_fund`, `fund_not_found`, `clearing_fund` (quỹ chờ đối soát COD/sàn/thẻ chuyển bằng luồng đối soát), `insufficient_fund` (số dư quỹ nguồn < số tiền — chốt chặn `assertStmt` nên bấm đồng thời hai lệnh vượt số dư chỉ một lệnh thành công, lệnh kia 409 `state_changed`); 423 `period_locked`. `idempotencyKey` (client sinh UUID mỗi lần mở form): gửi lại cùng khoá → 409 `already_done`, không tạo thêm. 201 trả phiếu chuyển |
 | POST | /fund-transfers/:id/reverse | finance.write | `{reason ≥ 3}`: đảo **cả cặp** ở kỳ hiện tại (hai phiếu đảo `reverses_id`, tiền về quỹ nguồn, rút khỏi quỹ đích); đã đảo → 409 `already_reversed`; quỹ đích không đủ số dư để hoàn → 422 `insufficient_fund`; kỳ hiện tại đã khoá → 423. Đảo lẻ từng phiếu qua `/vouchers/:id/reverse` vẫn bị chặn (409 `managed_voucher`) |
+
+## POS-KV đợt B — bán nợ khách lẻ (B1) và thu khác (B2) (`docs/POS-KV-B.md`)
+
+Migration `0038_pos_credit.sql` (tham số), `0039_order_charges.sql` (`charge_types`, `order_charges`, `orders.charges_total`). Quyền mới: `pos.credit`, `pos.other_charge` (chủ, quản lý). Mã `HDS…` là mã thanh toán của hoá đơn nợ (cùng luồng SePay khách sỉ).
+
+### Tham số (Cài đặt → Công nợ / Ngưỡng duyệt)
+`pos.retail_credit_enabled` (mặc định 0 = tắt), `pos.retail_credit_default_limit` (0), `pos.retail_credit_default_terms_days` (7), `approval.pos_credit_vnd` (500.000). Khách lẻ tạo nhanh ở quầy nhận hạn mức/kỳ hạn mặc định; kỳ hạn riêng của khách = 0 thì dùng kỳ hạn mặc định.
+
+### `POST /pos/orders` — thêm trường
+- `charges?: [{ chargeTypeId?, name?, amount }]` (≤ 10). Loại có sẵn: phải còn hoạt động; số tiền khác mặc định (khi mặc định > 0) hoặc nhập tay (không `chargeTypeId`, cần `name`) cần quyền `pos.other_charge` (403 nếu thiếu). Tổng đơn = hàng − giảm giá − khuyến mãi/voucher/điểm + Σ charges; **thu khác không bị giảm giá, không tích điểm**. 422 `charge_type_not_found`, `charge_name_required`.
+- `credit?: { amount }` — phần ghi nợ; phải bằng đúng `total − Σ payments` (`payments` có thể rỗng). Lỗi: 409 `credit_disabled` (đang tắt), 422 `credit_needs_customer` (không có khách lẻ có SĐT), 422 `credit_mismatch`, 422 `credit_offline_not_allowed` (đơn offline có `soldAt`), 409 `credit_limit_exceeded` (`details:{creditLimit, outstanding, available}`) khi khách có hạn mức 0 (chưa được bán nợ — quản lý phải đặt hạn mức trước, không có đường duyệt), 423 `period_locked`. **Vượt hạn mức (> 0)** (nợ đang mở + ghi nợ > `credit_limit`) → 409 `approval_required` (approval `order.credit`, kể cả quản lý/chủ; người duyệt cần `pos.credit`, chủ duyệt được chính mình, người khác không tự duyệt); duyệt xong gửi lại kèm `approvalId` thì `assertStmt` cho vượt, phiếu duyệt gắn băm giỏ + số ghi nợ + khách, dùng một lần (`onceStmt` + `ref_id`; dùng lại → 409 `approval_invalid`). Hai quầy ghi nợ đồng thời không có duyệt: `assertStmt` hạn mức đặt đầu batch → chỉ một đơn qua, đơn kia 409 `credit_limit_exceeded`. Ghi nợ > `approval.pos_credit_vnd` mà người bán không có `pos.credit`/`approvals.decide` → 409 `approval_required` (cùng approval `order.credit`).
+- Ghi một batch: đơn hoàn tất như thường (kho FEFO), `payments` (phần đã thu) + 1 dòng `payments(method='credit', amount=ghi nợ, fund_id NULL)`, hoá đơn phải thu `invoices(kind='sale', order_id, customer_id, total=ghi nợ, issue_date=ngày bán VN, due_date=ngày bán+kỳ hạn, einvoice_status='not_required')`. `orders.paid_total` = tiền thực thu (không gồm nợ), `orders.charges_total` = Σ thu khác.
+- Phản hồi đơn (`POST /pos/orders`, `GET /orders/:id`, `GET /pos/receipt/:id`) có thêm `charges:[{id,charge_type_id,name,amount,refunded_amount}]` (receipt: `[{name,amount}]`) và `credit: null | { invoiceId, invoiceCode, amount, outstanding, issueDate, dueDate, payCode, qrPayload }` — `payCode`/`qrPayload` (VietQR số tiền = còn nợ, nội dung = mã `HDS…`) chỉ có khi đã bật SePay (`sepay.enabled`, `sepay.flow_b2b`) và có tài khoản nhận tiền.
+
+### Trả hàng / huỷ / đổi đơn có ghi nợ hoặc thu khác
+- `POST /orders/:id/return` — thêm `refundCharges?: boolean`, `chargesReason?: string`. Mặc định **không hoàn** thu khác. `refundCharges=true` chỉ hợp lệ khi lần trả này làm đơn được trả hết (422 `charges_refund_partial`) và có `chargesReason` (422 `charges_reason_required`); khi đó phiếu trả cộng phần thu khác chưa hoàn (`total` = hàng + thu khác, `charges_total` = phần hoàn) và `order_charges.refunded_amount` = `amount`.
+- Đơn có hoá đơn nợ: giá trị trả trừ vào **còn nợ** của hoá đơn trước — hoá đơn `adjustment` âm trỏ `original_invoice_id` + dòng `payments(method='credit', amount âm)` trên phiếu trả; phần vượt mới hoàn tiền theo `refundMethod` (`orders.paid_total` của phiếu trả = tiền thực hoàn). Một batch (kèm `assertStmt` còn nợ đủ).
+- `POST /orders/:id/void` — đơn có nợ: chỉ huỷ được khi hoá đơn chưa được thu đồng nào (409 `credit_already_paid` → dùng Trả hàng); sinh hoá đơn `adjustment` âm bằng toàn bộ nợ (hoá đơn đã phát hành không sửa/xoá).
+- `POST /orders/:id/exchange` — đơn có ghi nợ: 409 `credit_order_no_exchange` (trả hàng rồi bán đơn mới).
+
+### Thu nợ tại quầy — `routes/pos-credit.ts` (quyền `pos.sell`)
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | /pos/credit-config | `{enabled, approvalVnd, canOverride}` — quầy biết có cho ghi nợ không và ngưỡng cần duyệt |
+| GET | /pos/customers/:id/debts | Khách lẻ: `{customer:{id,code,name,phone*,creditLimit}, outstanding, unapplied, overdueAmount, available, invoices:[{id,code,orderCode,issueDate,dueDate,total,outstanding,overdueDays}]}` (chỉ hoá đơn còn nợ, cũ nhất trước) |
+| POST | /pos/debt-payments | `{customerId, amount, method:'cash'\|'transfer', invoiceId?, ref?, idempotencyKey (≥ 8)}`. Gọi `createPayment` (phiếu thu M6 + `debt_payments` + gạch nợ + audit một batch). Tiền mặt vào quỹ của ca người thu (409 `no_open_shift` nếu chưa mở ca) và **cộng vào tiền mặt dự kiến của ca**; chuyển khoản vào quỹ ngân hàng. 422 `amount_exceeds_debt`, `no_open_documents`, `allocation_invalid`; 409 `already_done` (trùng `idempotencyKey`); 423 `period_locked`. Không chọn `invoiceId` → gạch cũ nhất trước |
+| GET | /pos/invoices/:id/pay-info | Mã `HDS…` + VietQR của một hoá đơn nợ khách lẻ (không cần `debt.view`); `{available:false}` khi chưa bật SePay |
+
+`cashFormula` (tiền mặt dự kiến của ca) thêm `debtCollected` = Σ phiếu thu công nợ khách hàng ở quỹ của ca do người mở ca lập trong ca (phiếu đảo trừ ngược): `expected = đầu ca + thu tiền mặt − hoàn + cọc + debtCollected − hoàn huỷ`. `GET /shifts/:id/summary` → `cashFormula.debtCollected`, `sales.otherCharges`.
+
+### Khách lẻ — hạn mức và công nợ (`routes/retail-customers.ts`)
+- `GET /retail-customers`, `/retail-customers/:id` — thêm `creditLimit`, `paymentTermsDays`; chi tiết có `debt: null | {outstanding, balance, unapplied, overdueAmount, oldestOverdueDays, available, invoices[], payments[]}` (chỉ khi có quyền `debt.view`).
+- `PUT /retail-customers/:id/credit` (`b2b.write` + `b2b.approve`) `{version, creditLimit?, paymentTermsDays?, reason ≥ 3}`. Luồng A-10: chủ (`b2b.credit_override`) đặt tuỳ ý; quản lý chỉ tới `b2b.new_credit_limit_max_vnd` / `b2b.new_payment_terms_max_days` hoặc hạ xuống, phần vượt → approval `customer.credit_change` gửi chủ (phản hồi `creditApprovalPending:true`). 409 `version_conflict`.
+
+### Loại thu khác — `routes/pos-credit.ts`
+| Method | Path | Quyền | Ghi chú |
+|---|---|---|---|
+| GET | /charge-types?all=1 | `pos.sell` (`all=1` chỉ có tác dụng với `settings.manage`) | `{items:[{id,code,name,defaultAmount,active,version}]}` — mặc định chỉ loại đang dùng. Có sẵn: Phí đóng gói 5.000, Phí giao hàng 20.000, Phí giỏ quà 30.000 (id 901–903) |
+| POST | /charge-types | `settings.manage` | `{code (A–Z,0–9,_ ; tự viết hoa), name, defaultAmount≥0}` → 201; 409 `code_duplicate` |
+| PATCH | /charge-types/:id | `settings.manage` | `{version, name?, defaultAmount?, active?}`; 409 `version_conflict` |
+
+### Báo cáo
+- `GET /reports/daily`, `GET /shifts/:id/summary` → `otherCharges` (thu khác ròng sau hoàn, đã nằm trong doanh thu). `byPayment` có dòng `credit` ("Công nợ"): `sold` = phần ghi nợ, `refunded` = phần trả hàng đã trừ vào nợ; giao diện không cộng dòng này vào "Tổng thu tiền".
+- `GET /reports/pnl` → `otherCharges`; với `groupBy=group` có thêm dòng `{key:"Thu khác", revenue, cogs:0}`, với `groupBy=day|channel` mỗi dòng có `otherCharges` (cộng vào `revenue`) để tổng breakdown = doanh thu.

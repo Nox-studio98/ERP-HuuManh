@@ -28,6 +28,7 @@ export function ShiftDetailBody({ s }: { s: ShiftSummary }) {
         <div className="kv-row"><span className="muted">Giờ đóng</span><b>{closed ? fmtDateTime(sh.closedAt) : <Badge tone="info">Đang mở</Badge>}</b></div>
         <div className="kv-row"><span className="muted">Doanh thu thuần</span><b className="money">{money(s.sales.revenue)}</b></div>
         <div className="kv-row"><span className="muted">Số đơn bán · phiếu trả</span><b>{s.sales.saleCount} · {s.sales.returnCount}</b></div>
+        {s.sales.otherCharges ? <div className="kv-row"><span className="muted">Trong đó thu khác (phí đóng gói…)</span><b className="money">{money(s.sales.otherCharges)}</b></div> : null}
       </Card>
       <Card title="Bán theo hình thức thanh toán"><PayTable rows={s.byPayment} /></Card>
       <Card title="Tiền mặt cuối ca">
@@ -35,6 +36,7 @@ export function ShiftDetailBody({ s }: { s: ShiftSummary }) {
         <div className="kv-row"><span className="muted">+ Thu tiền mặt bán hàng</span><span className="num">{money(f.cashSold)}</span></div>
         <div className="kv-row"><span className="muted">− Hoàn tiền mặt trả hàng</span><span className="num">{money(f.cashRefunded)}</span></div>
         <div className="kv-row"><span className="muted">± Cọc đặt trước (phiếu thu/chi)</span><span className="num">{money(f.deposits)}</span></div>
+        <div className="kv-row" data-testid="shift-debt-collected"><span className="muted">+ Thu nợ khách lẻ bằng tiền mặt</span><span className="num">{money(f.debtCollected ?? 0)}</span></div>
         <div className="kv-row"><span className="muted">− Hoàn tiền mặt khi huỷ đơn</span><span className="num">{money(f.voidRefunds)}</span></div>
         <div className="kv-row" style={{ fontWeight: 700 }}><span>= Dự kiến trong két</span><span className="num">{money(f.expected)}</span></div>
       </Card>
@@ -46,7 +48,7 @@ export function ShiftDetailBody({ s }: { s: ShiftSummary }) {
             { key: "a", label: "Số tiền", right: true, num: true, render: (v: any) => money(v.amount) },
           ]} />
         )}
-        <div className="hint">Chỉ phiếu cọc đặt trước được tính vào tiền mặt dự kiến; các phiếu khác hiển thị để đối chiếu.</div>
+        <div className="hint">Chỉ phiếu cọc đặt trước và phiếu thu nợ khách lẻ được tính vào tiền mặt dự kiến; các phiếu khác hiển thị để đối chiếu.</div>
       </Card>
       <Card title={`Trả hàng trong ca (${s.returns.length})`}>
         {s.returns.length === 0 ? <div className="hint">Không có phiếu trả hàng.</div> : (
@@ -68,10 +70,10 @@ export function shiftSections(s: ShiftSummary): DocSection[] {
   const closed = sh.status === "closed";
   return [
     { kv: [["Mã ca", `#${sh.id}`], ["Thu ngân", sh.cashierName], ["Giờ mở", fmtDateTime(sh.openedAt)], ["Giờ đóng", closed ? fmtDateTime(sh.closedAt) : "đang mở"]] },
-    { heading: "Tiền mặt", kv: [["Tiền đầu ca", money(f.opening)], ["+ Thu tiền mặt bán hàng", money(f.cashSold)], ["− Hoàn tiền mặt trả hàng", money(f.cashRefunded)], ["± Cọc đặt trước", money(f.deposits)], ["− Hoàn tiền huỷ đơn", money(f.voidRefunds)],
+    { heading: "Tiền mặt", kv: [["Tiền đầu ca", money(f.opening)], ["+ Thu tiền mặt bán hàng", money(f.cashSold)], ["− Hoàn tiền mặt trả hàng", money(f.cashRefunded)], ["± Cọc đặt trước", money(f.deposits)], ["+ Thu nợ khách lẻ (tiền mặt)", money(f.debtCollected ?? 0)], ["− Hoàn tiền huỷ đơn", money(f.voidRefunds)],
       ["Dự kiến trong két", money(sh.expectedCash), true], ...(closed ? ([["Tiền bàn giao (kiểm đếm)", money(sh.countedCash), true], ["Chênh lệch", money(sh.diffCash ?? 0), true]] as [string, string, boolean?][]) : [])],
       note: closed && sh.diffCash ? `Lý do chênh lệch: ${sh.diffReason || "—"}` : undefined },
-    { heading: "Bán hàng", kv: [["Số đơn bán", s.sales.saleCount], ["Doanh thu bán", money(s.sales.saleTotal)], [`Trả hàng (${s.sales.returnCount} phiếu)`, s.sales.returnTotal ? `-${money(s.sales.returnTotal)}` : money(0)], ["Doanh thu thuần", money(s.sales.revenue), true]] },
+    { heading: "Bán hàng", kv: [["Số đơn bán", s.sales.saleCount], ["Doanh thu bán", money(s.sales.saleTotal)], [`Trả hàng (${s.sales.returnCount} phiếu)`, s.sales.returnTotal ? `-${money(s.sales.returnTotal)}` : money(0)], ["Doanh thu thuần", money(s.sales.revenue), true], ...(s.sales.otherCharges ? ([["Trong đó thu khác", money(s.sales.otherCharges)]] as [string, string, boolean?][]) : [])] },
     { heading: "Theo hình thức thanh toán", table: { head: ["Hình thức", "Bán", "Hoàn", "Ròng"], right: [1, 2, 3], rows: s.byPayment.map((p: any) => [PAY_LABEL[p.method] ?? p.method, money(p.sold), money(p.refunded), money(p.net)]), foot: ["Thu tiền", money(t.sold), money(t.refunded), money(t.net)] },
       note: "Điểm và voucher là giảm trừ, không phải tiền thu." },
     { heading: "Theo kênh", table: { head: ["Kênh", "Đơn", "Doanh thu"], right: [1, 2], rows: (s.byChannel ?? []).map((c: any) => [CHANNELS[c.channel] ?? c.channel, c.orders, money(c.revenue)]) } },
