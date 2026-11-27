@@ -1,3 +1,5 @@
+import { buildOrderFilter } from "../services/order-filter";
+import { cartHashOf, requireDiscountApproval } from "../services/discount-approval";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
@@ -7,7 +9,7 @@ import { AppError, conflict, forbidden, notFound } from "../lib/errors";
 import { auditStmt } from "../lib/audit";
 import { nextCode, PREFIX } from "../lib/codes";
 import { lineAmount } from "../lib/money";
-import { vnDate, vnDayRangeUtc, vnPeriod } from "../lib/time";
+import { vnDate, vnPeriod } from "../lib/time";
 import { allocateFefo, allocationCost, moveStatements, type LotAllocation } from "../services/stock";
 import { resolvePrice } from "../services/pricing";
 import { getSettingInt } from "../services/settings";
@@ -499,7 +501,7 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     const allReasons = needCreditApproval || overLimit ? [...reasons, ...(overLimit ? ["credit_limit"] : ["credit"])] : reasons;
     // vượt hạn mức luôn cần phiếu duyệt (kể cả quản lý/chủ — không tự bỏ qua)
     if (allReasons.length && (overLimit || !can(user.role, "approvals.decide"))) {
-      approvalUsed = await requireApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount, outstanding: outstandingNow, creditLimit: customer?.credit_limit ?? 0 } : {}) }, await cartHash(body));
+      approvalUsed = await requireDiscountApproval(c, body.clientUuid, body.approvalId, allReasons, { total, discountValue: discValue, ...(creditAmount ? { creditAmount, outstanding: outstandingNow, creditLimit: customer?.credit_limit ?? 0 } : {}) }, await cartHash(body));
     } else if (reasons.length) {
       // A-29: người có quyền tự duyệt không cần phiếu, nhưng phải ghi lý do (audit)
       if (!body.overrideReason) throw new AppError(422, "override_reason_required", "Bán dưới giá vốn hoặc giảm giá vượt ngưỡng cần nhập lý do", { reasons });
@@ -637,9 +639,9 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   return orderDone(orderId, 201, change, { promotions: { rejected: promoPlan.rejected } });
 });
 
-/** Yêu cầu duyệt (giá dưới vốn / giảm giá vượt ngưỡng): trả approvalId đã duyệt, hoặc 409 approval_required. */
-async function cartHash(body: z.infer<typeof checkoutSchema>) {
-  const canon = JSON.stringify({
+/** Băm giỏ hàng checkout (phiếu duyệt gắn với đúng giỏ); logic duyệt dùng chung ở services/discount-approval.ts. */
+function cartHash(body: z.infer<typeof checkoutSchema>) {
+  return cartHashOf({
     l: body.lines.map((l) => [l.productId, l.unit, l.qty, l.unitPriceOverride ?? null, l.discount ?? 0]),
     d: body.discount ?? 0,
     v: body.voucherCode ?? null,
@@ -648,101 +650,16 @@ async function cartHash(body: z.infer<typeof checkoutSchema>) {
     ...(body.credit ? { cr: body.credit.amount, cu: body.customerId ?? null } : {}),
     ...(body.charges?.length ? { ch: body.charges.map((x) => [x.chargeTypeId ?? null, x.name ?? null, x.amount]) } : {}),
   });
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function requireApproval(c: Ctx, clientUuid: string, approvalId: number | undefined, reasons: string[], payload: object, hash: string): Promise<number> {
-  const db = c.env.DB;
-  const user = c.get("user");
-  const type = reasons.includes("below_cost") ? "order.below_cost" : reasons.includes("discount") ? "order.discount" : "order.credit";
-  if (approvalId) {
-    const a = await db.prepare(`SELECT * FROM approvals WHERE id = ?`).bind(approvalId).first<any>();
-    // Duyệt gắn với đúng giỏ hàng (hash dòng + giảm giá) và đúng loại lý do, không chỉ clientUuid
-    const okUuid = a && (() => { try { const j = JSON.parse(a.payload_json ?? "{}"); return j.clientUuid === clientUuid && j.hash === hash; } catch { return false; } })();
-    // C2-04: lý do hiện tại phải nằm trong lý do người duyệt đã thấy (duyệt "vượt ngưỡng" không dùng được cho "vượt hạn mức"); duyệt vượt hạn mức bao cả vượt ngưỡng
-    const okReasons = a && (() => {
-      try {
-        const approved = new Set<string>(JSON.parse(a.payload_json ?? "{}").reasons ?? []);
-        if (approved.has("credit_limit")) approved.add("credit");
-        return reasons.every((r) => approved.has(r));
-      } catch { return false; }
-    })();
-    if (a && okUuid && okReasons && a.requested_by === user.id && a.type === type) {
-      if (a.status === "approved" && !a.ref_id) return a.id;
-      if (a.status === "rejected") throw new AppError(403, "approval_rejected", "Yêu cầu duyệt đã bị từ chối", { approvalId: a.id });
-      if (a.status === "pending") throw conflict("approval_required", "Đang chờ quản lý duyệt", { approvalId: a.id, reasons });
-    }
-    throw conflict("approval_invalid", "Mã duyệt không hợp lệ hoặc đã được sử dụng", { approvalId });
-  }
-  const pending = await db
-    .prepare(`SELECT id FROM approvals WHERE type LIKE 'order.%' AND status='pending' AND requested_by=? AND json_extract(payload_json,'$.clientUuid')=? AND json_extract(payload_json,'$.hash')=? AND type=? AND json_extract(payload_json,'$.reasons')=?`)
-    .bind(user.id, clientUuid, hash, type, JSON.stringify(reasons))
-    .first<{ id: number }>();
-  let id = pending?.id;
-  if (!id) {
-    const r = await db
-      .prepare(`INSERT INTO approvals(type, ref_type, payload_json, reason, requested_by) VALUES (?,?,?,?,?)`)
-      .bind(type, "order_draft", JSON.stringify({ clientUuid, reasons, hash, ...payload }), reasons.join(","), user.id)
-      .run();
-    id = r.meta.last_row_id as number;
-    await auditStmt(c, { action: "approval.request", entity: "approval", entityId: id, after: { type, reasons } }).run();
-  }
-  throw conflict(
-    "approval_required",
-    reasons.includes("below_cost") ? "Giá bán thấp hơn giá vốn, cần quản lý duyệt" : reasons.includes("discount") ? "Giảm giá vượt ngưỡng, cần quản lý duyệt" : reasons.includes("credit_limit") ? "Ghi nợ vượt hạn mức của khách, cần quản lý duyệt" : "Ghi nợ vượt ngưỡng cho phép, cần quản lý duyệt",
-    { approvalId: id, reasons },
-  );
 }
 
 // ===================== Danh sách / chi tiết / hoá đơn =====================
-
-const DAY_RE_ORD = /^\d{4}-\d{2}-\d{2}$/;
-const validDay = (v: string, name: string) => {
-  if (!DAY_RE_ORD.test(v) || Number.isNaN(Date.parse(v + "T00:00:00Z"))) throw new AppError(422, "validation_error", `${name} phải có dạng YYYY-MM-DD`);
-  return v;
-};
 
 posRoutes.get("/orders", requirePerm("orders.view"), async (c) => {
   const q = c.req.query();
   const role = c.get("user").role;
   const pii = can(role, "customers.view_pii");
-  const conds: string[] = [];
-  const params: unknown[] = [];
-  // Lọc theo ngày VN: `day` (một ngày, giữ tương thích) hoặc khoảng from..to (gồm cả hai đầu)
-  if (q.day) {
-    const r = vnDayRangeUtc(validDay(q.day, "day"));
-    conds.push(`o.created_at >= ? AND o.created_at < ?`);
-    params.push(r.from, r.to);
-  } else if (q.from || q.to) {
-    const from = validDay(q.from ?? q.to!, "from"), to = validDay(q.to ?? q.from!, "to");
-    if (to < from) throw new AppError(422, "validation_error", "to phải sau hoặc bằng from");
-    if ((Date.parse(to) - Date.parse(from)) / 86400_000 > 366) throw new AppError(422, "validation_error", "Khoảng ngày tối đa 366 ngày");
-    conds.push(`o.created_at >= ? AND o.created_at < ?`);
-    params.push(vnDayRangeUtc(from).from, vnDayRangeUtc(to).to);
-  }
-  if (q.channel) { conds.push(`o.channel = ?`); params.push(q.channel); }
-  if (q.status) { conds.push(`o.status = ?`); params.push(q.status); } else conds.push(`o.status <> 'draft'`);
-  if (q.shiftId) { conds.push(`o.shift_id = ?`); params.push(Number(q.shiftId)); }
-  if (q.kind) { conds.push(`o.kind = ?`); params.push(q.kind); }
-  if (q.cashierId) { conds.push(`o.created_by = ?`); params.push(Number(q.cashierId)); }
-  if (q.sellerId) { conds.push(`COALESCE(o.seller_id, o.created_by) = ?`); params.push(Number(q.sellerId)); }
-  if (q.method) { conds.push(`EXISTS (SELECT 1 FROM payments pm WHERE pm.order_id = o.id AND pm.method = ? AND pm.status = 'confirmed')`); params.push(q.method); }
-  const term = q.q?.trim();
-  if (term) {
-    const like = `%${term.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
-    // SĐT chỉ được tìm khi người dùng có quyền xem PII (tránh dò số điện thoại qua kết quả tìm kiếm)
-    // Khớp thêm ghi chú và tên hàng trong đơn (A4/A6)
-    const parts = [
-      `o.code LIKE ? ESCAPE '\\'`, `cu.name LIKE ? ESCAPE '\\'`, `o.receiver_name LIKE ? ESCAPE '\\'`, `o.note LIKE ? ESCAPE '\\'`,
-      `EXISTS (SELECT 1 FROM order_lines ql JOIN products qp ON qp.id = ql.product_id WHERE ql.order_id = o.id AND (qp.name LIKE ? ESCAPE '\\' OR qp.sku LIKE ? ESCAPE '\\'))`,
-    ];
-    const ps: unknown[] = [like, like, like, like, like, like];
-    if (pii) { parts.push(`cu.phone LIKE ? ESCAPE '\\'`, `o.receiver_phone LIKE ? ESCAPE '\\'`); ps.push(like, like); }
-    conds.push(`(${parts.join(" OR ")})`);
-    params.push(...ps);
-  }
-  const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+  // Bộ lọc dùng chung với xuất file chi tiết dòng hàng (services/order-filter.ts)
+  const { where, params } = buildOrderFilter(q, pii);
   const join = `FROM orders o LEFT JOIN users u ON u.id = o.created_by LEFT JOIN users sl ON sl.id = o.seller_id LEFT JOIN customers cu ON cu.id = o.customer_id`;
   const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
   const cursorCond = q.cursor ? `${where ? where + " AND" : "WHERE"} o.id < ?` : where;
