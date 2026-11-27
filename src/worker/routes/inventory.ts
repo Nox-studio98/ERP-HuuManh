@@ -336,7 +336,7 @@ inventoryRoutes.post("/stock-docs/:id/scan", requirePerm("inventory.write"), asy
     if (!lot) return fail("unknown", "unknown_code", "Cần quét tem mã lô của hàng", { code: b.code });
     if (lot.location_id !== doc.location_id) return fail("not_in_doc", "not_in_doc", "Lô không thuộc vị trí của chứng từ", { lotId: lot.id });
     if ((type === "adjust" || type === "transfer" || type === "internal_use") && isExpired(lot)) return fail("expired", "lot_expired", "Lô đã hết hạn, chỉ được xuất qua phiếu hao hụt", { lotId: lot.id });
-    if (type === "transfer" && lot.status !== "active") return fail("not_active", "lot_not_active", "Lô đang cách ly / không hoạt động, không thể chuyển kho", { lotId: lot.id, status: lot.status });
+    if ((type === "transfer" || type === "internal_use") && lot.status !== "active") return fail("not_active", "lot_not_active", type === "transfer" ? "Lô đang cách ly / không hoạt động, không thể chuyển kho" : "Lô đang cách ly / không hoạt động, không thể xuất dùng nội bộ", { lotId: lot.id, status: lot.status });
     const existing = await db.prepare(`SELECT id FROM stock_doc_lines WHERE doc_id = ? AND lot_id = ?`).bind(doc.id, lot.id).first<any>();
     if (existing) {
       if (type !== "count") return fail("duplicate", "duplicate_scan", "Lô này đã được quét trong chứng từ", { lineId: existing.id });
@@ -497,7 +497,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
     for (const l of lines) {
       const lot = lots.get(l.lot_id)!;
       if (type !== "waste" && isExpired(lot, now)) throw new AppError(422, "lot_expired", "Lô đã hết hạn, chỉ được xuất qua phiếu hao hụt", { lotId: lot.id });
-      if (type === "transfer" && lot.status !== "active") throw new AppError(422, "lot_not_active", "Lô đang cách ly / không hoạt động, không thể chuyển kho", { lotId: lot.id, status: lot.status });
+      if ((type === "transfer" || type === "internal_use") && lot.status !== "active") throw new AppError(422, "lot_not_active", type === "transfer" ? "Lô đang cách ly / không hoạt động, không thể chuyển kho" : "Lô đang cách ly / không hoạt động, không thể xuất dùng nội bộ", { lotId: lot.id, status: lot.status });
       if (lot.location_id !== doc.location_id) throw new AppError(422, "not_in_doc", "Lô không còn ở vị trí của chứng từ", { lotId: lot.id });
       const out = type === "adjust" ? Math.max(-l.qty_milli, 0) : l.qty_milli;
       outPerLot.set(lot.id, (outPerLot.get(lot.id) ?? 0) + out);
@@ -531,7 +531,7 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
       total += val(lot.unit_cost, l.qty_milli);
       const alloc = [{ lotId: lot.id, qtyMilli: Math.abs(l.qty_milli), unitCost: lot.unit_cost }];
       if (type === "waste") stmts.push(...moveStatements(db, lot.product_id, alloc, -1, "waste", "stock_doc", doc.id, doc.created_by));
-      else if (type === "internal_use") stmts.push(...moveStatements(db, lot.product_id, alloc, -1, "internal_use", "stock_doc", doc.id, doc.created_by));
+      else if (type === "internal_use") stmts.push(assertStmt(db, "stock_doc.internal_use.lot_active", `SELECT status = 'active' FROM lots WHERE id = ?`, [lot.id]), ...moveStatements(db, lot.product_id, alloc, -1, "internal_use", "stock_doc", doc.id, doc.created_by));
       else if (type === "adjust") stmts.push(...moveStatements(db, lot.product_id, alloc, l.qty_milli > 0 ? 1 : -1, "adjust", "stock_doc", doc.id, doc.created_by));
       else {
         // B-19 / EC-21: chuyển kho 2 bước — chỉ xuất khỏi lô nguồn (đang đi đường, không bán được ở đâu cả);

@@ -32,7 +32,9 @@ const maskEmail = (e: string | null, pii: boolean) => (e && !pii ? "***" : e ?? 
 function shape(r: any, pii: boolean) {
   return {
     id: r.id, code: r.code, name: r.name, phone: phoneOf(r, pii), email: maskEmail(r.email, pii),
-    birthday: r.birthday ?? null, gender: r.gender ?? null, address: pii ? r.address ?? null : r.address ? "***" : null, note: r.note ?? null,
+    // C2-11: ngày sinh (chỉ giữ MM-DD cho khuyến mãi sinh nhật), ghi chú và địa chỉ che khi thiếu customers.view_pii
+    birthday: pii ? r.birthday ?? null : r.birthday ? String(r.birthday).slice(-5) : null, gender: r.gender ?? null,
+    address: pii ? r.address ?? null : r.address ? "***" : null, note: pii ? r.note ?? null : r.note ? "***" : null,
     customerGroupId: r.customer_group_id, groupName: r.group_name ?? null,
     points: r.points, active: !!r.active, mergedInto: r.merged_into ?? null, version: r.version, createdAt: r.created_at ?? null,
     spend: r.spend ?? 0, ordersCount: r.orders_count ?? 0, lastPurchaseAt: r.last_purchase_at ?? null,
@@ -309,6 +311,9 @@ retailCustomerRoutes.post("/retail-customers/assign-group", requirePerm("b2b.wri
 });
 
 // ---------------------------------------------------------------- gộp khách trùng
+/** 1 nếu khách (bind ?) còn hoá đơn bán/thay thế đang mở mà chưa trả hết. */
+const UNPAID_INVOICES_SQL = `EXISTS (SELECT 1 FROM invoices i WHERE i.customer_id = ? AND i.status = 'open' AND i.kind IN ('sale','replacement') AND ${INVOICE_OUTSTANDING_SQL} > 0)`;
+
 /**
  * Gộp khách `:id` (nguồn, bị ngừng) vào `targetId` (đích, giữ lại):
  *  - chuyển đơn hàng, voucher cá nhân + lượt dùng voucher, tài khoản website sang khách đích;
@@ -336,11 +341,14 @@ retailCustomerRoutes.post("/retail-customers/:id/merge", requirePerm("b2b.write"
   if (dst.merged_into) throw conflict("customer_merged", "Khách đích đã được gộp vào hồ sơ khác");
   if (!dst.active) throw new AppError(422, "target_inactive", "Khách đích đang ngừng hoạt động");
   if (src.version !== b.version || dst.version !== b.targetVersion) throw conflict("version_conflict", "Hồ sơ vừa được người khác sửa — hãy tải lại", { version: src.version, targetVersion: dst.version });
+  // C2-09: chỉ chặn khi khách nguồn còn hoá đơn CHƯA trả hết (hoá đơn đã trả hết ở lại hồ sơ nguồn làm lịch sử); báo giá / đơn lặp vẫn chặn
   const hasB2b = await db
-    .prepare(`SELECT (SELECT COUNT(*) FROM invoices WHERE customer_id = ?1) + (SELECT COUNT(*) FROM quotes WHERE customer_id = ?1) + (SELECT COUNT(*) FROM recurring_orders WHERE customer_id = ?1) AS n`)
+    .prepare(`SELECT (SELECT COUNT(*) FROM quotes WHERE customer_id = ?1) + (SELECT COUNT(*) FROM recurring_orders WHERE customer_id = ?1) AS n`)
     .bind(srcId)
     .first<{ n: number }>();
-  if (hasB2b?.n) throw new AppError(422, "has_b2b_documents", "Khách nguồn có hoá đơn/báo giá/đơn lặp — không gộp được");
+  if (hasB2b?.n) throw new AppError(422, "has_b2b_documents", "Khách nguồn có báo giá/đơn lặp — không gộp được");
+  const unpaid = await db.prepare(`SELECT ${UNPAID_INVOICES_SQL} AS bad`).bind(srcId).first<{ bad: number }>();
+  if (unpaid?.bad) throw new AppError(422, "has_unpaid_invoices", "Khách nguồn còn hoá đơn chưa trả hết — hãy thu/xử lý hết công nợ rồi mới gộp");
   const pts = src.points as number;
   const moved = await db.prepare(`SELECT COUNT(*) AS n FROM orders WHERE customer_id = ?`).bind(srcId).first<{ n: number }>();
   const note = (dir: "to" | "from") => (dir === "to" ? `Gộp khách: chuyển ${pts} điểm sang ${dst.code}` : `Gộp khách: nhận ${pts} điểm từ ${src.code}`);
@@ -353,7 +361,18 @@ retailCustomerRoutes.post("/retail-customers/:id/merge", requirePerm("b2b.write"
             AND (SELECT version = ? AND active = 1 AND type = 'retail' AND merged_into IS NULL FROM customers WHERE id = ?)`,
         [b.version, pts, srcId, b.targetVersion, b.targetId],
       ),
+      // Hoá đơn còn nợ kiểm TRONG batch: đơn ghi nợ đồng thời không để lại hoá đơn nợ trên hồ sơ đã gộp
+      assertStmt(db, "retail_customer.merge.invoices", `SELECT NOT (${UNPAID_INVOICES_SQL})`, [srcId]),
       db.prepare(`UPDATE orders SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),
+      // C2-09: dữ liệu gắn với khách nguồn — địa chỉ giao, người liên hệ, bảng giá riêng; phiếu chờ đổi hạn mức của nguồn bị huỷ (từ chối)
+      db
+        .prepare(`UPDATE customer_addresses SET is_default = CASE WHEN EXISTS (SELECT 1 FROM customer_addresses d WHERE d.customer_id = ?1 AND d.is_default = 1) THEN 0 ELSE is_default END, customer_id = ?1 WHERE customer_id = ?2`)
+        .bind(b.targetId, srcId),
+      db.prepare(`UPDATE customer_contacts SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),
+      db.prepare(`UPDATE price_lists SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),
+      db
+        .prepare(`UPDATE approvals SET status = 'rejected', decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), decision_note = ? WHERE type = 'customer.credit_change' AND ref_type = 'customer' AND ref_id = ? AND status = 'pending'`)
+        .bind(user.id, `Hồ sơ khách đã gộp vào ${dst.code}`, String(srcId)),
       db.prepare(`UPDATE voucher_redemptions SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),
       db.prepare(`UPDATE vouchers SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),
       db.prepare(`UPDATE shop_accounts SET customer_id = ? WHERE customer_id = ?`).bind(b.targetId, srcId),

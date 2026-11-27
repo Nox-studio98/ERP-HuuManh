@@ -2,6 +2,7 @@
  * Hoa hồng bán hàng theo quy tắc (commission_rules, migrations/0036).
  * - Người bán của đơn = COALESCE(orders.seller_id, orders.created_by) (migrations/0033).
  * - Chỉ đơn kênh POS đã hoàn tất, giống cách tính thưởng doanh số cũ; doanh thu = line_total của dòng hàng (đã gồm giảm giá phân bổ).
+ * - Huỷ đơn của kỳ lương đã duyệt: thu hồi vào kỳ có ngày huỷ (loadVoidedLines).
  * - Trả hàng trừ lại cho người bán của ĐƠN GỐC, theo đúng mặt hàng đã trả, vào kỳ có ngày hoàn tất phiếu trả.
  * - Quy tắc cụ thể nhất thắng: phạm vi (sản phẩm > nhóm > tất cả), rồi quy tắc riêng nhân viên > chung, rồi quy tắc tạo sau (id lớn hơn).
  * Hàm tính là hàm thuần (resolveRule/computeCommission) để test; phần đọc DB ở loadCommissionLines/loadActiveRules.
@@ -58,7 +59,31 @@ export async function loadCommissionLines(db: D1Database, period: string): Promi
       .bind(fromIso, toIso)
       .all<CommissionLine>()
   ).results;
+  for (const v of await loadVoidedLines(db, fromIso, toIso)) rows.push({ ...v, amount: -v.amount });
   return rows;
+}
+
+/**
+ * C2-05: đơn POS đã hoàn tất ở kỳ lương ĐÃ DUYỆT/CHI rồi bị huỷ (void) ở kỳ khác → phần doanh thu dòng hàng bị thu hồi vào kỳ có ngày huỷ
+ * (người bán của đơn gốc, giống trả hàng). Kỳ gốc chưa duyệt thì đơn huỷ đơn giản biến mất khỏi kỳ đó (đã lọc status='completed'), không thu hồi.
+ * Trả về số DƯƠNG (phần cần trừ).
+ */
+export async function loadVoidedLines(db: D1Database, fromIso: string, toIso: string) {
+  return (
+    await db
+      .prepare(
+        `SELECT COALESCE(o.seller_id, o.created_by) AS uid, ol.product_id AS productId, pr.group_id AS groupId,
+                substr(datetime(o.voided_at, '+7 hours'), 1, 10) AS date, SUM(ol.line_total) AS amount
+           FROM order_lines ol JOIN orders o ON o.id = ol.order_id JOIN products pr ON pr.id = ol.product_id
+          WHERE o.status = 'cancelled' AND o.kind = 'sale' AND o.channel = 'pos' AND o.completed_at IS NOT NULL
+            AND o.voided_at >= ? AND o.voided_at < ?
+            AND substr(datetime(o.completed_at, '+7 hours'), 1, 7) <> substr(datetime(o.voided_at, '+7 hours'), 1, 7)
+            AND EXISTS (SELECT 1 FROM payroll_periods pp WHERE pp.period = substr(datetime(o.completed_at, '+7 hours'), 1, 7) AND pp.status IN ('approved','paid'))
+          GROUP BY uid, ol.product_id, date HAVING uid IS NOT NULL ORDER BY uid, ol.product_id, date`,
+      )
+      .bind(fromIso, toIso)
+      .all<CommissionLine>()
+  ).results;
 }
 
 /** Chọn quy tắc áp dụng cho một dòng; null = không có quy tắc nào khớp (không có hoa hồng). */

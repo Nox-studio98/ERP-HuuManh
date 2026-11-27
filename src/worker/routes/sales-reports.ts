@@ -37,21 +37,23 @@ const LIMIT = 500;
 salesReportRoutes.get("/reports/sales/sellers", requirePerm("reports.view"), async (c) => {
   const db = c.env.DB, s = scope(c), withCost = costOk(c);
   const SELLER = `COALESCE(so.seller_id, so.created_by, o.seller_id, o.created_by)`;
-  const rows = new Map<number | null, { sales: number; returns: number; saleCount: number; returnCount: number; cogs: number }>();
-  const row = (k: number | null) => rows.get(k) ?? (rows.set(k, { sales: 0, returns: 0, saleCount: 0, returnCount: 0, cogs: 0 }), rows.get(k)!);
+  const rows = new Map<number | null, { sales: number; returns: number; saleCount: number; returnCount: number; cogs: number; charges: number }>();
+  const row = (k: number | null) => rows.get(k) ?? (rows.set(k, { sales: 0, returns: 0, saleCount: 0, returnCount: 0, cogs: 0, charges: 0 }), rows.get(k)!);
   if (s.groupId == null) {
     const orders = (
       await db
         .prepare(
           `SELECT ${SELLER} AS uid,
-                  SUM(CASE WHEN o.kind='sale' THEN 1 ELSE 0 END) AS saleCount, SUM(CASE WHEN o.kind='sale' THEN o.total ELSE 0 END) AS sales,
-                  SUM(CASE WHEN o.kind='return' THEN 1 ELSE 0 END) AS returnCount, SUM(CASE WHEN o.kind='return' THEN o.total ELSE 0 END) AS returns
+                  SUM(CASE WHEN o.kind='sale' THEN 1 ELSE 0 END) AS saleCount, SUM(CASE WHEN o.kind='return' THEN 1 ELSE 0 END) AS returnCount,
+                  SUM(CASE WHEN o.kind='sale' THEN o.total - o.charges_total ELSE 0 END) AS sales, SUM(CASE WHEN o.kind='return' THEN o.total - o.charges_total ELSE 0 END) AS returns,
+                  SUM(CASE WHEN o.kind='sale' THEN o.charges_total ELSE -o.charges_total END) AS charges
              FROM orders o LEFT JOIN orders so ON so.id = o.original_order_id WHERE ${s.where} GROUP BY uid`,
         )
         .bind(...s.params)
         .all<any>()
     ).results;
-    for (const r of orders) Object.assign(row(r.uid), { sales: r.sales, returns: r.returns, saleCount: r.saleCount, returnCount: r.returnCount });
+    // Doanh số = total − charges_total (hàng + phí giao, KHÔNG gồm thu khác — cùng cơ sở thưởng doanh số/hoa hồng); "Thu khác" (phí đóng gói, giỏ quà...) báo riêng
+    for (const r of orders) Object.assign(row(r.uid), { sales: r.sales, returns: r.returns, saleCount: r.saleCount, returnCount: r.returnCount, charges: r.charges ?? 0 });
   }
   const lineRows = (
     await db
@@ -76,14 +78,14 @@ salesReportRoutes.get("/reports/sales/sellers", requirePerm("reports.view"), asy
       const revenue = t.sales - t.returns;
       return {
         sellerId: uid, sellerName: uid == null ? "Không rõ người bán" : names.get(uid) ?? `#${uid}`,
-        saleCount: t.saleCount, sales: t.sales, returnCount: t.returnCount, returns: t.returns, revenue,
+        saleCount: t.saleCount, sales: t.sales, returnCount: t.returnCount, returns: t.returns, revenue, otherCharges: t.charges,
         avgOrder: t.saleCount ? Math.round(t.sales / t.saleCount) : 0,
         ...(withCost ? { cogs: t.cogs, grossProfit: revenue - t.cogs } : {}),
       };
     })
     .sort((a, b) => b.revenue - a.revenue);
-  const sum = (k: "saleCount" | "sales" | "returnCount" | "returns" | "revenue") => items.reduce((t, i) => t + i[k], 0);
-  const totals = { saleCount: sum("saleCount"), sales: sum("sales"), returnCount: sum("returnCount"), returns: sum("returns"), revenue: sum("revenue"),
+  const sum = (k: "saleCount" | "sales" | "returnCount" | "returns" | "revenue" | "otherCharges") => items.reduce((t, i) => t + i[k], 0);
+  const totals = { saleCount: sum("saleCount"), sales: sum("sales"), returnCount: sum("returnCount"), returns: sum("returns"), revenue: sum("revenue"), otherCharges: sum("otherCharges"),
     ...(withCost ? { cogs: items.reduce((t, i) => t + (i as any).cogs, 0), grossProfit: items.reduce((t, i) => t + (i as any).grossProfit, 0) } : {}) };
   return c.json({ from: s.from, to: s.to, channel: s.channel, groupId: s.groupId, basis: s.groupId != null ? "lines" : "orders", items, totals });
 });
