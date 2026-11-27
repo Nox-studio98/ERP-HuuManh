@@ -38,6 +38,7 @@ export default function Sepay() {
   const [st, setSt] = useState<St>("pending");
   const [q, setQ] = useState("");
   const [act, setAct] = useState<null | { kind: "assign" | "refunded" | "ignored"; row: any }>(null);
+  const [showHold, setShowHold] = useState(false);
   const cfg = useAsync(() => get("/sepay/config").catch(() => null), []);
   const list = usePagedList<any>("/sepay/events", { status: st, q, limit: 50 }, [st, q]);
   const sum = list.extra?.summary;
@@ -62,10 +63,13 @@ export default function Sepay() {
           <b>{cfg.data.bankCheck.selected.shortName}</b>: {cfg.data.bankCheck.selected.note} Nếu tài khoản liên kết SePay bằng <b>kết nối API không có SMS</b> và thuộc loại này, ô Số tài khoản nhận tiền phải là <b>số VA</b>. Tài khoản có kết nối SMS nhận cả số tài khoản chính.
         </Banner>
       )}
-      <KpiRow cols={2} items={[
+      {canAct && sum?.hold?.legacy?.count > 0 && <LegacyBanner legacy={sum.hold.legacy} onDone={() => list.reload()} />}
+      <KpiRow cols={3} items={[
         { label: "Chưa khớp", value: sum?.unmatched?.count ?? "—", sub: sum ? money(sum.unmatched.amount) : undefined, tone: sum?.unmatched?.count ? "warn" : undefined, onClick: () => setSt("unmatched") },
         { label: "Chờ hoàn tiền", value: sum?.refundPending?.count ?? "—", sub: sum ? money(sum.refundPending.amount) : undefined, tone: sum?.refundPending?.count ? "danger" : undefined, onClick: () => setSt("refund_pending") },
+        { label: "Chuyển khoản chờ xử lý (trong quỹ)", value: sum?.hold ? money(sum.hold.balance) : "—", sub: sum?.hold ? `${sum.hold.openCount} giao dịch chưa xử lý xong` : undefined, tone: sum?.hold?.balance ? "warn" : undefined, onClick: () => setShowHold((v) => !v) },
       ]} />
+      {showHold && <HoldVouchers />}
       <Segmented wrap value={st} onChange={setSt} options={TABS} />
       <FilterBar dirty={!!q} onReset={() => setQ("")}>
         <SearchInput value={q} onSearch={setQ} placeholder="Mã thanh toán, mã tham chiếu, nội dung…" />
@@ -79,6 +83,7 @@ export default function Sepay() {
             { key: "c", label: "Mã", render: (r: any) => <span className="num">{r.code ?? "—"}</span> },
             { key: "s", label: "Trạng thái", render: (r: any) => <div className="st-badges"><Badge tone={STATUS[r.status]?.tone}>{STATUS[r.status]?.label ?? r.status}</Badge></div> },
             { key: "r", label: "Lý do / xử lý", render: (r: any) => <span className="small">{reasonText(r.reason)}{r.refCode && r.kind ? ` · ${KIND[r.kind] ?? r.kind} ${r.refCode}` : ""}{r.resolution ? ` — ${r.resolution}` : ""}</span> },
+            { key: "h", label: "Sổ quỹ", hideBelow: 1280, render: (r: any) => <span className="small">{r.holdInCode ? <>Chờ xử lý {r.holdInCode}{r.holdOutCode ? ` → ra ${r.holdOutCode}` : <Badge tone="warn">đang ở khoản chờ</Badge>}</> : r.status === "matched" ? "Ghi thẳng vào chứng từ" : "—"}</span> },
             { key: "n", label: "Nội dung CK", hideBelow: 1600, render: (r: any) => <span className="small clip" title={r.content ?? ""}>{r.content ?? ""}</span> },
             { key: "f", label: "Tham chiếu", hideBelow: 1600, render: (r: any) => <span className="num small">{r.referenceCode ?? ""}</span> },
             ...(canAct ? [{ key: "x", label: "", render: (r: any) => (r.status === "unmatched" || r.status === "refund_pending") ? (
@@ -102,18 +107,25 @@ function ActionSheet({ act, onClose, onDone }: { act: { kind: "assign" | "refund
   const r = act.row;
   const assign = act.kind === "assign";
   const ok = note.trim().length >= 3 && (!assign || code.trim().length >= 3);
+  const ignoring = act.kind === "ignored";
+  const inHold = !!r.holdInCode && !r.holdOutCode;
+  const cats = useAsync(() => (ignoring && inHold ? get("/cash-categories", undefined, { silent: true }).then((x: any) => (x.items ?? []) as any[]).catch(() => [] as any[]) : Promise.resolve([] as any[])), []);
+  const [cat, setCat] = useState(""); // "" = chưa chọn; "hold" = giữ ở khoản chờ
+  const [refundRef, setRefundRef] = useState("");
+  const okAll = ok && (!(ignoring && inHold) || !!cat);
   const submit = async () => {
     setBusy(true);
     try {
       if (assign) await post(`/sepay/events/${r.id}/assign`, { kind, code: code.trim(), note: note.trim() });
-      else await post(`/sepay/events/${r.id}/resolve`, { action: act.kind, reason: note.trim() });
+      else if (act.kind === "refunded") await post(`/sepay/events/${r.id}/resolve`, { action: "refunded", reason: note.trim(), ...(refundRef.trim() ? { refundRef: refundRef.trim() } : {}) });
+      else await post(`/sepay/events/${r.id}/resolve`, { action: "ignored", reason: note.trim(), ...(inHold ? (cat === "hold" ? { keepInHold: true } : { categoryId: Number(cat) }) : {}) });
       toast(assign ? "Đã gán giao dịch và ghi nhận thanh toán" : act.kind === "refunded" ? "Đã đánh dấu hoàn tiền" : "Đã bỏ qua giao dịch", "ok");
       onDone();
     } catch { /* api.ts đã báo lỗi */ } finally { setBusy(false); }
   };
   const title = assign ? "Gán giao dịch vào đơn / hoá đơn" : act.kind === "refunded" ? "Đánh dấu đã hoàn tiền" : "Bỏ qua giao dịch";
   return (
-    <Sheet open onClose={onClose} title={title} footer={<Button block size="lg" loading={busy} disabled={!ok} onClick={submit}>{assign ? "Gán và ghi nhận thanh toán" : "Xác nhận"}</Button>}>
+    <Sheet open onClose={onClose} title={title} footer={<Button block size="lg" loading={busy} disabled={!okAll} onClick={submit}>{assign ? "Gán và ghi nhận thanh toán" : "Xác nhận"}</Button>}>
       <div className="stack">
         <div className="card flat" style={{ padding: 12 }}>
           <div className="row between"><span className="muted">Số tiền</span><b className="money">{money(r.amount)}</b></div>
@@ -129,9 +141,81 @@ function ActionSheet({ act, onClose, onDone }: { act: { kind: "assign" | "refund
             <Input label={kind === "web" ? "Mã đơn" : "Mã hoá đơn"} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder={kind === "web" ? "DH202611250001" : "HDB-20261125-0001"} />
           </>
         )}
-        {act.kind === "refunded" && <Banner>Hệ thống không tự chuyển tiền. Hãy hoàn tiền cho khách bằng Internet Banking trước, rồi ghi lại ở đây (kèm mã giao dịch hoàn).</Banner>}
+        {assign && inHold && <Banner tone="info">Tiền đang nằm ở “Chuyển khoản chờ xử lý” trong quỹ: khi gán, hệ thống chuyển ra khỏi khoản chờ và ghi thanh toán thật (quỹ không đổi thêm).</Banner>}
+        {act.kind === "refunded" && <Banner>Hệ thống không tự chuyển tiền. Hãy hoàn tiền cho khách bằng Internet Banking trước, rồi ghi lại ở đây. {inHold ? "Hệ thống lập phiếu chi hoàn tiền từ quỹ ngân hàng (khoản chờ xử lý)." : ""}</Banner>}
+        {act.kind === "refunded" && inHold && <Input label="Mã giao dịch hoàn (nếu có)" value={refundRef} onChange={(e) => setRefundRef(e.target.value)} />}
+        {ignoring && inHold && (
+          <Select label="Tiền đã vào quỹ — ghi vào đâu? (bắt buộc)" value={cat} onChange={(e) => setCat(e.target.value)}>
+            <option value="">— Chọn —</option>
+            {(cats.data ?? []).filter((x: any) => x.direction === "in" && x.code !== "CK_CHO_XL" && x.pnlLine !== "transfer" && x.pnl_line !== "transfer").map((x: any) => <option key={x.id} value={String(x.id)}>Thu: {x.name}</option>)}
+            <option value="hold">Giữ ở “Chuyển khoản chờ xử lý” (kế toán xử lý sau, ghi lý do)</option>
+          </Select>
+        )}
         <TextArea label={assign ? "Ghi chú / căn cứ gán (bắt buộc)" : "Lý do (bắt buộc)"} value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
     </Sheet>
+  );
+}
+
+function HoldVouchers() {
+  const q = useAsync(() => get("/sepay/hold"), []);
+  const rows: any[] = q.data?.items ?? [];
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div className="row between"><b>Phiếu “Chuyển khoản chờ xử lý”</b><span className="muted small">Số dư khoản chờ: <b className="money">{money(q.data?.summary?.balance ?? 0)}</b></span></div>
+      <div className="small muted" style={{ margin: "4px 0 8px" }}>Khoản này nằm trong số dư quỹ ngân hàng nhưng không tính vào lãi lỗ. Phiếu thu = tiền SePay báo về chưa gán; phiếu chi = đã gán đơn / hoàn khách / chuyển khoản mục khác.</div>
+      {q.loading ? <Spinner /> : (
+        <DataTable rows={rows} rowKey={(r: any) => r.id} emptyState={<EmptyState title="Chưa có phiếu" />}
+          cols={[
+            { key: "c", label: "Phiếu", title: true, render: (r: any) => <span className="num">{r.code}</span> },
+            { key: "d", label: "Ngày", render: (r: any) => <span className="nw">{fmtDateTime(r.createdAt)}</span> },
+            { key: "k", label: "Loại", render: (r: any) => <Badge tone={r.direction === "in" ? "warn" : "info"}>{r.direction === "in" ? "Thu vào chờ" : "Chi khỏi chờ"}</Badge> },
+            { key: "a", label: "Số tiền", num: true, render: (r: any) => <b className="money">{r.direction === "in" ? "+" : "−"}{money(r.amount)}</b> },
+            { key: "n", label: "Ghi chú", render: (r: any) => <span className="small">{r.note}</span> },
+          ]} />
+      )}
+    </div>
+  );
+}
+
+function LegacyBanner({ legacy, onDone }: { legacy: { count: number; amount: number }; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const pre = useAsync(() => (open ? get("/sepay/ledger/backfill") : Promise.resolve(null)), [open]);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await post("/sepay/ledger/backfill", { expectedCount: pre.data.count, expectedAmount: pre.data.amount });
+      toast(`Đã ghi ${r.posted} giao dịch (${money(r.amount)}) vào khoản chờ xử lý${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok");
+      setOpen(false);
+      onDone();
+    } catch { /* api.ts đã báo lỗi */ } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <Banner tone="danger">
+        Có <b>{legacy.count}</b> giao dịch SePay ({money(legacy.amount)}) chưa khớp / chờ hoàn từ trước, <b>chưa được ghi vào sổ quỹ</b> nên số dư quỹ đang thiếu khoản này.{" "}
+        <Button size="sm" variant="soft" onClick={() => setOpen(true)}>Ghi các giao dịch chờ cũ vào sổ</Button>
+      </Banner>
+      {open && (
+        <Sheet open onClose={() => setOpen(false)} title="Ghi các giao dịch chờ cũ vào sổ" footer={<Button block size="lg" loading={busy} disabled={!pre.data?.count} onClick={run}>Ghi {pre.data?.count ?? 0} giao dịch vào khoản chờ</Button>}>
+          <div className="stack">
+            <Banner tone="info">Mỗi giao dịch được lập một phiếu thu “Chuyển khoản chờ xử lý” (không vào lãi lỗ) vào ngày giao dịch (kỳ đã khoá thì ghi vào hôm nay). Làm một lần.</Banner>
+            {pre.loading ? <Spinner /> : (
+              <>
+                <div className="row between"><span className="muted">Số giao dịch</span><b>{pre.data?.count ?? 0}</b></div>
+                <div className="row between"><span className="muted">Tổng tiền</span><b className="money">{money(pre.data?.amount ?? 0)}</b></div>
+                <DataTable rows={pre.data?.items ?? []} rowKey={(r: any) => r.id} emptyState={<EmptyState title="Không còn giao dịch" />}
+                  cols={[
+                    { key: "t", label: "Thời gian", render: (r: any) => <span className="nw">{fmtDateTime(r.txnAt)}</span> },
+                    { key: "a", label: "Số tiền", num: true, render: (r: any) => <b className="money">{money(r.amount)}</b> },
+                    { key: "r", label: "Lý do", render: (r: any) => <span className="small">{reasonText(r.reason) || (r.status === "matched" ? "QR quầy chưa tạo đơn" : "")}</span> },
+                  ]} />
+              </>
+            )}
+          </div>
+        </Sheet>
+      )}
+    </>
   );
 }

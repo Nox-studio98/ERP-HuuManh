@@ -19,6 +19,7 @@ import { assertStmt, onceStmt } from "../services/guard";
 import { assertPeriodOpen } from "../services/period";
 import { retireStaleDraft } from "../services/online-ops";
 import { sepayConfig } from "../services/sepay";
+import { holdOutStmts } from "../services/sepay-ledger";
 import { isPointsInsufficient, isVoucherExhausted, reversalStatements } from "../services/loyalty-points";
 import { cashFormula } from "../services/shift-report";
 import { chargeInputSchema, chargeStmts, MAX_CHARGES, resolveCharges } from "../services/order-charges";
@@ -456,20 +457,23 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
   for (const p of recorded) if (!payFunds.has(p.method)) payFunds.set(p.method, await fundFor(db, storeId, p.method, shift));
 
   // SePay: khi bật xác nhận QR tự động, thanh toán "QR" phải gắn với mã QR đã nhận đủ tiền (webhook), mỗi mã chỉ dùng một lần
-  const qrUsed: { id: number; code: string }[] = [];
+  const qrUsed: { id: number; code: string; amount: number; eventId: number | null; hold: { i: number | null; o: number | null } }[] = [];
   const sepayCfg = await sepayConfig(db);
   if (sepayCfg.enabled && sepayCfg.flow.pos) {
     for (const p of recorded) {
       if (p.method !== "qr") continue;
       const q = p.qrRequestId
         ? await db
-            .prepare(`SELECT r.id, r.amount, r.status, r.user_id, r.order_id, pc.code FROM pos_qr_requests r JOIN pay_codes pc ON pc.kind = 'pos' AND pc.ref_id = r.id WHERE r.id = ?`)
+            .prepare(
+              `SELECT r.id, r.amount, r.status, r.user_id, r.order_id, r.event_id, pc.code, e.hold_in_voucher_id AS hold_i, e.hold_out_voucher_id AS hold_o
+                 FROM pos_qr_requests r JOIN pay_codes pc ON pc.kind = 'pos' AND pc.ref_id = r.id LEFT JOIN sepay_events e ON e.id = r.event_id WHERE r.id = ?`,
+            )
             .bind(p.qrRequestId)
             .first<any>()
         : null;
       if (!q || q.status !== "paid" || q.user_id !== user.id || q.order_id || q.amount !== p.amount || qrUsed.some((x) => x.id === q.id))
         throw new AppError(422, "qr_not_confirmed", "Mã QR chưa nhận được tiền (hoặc đã dùng / sai số tiền). Hiện mã QR và chờ báo đã nhận tiền.", { qrRequestId: p.qrRequestId ?? null });
-      qrUsed.push({ id: q.id, code: q.code });
+      qrUsed.push({ id: q.id, code: q.code, amount: q.amount, eventId: q.event_id ?? null, hold: { i: q.hold_i ?? null, o: q.hold_o ?? null } });
       p.ref = q.code;
     }
   }
@@ -567,11 +571,15 @@ posRoutes.post("/pos/orders", requirePerm("pos.sell"), async (c) => {
     });
     for (const [pid, alloc] of p.productAllocs) stmts.push(...moveStatements(db, pid, alloc, -1, "sale", "order", orderId, user.id));
     stmts.push(...promoStmts);
-    for (const u of qrUsed)
+    for (const u of qrUsed) {
       stmts.push(
         assertStmt(db, "pos.qr_use", `SELECT status = 'paid' AND order_id IS NULL FROM pos_qr_requests WHERE id = ?`, [u.id]),
         db.prepare(`UPDATE pos_qr_requests SET status = 'used', order_id = ? WHERE id = ? AND status = 'paid'`).bind(orderId, u.id),
       );
+      // Tiền QR đang ở khoản chờ xử lý → chuyển ra cùng batch với payments của đơn (không cộng quỹ hai lần)
+      if (u.eventId)
+        stmts.push(...(await holdOutStmts(db, { id: u.eventId, amount: u.amount, txn_at: null, code: u.code, reference_code: null }, { userId: user.id, state: u.hold, note: `Dùng QR ${u.code} hoàn tất đơn ${code}` })).stmts);
+    }
     for (const pay of recorded) {
       if (pay.amount <= 0) continue;
       stmts.push(

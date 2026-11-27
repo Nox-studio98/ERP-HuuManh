@@ -13,6 +13,7 @@ import { assertPeriodOpen, periodOf } from "../services/period";
 import { enqueueJobStmt, kickJobs } from "../services/outbox";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { matchOnlineOrder } from "../services/online-payments";
+import { linkBankToSepay, sepayCandidates } from "../services/sepay-ledger";
 import { assertStmt } from "../services/guard";
 import { getSettingInt } from "../services/settings";
 import { guarded, parseBody } from "../services/http";
@@ -791,7 +792,7 @@ debtRoutes.post("/bank-transactions/import", requirePerm("debt.write"), async (c
   const iDate = col(["date", "ngay"]), iAmt = col(["amount", "sotien"]), iDesc = col(["description", "noidung", "desc"]), iRef = col(["ref", "reference", "sogd", "magd"]);
   if (iDate < 0 || iAmt < 0) throw new AppError(422, "csv_invalid", "CSV cần các cột date, amount, description, ref");
   if (rows.length > 1000) throw new AppError(422, "csv_too_large", "Tối đa 1000 dòng mỗi lần nhập");
-  let imported = 0, duplicates = 0, matched = 0, invalid = 0;
+  let imported = 0, duplicates = 0, matched = 0, invalid = 0, sepayLinked = 0;
   const out: any[] = [];
   for (const r of rows) {
     const date = normDate(r[iDate] ?? "");
@@ -806,12 +807,18 @@ debtRoutes.post("/bank-transactions/import", requirePerm("debt.write"), async (c
     if (!ins.meta.changes) { duplicates++; continue; }
     imported++;
     const id = ins.meta.last_row_id as number;
-    const ok = await autoMatch(c, { id, fund_id: fundId, amount, description: desc, bank_ref: ref });
+    // Đã ghi vào quỹ qua SePay → chỉ đánh dấu liên kết (không tạo phiếu thu / thanh toán lần hai); nhiều ứng viên → để người xử lý chọn
+    const cands = await sepayCandidates(db, { fund_id: fundId, amount, txn_date: date, bank_ref: ref });
+    let ok = false;
+    let sepayEventId: number | null = null;
+    if (cands.length === 1) {
+      try { await linkBankToSepay(c, id, cands[0], "auto"); ok = true; sepayEventId = cands[0]; sepayLinked++; } catch { /* vừa được gắn ở nơi khác: để unmatched */ }
+    } else if (cands.length === 0) ok = await autoMatch(c, { id, fund_id: fundId, amount, description: desc, bank_ref: ref });
     if (ok) matched++;
-    out.push({ id, date, amount, description: desc, ref, status: ok ? "matched" : "unmatched" });
+    out.push({ id, date, amount, description: desc, ref, status: ok ? "matched" : "unmatched", sepayEventId, ...(cands.length > 1 ? { sepayCandidates: cands } : {}) });
   }
-  await auditStmt(c, { action: "bank.import", entity: "fund", entityId: fundId, after: { imported, duplicates, matched, invalid } }).run();
-  return c.json({ imported, duplicates, matched, unmatched: imported - matched, invalid, items: out }, 201);
+  await auditStmt(c, { action: "bank.import", entity: "fund", entityId: fundId, after: { imported, duplicates, matched, invalid, sepayLinked } }).run();
+  return c.json({ imported, duplicates, matched, unmatched: imported - matched, invalid, sepayLinked, items: out }, 201);
 });
 
 // C-22: sao kê ngân hàng thuộc M6 (tài chính) — thủ kho (chỉ có debt.view, M6 = "Không") không xem
@@ -828,12 +835,24 @@ debtRoutes.get("/bank-transactions", requirePerm("debt.view", "finance.view"), a
   return c.json({ items, nextCursor: rows.length > limit ? String(items[items.length - 1].id) : null });
 });
 
+/** Giao dịch SePay đã ghi vào quỹ mà dòng sao kê này có thể trùng (để liên kết thay vì tạo phiếu thu mới). */
+debtRoutes.get("/bank-transactions/:id/sepay-candidates", requirePerm("debt.view", "finance.view"), async (c) => {
+  const db = c.env.DB;
+  const t = await db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).bind(Number(c.req.param("id"))).first<any>();
+  if (!t) throw notFound("bank_txn_not_found", "Không tìm thấy giao dịch ngân hàng");
+  const ids = t.status === "unmatched" ? await sepayCandidates(db, { fund_id: t.fund_id, amount: t.amount, txn_date: t.txn_date, bank_ref: t.bank_ref }) : [];
+  if (!ids.length) return c.json({ items: [] });
+  const { results } = await db.prepare(`SELECT id, txn_at, code, reference_code, amount, status FROM sepay_events WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY id`).bind(...ids).all<any>();
+  return c.json({ items: results.map(camel) });
+});
+
 debtRoutes.post("/bank-transactions/:id/match", requirePerm("debt.write"), async (c) => {
   const id = Number(c.req.param("id"));
   const body = await parseBody(
     c,
     z.union([
       z.object({ ignore: z.literal(true), reason: z.string().trim().min(3).max(300) }),
+      z.object({ sepayEventId: z.number().int().positive() }),
       z.object({ partnerType: partnerTypeEnum, partnerId: z.number().int().positive(), allocations: z.array(allocItem).max(200).optional() }),
     ]),
   );
@@ -849,6 +868,14 @@ debtRoutes.post("/bank-transactions/:id/match", requirePerm("debt.write"), async
     ]);
     return c.json(bankRow(await db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).bind(id).first()));
   }
+  // Tiền đã vào quỹ qua SePay: chọn đúng giao dịch SePay để liên kết; không cho tạo phiếu thu lần hai
+  const cands = await sepayCandidates(db, { fund_id: t.fund_id, amount: t.amount, txn_date: t.txn_date, bank_ref: t.bank_ref });
+  if ("sepayEventId" in body) {
+    if (!cands.includes(body.sepayEventId)) throw new AppError(422, "sepay_event_invalid", "Giao dịch SePay này không khớp dòng sao kê (khác số tiền/ngày/quỹ hoặc đã gắn dòng khác)", { candidates: cands });
+    await linkBankToSepay(c, id, body.sepayEventId, "manual");
+    return c.json({ bankTransaction: bankRow(await db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).bind(id).first()) });
+  }
+  if (cands.length) throw conflict("already_recorded_by_sepay", "Khoản tiền này đã được SePay ghi vào quỹ — hãy liên kết với giao dịch SePay thay vì tạo phiếu thu mới", { candidates: cands });
   const direction = t.amount > 0 ? "in" : "out";
   if ((direction === "in") !== (body.partnerType === "customer")) throw new AppError(422, "direction_mismatch", "Tiền vào ứng với khách hàng, tiền ra ứng với nhà cung cấp");
   const res = await createPayment(c, { direction, partnerType: body.partnerType, partnerId: body.partnerId, fundId: t.fund_id, amount: Math.abs(t.amount), method: "transfer", ref: t.bank_ref, allocations: body.allocations, bankTxnId: id });

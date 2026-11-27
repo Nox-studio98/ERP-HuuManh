@@ -9,6 +9,7 @@ import { addVnRange, guarded, parseBody } from "../services/http";
 import { registerApprovalHandler } from "../services/approval-registry";
 import { CUSTOMER_LABEL, type OnlineStatus } from "../services/online-orders";
 import { bankFundId, markOrderPaid } from "../services/online-payments";
+import { sepayCandidates } from "../services/sepay-ledger";
 import {
   cancelOrder, canCost, confirmOrder, createSocialOrder, deliverOrder, failOrder, loadOpsOrder, packOrder, prepareOrder,
   overrideWeight, redeliverOrder, refundDiff, refundOrder, returnToStock, shipOrder, waiveDiff,
@@ -331,6 +332,8 @@ act("mark-paid", "finance.write", async (c, oid) => {
     if (!t) throw new AppError(422, "bank_txn_not_found", "Không tìm thấy giao dịch ngân hàng");
     if (t.status !== "unmatched") throw conflict("not_unmatched", "Giao dịch ngân hàng đã được xử lý");
     if (t.amount !== o.total) throw new AppError(422, "amount_mismatch", "Số tiền giao dịch không bằng tổng đơn", { txnAmount: t.amount, total: o.total });
+    const sc = await sepayCandidates(db, { fund_id: t.fund_id, amount: t.amount, txn_date: t.txn_date, bank_ref: t.bank_ref });
+    if (sc.length) throw conflict("already_recorded_by_sepay", "Khoản tiền này đã được SePay ghi vào quỹ — gán giao dịch SePay vào đơn ở màn Giao dịch SePay", { candidates: sc });
     amount = t.amount;
     ref ??= t.bank_ref;
     fundId ??= t.fund_id;
