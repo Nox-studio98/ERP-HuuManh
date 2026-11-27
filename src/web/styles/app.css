@@ -844,3 +844,25 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .imp-mode { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
 .imp-notes { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .imp-confirm { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+
+/* ===== Audit UX 27/11/2026: chỉ áp dụng ≤ 767px (điện thoại); PC giữ nguyên ===== */
+@media (max-width: 767px) {
+  /* Dải tab / khoảng ngày: xuống dòng thay vì bị cắt chữ ở mép phải */
+  .seg { flex-wrap: wrap; overflow-x: visible; }
+  .seg button { flex: 1 0 auto; }
+  .daterange .seg button { min-height: 40px; }
+  .daterange .seg { gap: 3px; }
+  /* Vùng chạm tối thiểu 40px cho nút điều hướng ‹ › / nút phụ */
+  .btn.sm { min-height: 40px; }
+  .btn.sm.ghost[aria-label], .btn.ghost.sm[aria-label] { min-width: 40px; }
+  .bd-nav .btn { min-height: 40px; min-width: 40px; }
+  input[type="checkbox"], input[type="radio"] { min-width: 22px; min-height: 22px; }
+  label:has(> input[type="checkbox"]), label.check, .check-row { min-height: 40px; display: inline-flex; align-items: center; gap: 8px; }
+  .pos-tab-x { min-width: 40px; }
+}
+@media (max-width: 480px) {
+  .kpi .v { font-size: 1.12rem; overflow-wrap: break-word; }
+  .sheet .stmt { font-size: .8rem; min-width: 0; }
+  .sheet .stmt th, .sheet .stmt td { padding: 6px 4px; }
+  .sheet .stmt .code .muted { display: none; }
+}

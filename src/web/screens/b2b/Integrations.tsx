@@ -7,7 +7,9 @@ import { fmtDateTime } from "../../format";
 import { useCan } from "../../store";
 import { ProductPicker, unitLabelSafe, type ProductLite } from "./kit";
 
-const JOB_TYPE: Record<string, string> = { "einvoice.issue": "Phát hành HĐĐT", "einvoice.adjust": "HĐĐT điều chỉnh", "einvoice.cancel": "Huỷ HĐĐT", "debt.remind": "Nhắc nợ" };
+const JOB_TYPE: Record<string, string> = { "einvoice.issue": "Phát hành HĐĐT", "einvoice.adjust": "HĐĐT điều chỉnh", "einvoice.cancel": "Huỷ HĐĐT", "debt.remind": "Nhắc nợ", "notify.order_status": "Thông báo trạng thái đơn", "notify.staff_new_order": "Báo nhân viên có đơn mới", "notify.email": "Gửi email", "notify.managers": "Thông báo quản lý", "notify.approval": "Thông báo duyệt" };
+const REF_TYPE: Record<string, string> = { order: "Đơn hàng", invoice: "Hoá đơn", b2b_order: "Đơn sỉ", customer: "Khách hàng", approval: "Yêu cầu duyệt" };
+const refText = (x: any) => (x.refType ? `${REF_TYPE[x.refType] ?? x.refType} ${x.refId ?? ""}`.trim() : "—");
 const JOB_ST: Record<string, string> = { queued: "Đang chờ", running: "Đang chạy", done: "Hoàn tất", failed: "Lỗi", dead: "Dừng" };
 const jobTone = (s: string) => ({ done: "ok", failed: "danger", dead: "danger", queued: "info", running: "info" } as any)[s];
 
@@ -38,12 +40,12 @@ function Jobs() {
       <FilterBar dirty={!!(status || q)} onReset={() => { setStatus(""); setQ(""); }}>
         <SearchInput value={q} onSearch={setQ} placeholder="Loại tác vụ, đối tượng, lỗi…" label="Tìm tác vụ" />
         <FilterSelect label="Trạng thái" value={status} onChange={setStatus} options={Object.entries(JOB_ST).map(([v, label]) => ({ v, label }))} />
-        <span style={{ marginLeft: "auto" }} className="row"><ExportButton filename="tac-vu-nen" rows={rows} columns={[{ label: "#", value: (x) => x.id }, { label: "Loại", value: (x) => JOB_TYPE[x.type] ?? x.type }, { label: "Đối tượng", value: (x) => `${x.refType ?? ""} ${x.refId ?? ""}`.trim() }, { label: "Trạng thái", value: (x) => JOB_ST[x.status] ?? x.status }, { label: "Lần thử", value: (x) => x.attempts }, { label: "Lỗi", value: (x) => x.lastError }]} /><Button variant="ghost" size="sm" onClick={j.reload}>Làm mới</Button></span>
+        <span style={{ marginLeft: "auto" }} className="row"><ExportButton filename="tac-vu-nen" rows={rows} columns={[{ label: "#", value: (x) => x.id }, { label: "Loại", value: (x) => JOB_TYPE[x.type] ?? x.type }, { label: "Đối tượng", value: (x) => (x.refType ? refText(x) : "") }, { label: "Trạng thái", value: (x) => JOB_ST[x.status] ?? x.status }, { label: "Lần thử", value: (x) => x.attempts }, { label: "Lỗi", value: (x) => x.lastError }]} /><Button variant="ghost" size="sm" onClick={j.reload}>Làm mới</Button></span>
       </FilterBar>
       {!j.loading && <KpiRow items={[{ label: "Tác vụ", value: all.length }, { label: "Đang chờ / chạy", value: n(["queued", "running"]), tone: "info" }, { label: "Hoàn tất", value: n(["done"]), tone: "ok" }, { label: "Lỗi / dừng", value: n(["failed", "dead"]), tone: n(["failed", "dead"]) ? "danger" : undefined, onClick: () => setStatus("failed") }]} />}
       {j.loading ? <Spinner /> : <DataTable rows={rows} rowKey={(x) => x.id} pageSize={50} defaultSort={{ key: "i", dir: "desc" }} emptyState={<EmptyState title="Không có tác vụ nào" hint="Tác vụ nền (phát hành HĐĐT, nhắc nợ…) sẽ hiện ở đây." action={status || q ? <Button variant="soft" onClick={() => { setStatus(""); setQ(""); }}>Xoá lọc</Button> : undefined} />} cols={[
         { key: "i", label: "#", title: true, sort: (x) => x.id, render: (x) => <b className="nw">#{x.id} · {JOB_TYPE[x.type] ?? x.type}</b> },
-        { key: "r", label: "Đối tượng", render: (x) => (x.refType ? `${x.refType} ${x.refId ?? ""}` : "—") },
+        { key: "r", label: "Đối tượng", render: (x) => refText(x) },
         { key: "s", label: "Trạng thái", sort: (x) => x.status, render: (x) => <Badge tone={jobTone(x.status)}>{JOB_ST[x.status] ?? x.status}</Badge> },
         { key: "a", label: "Lần thử", num: true, hideMobile: true, sort: (x) => x.attempts, render: (x) => x.attempts },
         { key: "e", label: "Lỗi gần nhất", render: (x) => (x.lastError ? <span className="small" style={{ color: "var(--danger)" }}>{String(x.lastError).slice(0, 100)}</span> : "—") },
