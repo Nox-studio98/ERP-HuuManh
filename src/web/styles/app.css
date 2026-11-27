@@ -630,6 +630,11 @@ kbd { font: inherit; font-size: .75rem; padding: 1px 6px; border: 1px solid var(
 .ex-pick { display: flex; justify-content: space-between; align-items: center; gap: var(--s-2); min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ex-pick:hover, .ex-pick:focus-visible { border-color: var(--accent); }
 .ex-sum { padding: var(--s-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.qr-line { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.qr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); }
+@media (max-width: 420px) { .qr-grid { grid-template-columns: 1fr; } }
+.oc-line { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.oc-line .oc-tag { font-size: 12px; color: var(--muted); }
 /* Ô tick đơn bổ sung khi giao thiếu (A-27) */
 .backorder-check { display: flex; align-items: flex-start; gap: var(--s-2); min-height: 44px; padding: var(--s-2) var(--s-3); border: 1px dashed var(--border); border-radius: var(--r-md); }
 .backorder-check input { width: 22px; height: 22px; margin-top: 2px; flex: none; }

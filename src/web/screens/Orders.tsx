@@ -10,6 +10,7 @@ import { useUnitMap } from "../units";
 import { useCan } from "../store";
 import { downloadFile } from "../download";
 import { ExchangeForm } from "./Exchange";
+import { CorrectionForm } from "./OrderCorrection";
 
 const tone = (s: string) => (s === "completed" ? "ok" : s === "cancelled" || s === "returned" ? "danger" : "info") as any;
 const STATUS_OPTS = [...Object.entries(ORDER_STATUS).filter(([k]) => k !== "draft").map(([v, label]) => ({ v, label })), { v: "returns", label: "Phiếu trả hàng" }];
@@ -103,7 +104,7 @@ export default function Orders() {
         </div>
       )}
       {bulkOpen && <MetaSheet ids={[...picked]} onClose={() => setBulkOpen(false)} onDone={() => { setBulkOpen(false); stopPicking(); list.reload(); }} />}
-      <SplitLayout open={sel != null} panel={sel != null ? <OrderDetail id={sel} onClose={() => open(null)} onChanged={list.reload} /> : null}>
+      <SplitLayout open={sel != null} panel={sel != null ? <OrderDetail id={sel} onClose={() => open(null)} onChanged={list.reload} onOpen={open} /> : null}>
         {list.error ? <Banner tone="danger">Không tải được danh sách đơn. <Button size="sm" variant="ghost" onClick={list.reload}>Tải lại</Button></Banner>
           : list.loading ? <Spinner /> : (
             <DataTable rows={list.rows} rowKey={(o) => o.id} onRowClick={(o) => (picking ? selectable(o) && toggle(o.id) : open(o.id))} selectedKey={picking ? null : sel} rowClass={(o) => (picking && picked.has(o.id) ? "sel" : "")} emptyState={empty}
@@ -125,11 +126,11 @@ function useSellers() {
 const fmtDay = (d: string) => `${d.slice(8)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
 const fmtDayShort = (iso: string) => new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", day: "2-digit", month: "2-digit" }).format(new Date(iso));
 
-function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
+function OrderDetail({ id, onClose, onChanged, onOpen }: { id: number; onClose: () => void; onChanged: () => void; onOpen: (id: number) => void }) {
   const can = useCan();
   const o = useAsync(() => get(`/orders/${id}`), [id]);
   const pmap = useUnitMap();
-  const [mode, setMode] = useState<"view" | "return" | "exchange" | "void" | "receipt" | "meta">("view");
+  const [mode, setMode] = useState<"view" | "return" | "exchange" | "correct" | "void" | "receipt" | "meta">("view");
   const d = o.data && pmap ? withShown(o.data, pmap) : o.data;
   return (
     <DetailPanel onClose={onClose} title={d ? `Đơn ${d.code}` : "Đơn hàng"}>
@@ -141,12 +142,16 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
         <ReturnForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); o.reload(); setMode("view"); }} />
       ) : mode === "exchange" ? (
         <ExchangeForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); o.reload(); setMode("view"); }} />
+      ) : mode === "correct" ? (
+        <CorrectionForm order={d} onCancel={() => setMode("view")} onDone={(r: any) => { onChanged(); o.reload(); setMode("view"); if (r?.sale?.id) onOpen(r.sale.id); }} />
       ) : mode === "void" ? (
         <VoidForm order={d} onCancel={() => setMode("view")} onDone={() => { onChanged(); onClose(); }} />
       ) : (
         <div className="stack">
           <div className="row wrap"><Badge tone={tone(d.status)}>{ORDER_STATUS[d.status] ?? d.status}</Badge><span className="muted small">{CHANNELS[d.channel] ?? d.channel} · {fmtTime(d.createdAt)}</span></div>
           {d.voidReason && <Banner tone="danger">Đã huỷ: {d.voidReason}</Banner>}
+          {d.correction && <Banner tone="info">{d.correction.role === "replacement" ? "Đơn này thay thế đơn đã sửa" : "Đơn đã được sửa — đơn thay thế"}: <Button size="sm" variant="soft" onClick={() => onOpen(d.correction.linkedId)}>{d.correction.linkedCode}</Button></Banner>}
+          {d.kind === "return" && !d.originalOrderId && <Banner tone="info">Trả hàng nhanh (không có hoá đơn gốc).{d.note ? <> {d.note}</> : null}</Banner>}
           {d.exchange && <Banner tone="info">{d.exchange.role === "new_sale" ? "Đơn đổi hàng từ đơn" : "Phiếu trả của lần đổi hàng, đơn mới:"} <b>{d.exchange.linkedCode}</b></Banner>}
           {d.kind === "sale" && (
             <div className="small stack" style={{ gap: 2 }}>
@@ -172,6 +177,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
             {can("orders.edit") && d.kind === "sale" && <Button variant="ghost" onClick={() => setMode("meta")}>Sửa thông tin</Button>}
             {can("pos.return") && d.kind !== "return" && d.status !== "cancelled" && <Button variant="ghost" onClick={() => setMode("return")}>Trả hàng</Button>}
             {can("pos.return") && can("pos.sell") && d.kind !== "return" && d.status === "completed" && d.channel === "pos" && <Button variant="ghost" onClick={() => setMode("exchange")}>Đổi hàng</Button>}
+            {can("orders.edit") && can("pos.sell") && can("pos.return") && d.kind === "sale" && d.status === "completed" && d.channel === "pos" && d.correction?.role !== "replaced" && <Button variant="ghost" data-testid="order-correct-btn" onClick={() => setMode("correct")}>Sửa hoá đơn</Button>}
             {can("pos.void") && d.kind !== "return" && d.status !== "cancelled" && <Button variant="danger" onClick={() => setMode("void")}>Huỷ đơn</Button>}
           </div>
         </div>
