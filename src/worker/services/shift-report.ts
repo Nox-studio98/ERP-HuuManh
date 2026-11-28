@@ -15,8 +15,12 @@ export type PayRow = { method: string; sold: number; refunded: number; net: numb
  * Bán/hoàn theo hình thức: `sold` = tiền thu trên đơn bán, `refunded` = tiền hoàn trên phiếu trả (payments âm), `net` = sold − refunded.
  * `points` / `voucher` là phần giảm trừ không thu tiền (điểm tích luỹ đã đổi, voucher đã dùng) của đơn bán — không phải dòng tiền.
  */
-export async function paymentBreakdown(db: D1Database, where: string, params: unknown[]): Promise<PayRow[]> {
-  const base = `o.status = 'completed' AND (${where})`;
+export async function paymentBreakdown(db: D1Database, where: string, params: unknown[], opts: { closedAt?: string | null } = {}): Promise<PayRow[]> {
+  // R2-INV-01: ca đã chốt tính theo trạng thái lúc chốt (đơn huỷ sau khi chốt vẫn nằm trong ca gốc)
+  const snap = !!opts.closedAt;
+  const base = snap ? `(o.status = 'completed' OR (o.status = 'cancelled' AND o.voided_at > ?)) AND (${where})` : `o.status = 'completed' AND (${where})`;
+  if (snap) params = [opts.closedAt, ...params];
+  const payOk = snap ? `(p.status = 'confirmed' OR (p.status = 'refunded' AND o.status = 'cancelled'))` : `p.status = 'confirmed'`;
   const pay = (
     await db
       .prepare(
@@ -24,7 +28,7 @@ export async function paymentBreakdown(db: D1Database, where: string, params: un
                 COALESCE(SUM(CASE WHEN p.amount > 0 THEN p.amount ELSE 0 END),0) AS sold,
                 COALESCE(SUM(CASE WHEN p.amount < 0 THEN -p.amount ELSE 0 END),0) AS refunded
            FROM payments p JOIN orders o ON o.id = p.order_id
-          WHERE p.status = 'confirmed' AND ${base} GROUP BY p.method`,
+          WHERE ${payOk} AND ${base} GROUP BY p.method`,
       )
       .bind(...params)
       .all<{ method: string; sold: number; refunded: number }>()
@@ -142,12 +146,16 @@ async function deliveryPayments(db: D1Database, s: ShiftRow) {
 
 /** Công thức tiền mặt dự kiến của ca (nguồn duy nhất — routes/pos.ts dùng khi chốt ca, routes/finance.ts cho ca đang mở). */
 export async function cashFormula(db: D1Database, s: ShiftRow) {
+  // R2-INV-01: ca đã chốt → tính đơn theo trạng thái lúc chốt (đơn huỷ sau chốt vẫn tính; khoản hoàn thuộc ca hoàn — refund_shift_id)
+  const closedAt = s.status === "closed" ? s.closed_at : null;
   const sales = await db
     .prepare(
       `SELECT COALESCE(SUM(CASE WHEN p.amount > 0 THEN p.amount ELSE 0 END),0) AS sold, COALESCE(SUM(CASE WHEN p.amount < 0 THEN -p.amount ELSE 0 END),0) AS refunded
-         FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.shift_id = ? AND o.status = 'completed' AND p.method = 'cash' AND p.status = 'confirmed'`,
+         FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.shift_id = ?
+          AND ${closedAt ? `(o.status = 'completed' OR (o.status = 'cancelled' AND o.voided_at > ?)) AND (p.status = 'confirmed' OR (p.status = 'refunded' AND o.status = 'cancelled'))` : `o.status = 'completed' AND p.status = 'confirmed'`}
+          AND p.method = 'cash'`,
     )
-    .bind(s.id)
+    .bind(...(closedAt ? [s.id, closedAt] : [s.id]))
     .first<{ sold: number; refunded: number }>();
   const deposits = await shiftVoucherSum(db, s, "order_deposit");
   // B1: thu nợ khách lẻ tại quầy (phiếu thu công nợ của người mở ca, vào quỹ của ca = tiền mặt). PA-5: phiếu đảo trừ ngược theo phiếu gốc.
@@ -159,7 +167,9 @@ export async function cashFormula(db: D1Database, s: ShiftRow) {
   // Đơn giao từ quầy (POS-KV B3): tiền mặt khách trả trước nằm trong két ca ngay lúc tạo đơn (đơn chưa hoàn tất vẫn tính); hoàn tiền mặt trừ vào ca chịu hoàn (B-N3)
   const cash = (await deliveryPayments(db, s)).find((d) => d.method === "cash");
   const cashSold = (sales?.sold ?? 0) + (cash?.sold ?? 0), cashRefunded = (sales?.refunded ?? 0) + (cash?.refunded ?? 0), voidRefunds = voidRef?.s ?? 0;
-  return { opening: s.opening_cash, cashSold, cashRefunded, deposits, debtCollected, voidRefunds, expected: s.opening_cash + cashSold - cashRefunded + deposits + debtCollected - voidRefunds };
+  const computed = s.opening_cash + cashSold - cashRefunded + deposits + debtCollected - voidRefunds;
+  // Ca đã chốt: số dự kiến là số ĐÃ LƯU lúc chốt (nguồn sự thật cho phiếu bàn giao in lại)
+  return { opening: s.opening_cash, cashSold, cashRefunded, deposits, debtCollected, voidRefunds, expected: closedAt && s.expected_cash != null ? s.expected_cash : computed };
 }
 
 const SHIFT_COLS = `s.id, s.user_id, s.fund_id, s.opened_at, s.opening_cash, s.closed_at, s.expected_cash, s.counted_cash, s.diff_cash, s.diff_reason, s.status`;
@@ -171,8 +181,9 @@ export async function shiftSummary(db: D1Database, id: number, opts: { sensitive
     .bind(id)
     .first<ShiftRow & { cashier_name: string; store_name: string | null }>();
   if (!s) return null;
-  const sales = await salesSummary(db, `o.shift_id = ?`, [id]);
-  const byPayment = await paymentBreakdown(db, `o.shift_id = ?`, [id]);
+  const closedAt = s.status === "closed" ? s.closed_at : null;
+  const sales = await salesSummary(db, `o.shift_id = ?`, [id], { closedAt });
+  const byPayment = await paymentBreakdown(db, `o.shift_id = ?`, [id], { closedAt });
   // Trả trước/hoàn của đơn giao từ quầy cũng là tiền của ca: cộng vào bảng hình thức để khớp tiền mặt dự kiến
   for (const d of await deliveryPayments(db, s)) {
     if (!d.sold && !d.refunded) continue;
@@ -189,7 +200,7 @@ export async function shiftSummary(db: D1Database, id: number, opts: { sensitive
                 CASE WHEN COALESCE(v.ref_type,'') IN ('payroll_item','salary_advance','payroll') OR cc.pnl_line = 'payroll' OR cc.code = 'LUONG' THEN 1 ELSE 0 END AS payroll,
                 CASE WHEN v.ref_type = 'debt_payment' AND EXISTS (SELECT 1 FROM debt_payments dp WHERE dp.id = v.ref_id AND dp.partner_type = 'customer') THEN 1 ELSE 0 END AS counterparty_customer
            FROM cash_vouchers v LEFT JOIN cash_categories cc ON cc.id = v.category_id
-          WHERE v.status = 'posted' AND v.fund_id = ? AND v.created_by = ? AND v.created_at >= ? AND v.created_at <= ? ORDER BY v.id LIMIT 100`,
+          WHERE v.status = 'posted' AND COALESCE(v.ref_type,'') <> 'shift' AND v.fund_id = ? AND v.created_by = ? AND v.created_at >= ? AND v.created_at <= ? ORDER BY v.id LIMIT 100`,
       )
       .bind(s.fund_id, s.user_id, s.opened_at, to)
       .all<any>()

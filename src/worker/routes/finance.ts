@@ -103,6 +103,17 @@ const voucherSchema = z.object({
   channel: z.enum(["pos", "online", "b2b"]).optional(), // chi phí trực tiếp theo kênh (M6-06)
 });
 
+/** Audit trên phiếu quỹ vừa chèn trong cùng batch: entity_id tra theo mã phiếu (id chưa biết trước khi batch chạy). */
+function auditByCode(c: Ctx, code: string, action: string, after: unknown, reason?: string): D1PreparedStatement {
+  const u = c.get("user");
+  return c.env.DB
+    .prepare(
+      `INSERT INTO audit_log(user_id, action, entity, entity_id, after_json, reason, ip, device_id, request_id)
+       VALUES (?, ?, 'cash_voucher', (SELECT CAST(id AS TEXT) FROM cash_vouchers WHERE code = ?), ?, ?, ?, ?, ?)`,
+    )
+    .bind(u.id, action, code, JSON.stringify(after), reason ?? null, c.req.header("cf-connecting-ip") ?? null, u.deviceId ?? c.req.header("x-device-id") ?? null, c.get("requestId") ?? null);
+}
+
 financeRoutes.post("/vouchers", requirePerm("finance.write"), async (c) => {
   const body = await parseBody(c, voucherSchema);
   const db = c.env.DB;
@@ -115,26 +126,27 @@ financeRoutes.post("/vouchers", requirePerm("finance.write"), async (c) => {
   const threshold = await getSettingInt(db, "approval.cash_out_vnd", 5_000_000);
   const needApproval = body.direction === "out" && body.amount > threshold && !can(user.role, "finance.approve");
   const code = await nextCode(db, body.direction === "in" ? PREFIX.cashIn : PREFIX.cashOut);
-  const r = await db
-    .prepare(
-      `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, channel)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    )
-    .bind(code, body.direction, body.fundId, body.categoryId, body.amount, body.counterparty ?? null, body.refType ?? null, body.refId ?? null,
-      needApproval ? "pending_approval" : "posted", vnPeriod(), body.note ?? null, user.id, needApproval ? null : (can(user.role, "finance.approve") ? user.id : null), body.channel ?? null)
-    .run();
-  const id = r.meta.last_row_id as number;
-  const stmts = [
-    auditStmt(c, { action: "voucher.create", entity: "cash_voucher", entityId: id, after: { code, direction: body.direction, amount: body.amount, pending: needApproval } }),
+  // L-1: phiếu + approval + audit trong MỘT batch (id phiếu tra theo mã duy nhất)
+  // L-4 (chủ ý): phiếu thu/chi KHÔNG kiểm số dư quỹ — quỹ chưa có số dư đầu kỳ hoặc chi trước ghi sổ sau vẫn phải lập được; quỹ âm hiển thị ở màn Quỹ để quản lý xử lý. Chỉ chuyển quỹ chặn âm.
+  const stmts: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, ref_id, status, period, note, created_by, approved_by, channel)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .bind(code, body.direction, body.fundId, body.categoryId, body.amount, body.counterparty ?? null, body.refType ?? null, body.refId ?? null,
+        needApproval ? "pending_approval" : "posted", vnPeriod(), body.note ?? null, user.id, needApproval ? null : (can(user.role, "finance.approve") ? user.id : null), body.channel ?? null),
   ];
   if (needApproval) {
-    stmts.unshift(
+    stmts.push(
       db
-        .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('cash_voucher.post','cash_voucher',?,?,?,?)`)
-        .bind(String(id), JSON.stringify({ amount: body.amount, code }), `Phiếu chi ${body.amount} vượt ngưỡng ${threshold}`, user.id),
+        .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('cash_voucher.post','cash_voucher',(SELECT CAST(id AS TEXT) FROM cash_vouchers WHERE code = ?),?,?,?)`)
+        .bind(code, JSON.stringify({ amount: body.amount, code }), `Phiếu chi ${body.amount} vượt ngưỡng ${threshold}`, user.id),
     );
   }
+  stmts.push(auditByCode(c, code, "voucher.create", { code, direction: body.direction, amount: body.amount, pending: needApproval }));
   await db.batch(stmts);
+  const id = (await db.prepare(`SELECT id FROM cash_vouchers WHERE code = ?`).bind(code).first<{ id: number }>())!.id;
   const v = await db.prepare(`SELECT * FROM cash_vouchers WHERE id = ?`).bind(id).first();
   const approval = needApproval ? await db.prepare(`SELECT id FROM approvals WHERE type='cash_voucher.post' AND ref_id=? ORDER BY id DESC`).bind(String(id)).first<{ id: number }>() : null;
   return c.json({ ...v, approvalId: approval?.id ?? null }, 201);
@@ -179,7 +191,8 @@ financeRoutes.post("/vouchers/:id/reverse", requirePerm("finance.write"), async 
   if (done) throw conflict("already_reversed", "Phiếu đã được đảo trước đó");
   const code = await nextCode(db, v.direction === "in" ? PREFIX.cashOut : PREFIX.cashIn);
   // Chốt chặn (audit #6): phiếu gốc còn 'posted'; đảo đôi còn bị unique reverses_id chặn → 409 already_reversed
-  const res = await db.batch([
+  // L-1: phiếu đảo + audit trong MỘT batch. L-2: audit trên phiếu gốc (kèm mã phiếu đảo) VÀ trên chính phiếu đảo.
+  await db.batch([
     assertStmt(db, "voucher.reverse", `SELECT status = 'posted' FROM cash_vouchers WHERE id = ?`, [id]),
     db
       .prepare(
@@ -188,9 +201,10 @@ financeRoutes.post("/vouchers/:id/reverse", requirePerm("finance.write"), async 
       )
       .bind(code, v.direction === "in" ? "out" : "in", v.fund_id, v.category_id, v.amount, v.counterparty, v.ref_type, v.ref_id, vnPeriod(),
         `Đảo phiếu ${v.code}: ${body.reason}`, user.id, user.id, id, v.channel ?? null),
+    auditStmt(c, { action: "voucher.reverse", entity: "cash_voucher", entityId: id, before: { code: v.code, period: v.period }, after: { reversalCode: code }, reason: body.reason }),
+    auditByCode(c, code, "voucher.create", { code, reverses: v.code, amount: v.amount }, body.reason),
   ]);
-  const newId = res[1].meta.last_row_id as number;
-  await auditStmt(c, { action: "voucher.reverse", entity: "cash_voucher", entityId: id, before: { code: v.code, period: v.period }, after: { reversalId: newId, code }, reason: body.reason }).run();
+  const newId = (await db.prepare(`SELECT id FROM cash_vouchers WHERE code = ?`).bind(code).first<{ id: number }>())!.id;
   return c.json(await db.prepare(`SELECT * FROM cash_vouchers WHERE id = ?`).bind(newId).first(), 201);
 });
 
