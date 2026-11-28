@@ -7,6 +7,8 @@ import { auditStmt } from "../lib/audit";
 import { nextCode } from "../lib/codes";
 import { parseBody, unitFactor, guarded } from "../services/http";
 import { assemblyStatements, planAssembly } from "../services/bundle-assembly";
+import { assertPeriodOpen } from "../services/period";
+import { assertStmt, onceStmt } from "../services/guard";
 
 export const bundleRoutes = new Hono<AppBindings>();
 const isCheckFail = (e: unknown) => /CHECK constraint failed/i.test(String((e as Error)?.message ?? ""));
@@ -88,6 +90,7 @@ const assemblyView = async (db: D1Database, id: number, showCost: boolean) => {
   ).results;
   return {
     id: a.id, code: a.code, status: a.status, bundleProductId: a.bundle_product_id, productName: a.product_name,
+    disassembledAt: a.disassembled_at ?? null,
     qtyMilli: a.qty_milli, ...(showCost ? { extraCost: a.extra_cost } : {}), expiresAt: a.expires_at, lotId: a.lot_id, lotCode: a.lot_code,
     ...(showCost ? { unitCost: a.lot_unit_cost } : {}), createdAt: a.created_at, note: a.note,
     components: used.map((u) => ({ productId: u.product_id, name: u.name, lotId: u.lot_id, qtyMilli: -u.qty_delta_milli, ...(showCost ? { unitCost: u.unit_cost } : {}) })),
@@ -96,10 +99,10 @@ const assemblyView = async (db: D1Database, id: number, showCost: boolean) => {
 
 bundleRoutes.get("/assembly-orders", requirePerm("inventory.view"), async (c) => {
   const { results } = await c.env.DB
-    .prepare(`SELECT a.id, a.code, a.status, a.qty_milli, a.extra_cost, a.created_at, p.name AS product_name FROM assembly_orders a JOIN products p ON p.id = a.bundle_product_id ORDER BY a.id DESC LIMIT 100`)
+    .prepare(`SELECT a.id, a.code, a.status, a.qty_milli, a.extra_cost, a.created_at, a.disassembled_at, p.name AS product_name FROM assembly_orders a JOIN products p ON p.id = a.bundle_product_id ORDER BY a.id DESC LIMIT 100`)
     .all<any>();
   const showCost = can(c.get("user").role, "prices.view_cost");
-  return c.json({ items: results.map((a) => ({ id: a.id, code: a.code, status: a.status, qtyMilli: a.qty_milli, ...(showCost ? { extraCost: a.extra_cost } : {}), productName: a.product_name, createdAt: a.created_at })) });
+  return c.json({ items: results.map((a) => ({ id: a.id, code: a.code, status: a.status, qtyMilli: a.qty_milli, ...(showCost ? { extraCost: a.extra_cost } : {}), productName: a.product_name, createdAt: a.created_at, disassembledAt: a.disassembled_at ?? null })) });
 });
 
 bundleRoutes.get("/assembly-orders/:id", requirePerm("inventory.view"), async (c) => c.json(await assemblyView(c.env.DB, Number(c.req.param("id")), can(c.get("user").role, "prices.view_cost"))));
@@ -124,7 +127,14 @@ bundleRoutes.post("/assembly-orders", requirePerm("inventory.write"), async (c) 
   const loc = await db.prepare(`SELECT id FROM locations WHERE store_id = ? AND sellable = 1 ORDER BY id LIMIT 1`).bind(storeId).first<{ id: number }>();
   if (!loc) throw new AppError(422, "no_location", "Cửa hàng chưa có vị trí kho bán được");
 
+  await assertPeriodOpen(db, new Date(), "lệnh đóng giỏ quà"); // K-KHO4: thẻ kho + giá vốn lô giỏ ghi vào kỳ nào thì kỳ đó phải mở
   let plan = await planAssembly(db, b.bundleProductId, qtyMilli, storeId);
+  const checkExpiry = () => {
+    // K-KHO4: hạn dùng giỏ không vượt hạn sớm nhất của thành phần đã lấy
+    if (b.expiresAt && plan.earliestExpiry && new Date(b.expiresAt).toISOString() > plan.earliestExpiry)
+      throw new AppError(422, "expiry_too_late", "Hạn dùng giỏ không được muộn hơn hạn sớm nhất của thành phần", { earliestExpiry: plan.earliestExpiry });
+  };
+  checkExpiry();
   const code = await nextCode(db, "LR");
   // lệnh tạo ở trạng thái cancelled (placeholder), batch thành công mới chuyển posted — thất bại thì còn nguyên placeholder
   const row = await db
@@ -133,6 +143,7 @@ bundleRoutes.post("/assembly-orders", requirePerm("inventory.write"), async (c) 
     .first<{ id: number }>();
   const id = row!.id;
   const build = () => {
+    checkExpiry();
     const total = plan.componentCost + b.extraCost;
     const unitCost = Math.round((total * 1000) / qtyMilli);
     const expiresAt = b.expiresAt ? new Date(b.expiresAt).toISOString() : plan.earliestExpiry;
@@ -160,4 +171,45 @@ bundleRoutes.post("/assembly-orders", requirePerm("inventory.write"), async (c) 
     throw e;
   }
   return c.json(await assemblyView(db, id, can(user.role, "prices.view_cost")), 201);
+});
+
+// K-KHO4: tháo giỏ = đảo lệnh đóng giỏ. Trả thành phần về ĐÚNG lô đã lấy, trừ lô giỏ quà (chỉ khi cả lô còn nguyên, chưa bán / giữ).
+bundleRoutes.post("/assembly-orders/:id/disassemble", requirePerm("inventory.write"), async (c) => {
+  const db = c.env.DB;
+  const user = c.get("user");
+  const id = Number(c.req.param("id"));
+  const b = await parseBody(c, z.object({ reason: z.string().trim().min(3).max(300) }));
+  const a = await db.prepare(`SELECT a.*, l.qty_on_hand_milli AS lot_on_hand, l.qty_reserved_milli AS lot_reserved FROM assembly_orders a LEFT JOIN lots l ON l.id = a.lot_id WHERE a.id = ?`).bind(id).first<any>();
+  if (!a) throw notFound("assembly_not_found", "Không tìm thấy lệnh đóng giỏ");
+  if (a.status !== "posted" || !a.lot_id) throw conflict("not_posted", "Lệnh đóng giỏ chưa ghi sổ");
+  if (a.disassembled_at) throw conflict("already_disassembled", "Lệnh đóng giỏ này đã được tháo");
+  await assertPeriodOpen(db, new Date(), "lệnh tháo giỏ quà");
+  if (a.lot_on_hand !== a.qty_milli || a.lot_reserved !== 0) throw conflict("bundle_in_use", "Giỏ đã bán, đang giữ cho đơn hoặc đã xuất một phần — chỉ tháo được khi còn nguyên cả lô", { onHandMilli: a.lot_on_hand, qtyMilli: a.qty_milli, reservedMilli: a.lot_reserved });
+  const used = (await db.prepare(`SELECT lot_id, product_id, qty_delta_milli, unit_cost FROM stock_moves WHERE ref_type = 'assembly_order' AND ref_id = ? AND move_type = 'assemble_out' ORDER BY id`).bind(id).all<any>()).results;
+  if (!used.length) throw conflict("no_components", "Lệnh đóng giỏ không có thẻ kho thành phần để đảo");
+  const now = new Date().toISOString();
+  const bundleCost = (await db.prepare(`SELECT unit_cost FROM lots WHERE id = ?`).bind(a.lot_id).first<{ unit_cost: number }>())!.unit_cost;
+  await guarded(() =>
+    db.batch([
+      assertStmt(db, "assembly.disassemble", `SELECT status = 'posted' AND disassembled_at IS NULL FROM assembly_orders WHERE id = ?`, [id]),
+      assertStmt(db, "assembly.disassemble.lot", `SELECT qty_on_hand_milli = ? AND qty_reserved_milli = 0 FROM lots WHERE id = ?`, [a.qty_milli, a.lot_id]),
+      onceStmt(db, "assembly.disassemble", id),
+      db.prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli - ? WHERE id = ?`).bind(a.qty_milli, a.lot_id),
+      db
+        .prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) VALUES (?,?,?,?,'assemble_out','assembly_reversal',?,?)`)
+        .bind(a.lot_id, a.bundle_product_id, -a.qty_milli, bundleCost, id, user.id),
+      ...used.flatMap((m) => [
+        db.prepare(`UPDATE lots SET qty_on_hand_milli = qty_on_hand_milli + ? WHERE id = ?`).bind(-m.qty_delta_milli, m.lot_id),
+        db
+          .prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) VALUES (?,?,?,?,'assemble_in','assembly_reversal',?,?)`)
+          .bind(m.lot_id, m.product_id, -m.qty_delta_milli, m.unit_cost, id, user.id),
+      ]),
+      db.prepare(`UPDATE assembly_orders SET disassembled_at = ?, disassembled_by = ? WHERE id = ? AND disassembled_at IS NULL`).bind(now, user.id, id),
+      auditStmt(c, {
+        action: "assembly.disassemble", entity: "assembly_order", entityId: id, reason: b.reason,
+        before: { status: "posted", lotId: a.lot_id }, after: { disassembled: true, returned: used.map((m) => ({ lotId: m.lot_id, qtyMilli: -m.qty_delta_milli })) },
+      }),
+    ]),
+  );
+  return c.json(await assemblyView(db, id, can(user.role, "prices.view_cost")));
 });

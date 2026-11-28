@@ -200,8 +200,8 @@ inventoryRoutes.post("/stock-docs/:id/lines", requirePerm("inventory.write"), as
 
   if (type === "receipt") {
     const b = await parseBody(c, receiptLine);
-    const p = await db.prepare(`SELECT id, active FROM products WHERE id = ?`).bind(b.productId).first<any>();
-    if (!p || !p.active) throw new AppError(422, "invalid_product", "Mặt hàng không tồn tại hoặc đã ngừng kinh doanh");
+    const p = await db.prepare(`SELECT id, active, merged_into FROM products WHERE id = ?`).bind(b.productId).first<any>();
+    if (!p || !p.active || p.merged_into != null) throw new AppError(422, "invalid_product", "Mặt hàng không tồn tại hoặc đã ngừng kinh doanh");
     const f = await unitFactor(db, b.productId, b.unit);
     const qty = toMilli(b.qty, f);
     const docQty = b.docQty != null ? toMilli(b.docQty, f) : qty;
@@ -414,7 +414,8 @@ async function planPost(c: Ctx, doc: any, approvedBy: number | null): Promise<Pl
   if (type === "receipt") {
     for (const l of lines) {
       if (l.qty_milli <= 0) throw new AppError(422, "zero_qty", "Có dòng chưa nhập số lượng thực nhận", { lineId: l.id });
-      const prod = await db.prepare(`SELECT shelf_life_days FROM products WHERE id = ?`).bind(l.product_id).first<any>();
+      const prod = await db.prepare(`SELECT shelf_life_days, active, merged_into FROM products WHERE id = ?`).bind(l.product_id).first<any>();
+      if (!prod || !prod.active || prod.merged_into != null) throw new AppError(422, "invalid_product", "Mặt hàng đã ngừng kinh doanh hoặc đã gộp sang mã khác, không nhận hàng được", { lineId: l.id, productId: l.product_id, mergedInto: prod?.merged_into ?? null });
       const expires = l.expires_at ?? (prod?.shelf_life_days ? new Date(Date.now() + prod.shelf_life_days * 86400_000).toISOString() : null);
       const tmp = `TMP-${crypto.randomUUID()}`;
       lotValue += val(l.unit_cost, l.qty_milli);

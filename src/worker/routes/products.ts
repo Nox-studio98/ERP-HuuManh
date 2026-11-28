@@ -216,7 +216,23 @@ productRoutes.post("/products/:id/merge-into/:targetId", requirePerm("products.w
     externalProducts: await cnt(`SELECT COUNT(*) n FROM external_products WHERE product_id = ?`),
     openOrderLines: await cnt(`SELECT COUNT(*) n FROM order_lines WHERE product_id = ? AND order_id IN (SELECT id FROM orders WHERE status IN ('draft','new','confirmed','preparing','shipping','awaiting_payment'))`),
   };
-  const openStatuses = `'draft','new','confirmed','preparing','shipping','awaiting_payment'`;
+  const openStatuses = `'draft','new','confirmed','preparing','shipping','awaiting_payment','delivery_failed'`;
+  // K-KHO3: PO đang chạy (chưa nhận đủ/đóng/huỷ) + phần thiếu SO đang mở + liên kết NCC chuyển sang mã đích
+  const poLive = `SELECT id FROM purchase_orders WHERE status NOT IN ('received','closed','cancelled','rejected')`;
+  const poClash = await db
+    .prepare(
+      `SELECT po.code AS code FROM purchase_order_lines a JOIN purchase_order_lines b ON b.po_id = a.po_id AND b.product_id = ?2
+         JOIN purchase_orders po ON po.id = a.po_id
+        WHERE a.product_id = ?1 AND po.status NOT IN ('received','closed','cancelled','rejected')`,
+    )
+    .bind(src, tgt)
+    .all<{ code: string }>();
+  if (poClash.results.length)
+    throw conflict("merge_po_conflict", `Đơn đặt NCC ${poClash.results.map((x) => x.code).join(", ")} có cả hai mã: sửa/huỷ dòng của mã nguồn rồi gộp lại`, { pos: poClash.results.map((x) => x.code) });
+  moved.openOrderLines = await cnt(`SELECT COUNT(*) n FROM order_lines WHERE product_id = ? AND order_id IN (SELECT id FROM orders WHERE status IN (${openStatuses}))`);
+  (moved as Record<string, number>).poLines = await cnt(`SELECT COUNT(*) n FROM purchase_order_lines WHERE product_id = ? AND po_id IN (${poLive})`);
+  (moved as Record<string, number>).shortages = await cnt(`SELECT COUNT(*) n FROM so_shortages WHERE product_id = ? AND status = 'open'`);
+  (moved as Record<string, number>).suppliers = await cnt(`SELECT COUNT(*) n FROM product_suppliers WHERE product_id = ?`);
   await guarded(() =>
     db.batch([
       assertStmt(db, "product.merge", `SELECT (SELECT merged_into IS NULL FROM products WHERE id = ?) AND (SELECT merged_into IS NULL AND active = 1 FROM products WHERE id = ?)`, [src, tgt]),
@@ -243,6 +259,10 @@ productRoutes.post("/products/:id/merge-into/:targetId", requirePerm("products.w
       db.prepare(`UPDATE OR IGNORE bundle_components SET component_product_id = ?2 WHERE component_product_id = ?1`).bind(src, tgt),
       db.prepare(`UPDATE OR IGNORE product_matches SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
       db.prepare(`UPDATE OR IGNORE product_suppliers SET product_id = ?2 WHERE product_id = ?1`).bind(src, tgt),
+      db.prepare(`DELETE FROM product_suppliers WHERE product_id = ?1`).bind(src), // liên kết trùng với mã đích: giữ cấu hình của mã đích
+      assertStmt(db, "product.merge.po", `SELECT NOT EXISTS (SELECT 1 FROM purchase_order_lines a JOIN purchase_order_lines b ON b.po_id = a.po_id AND b.product_id = ? JOIN purchase_orders po ON po.id = a.po_id WHERE a.product_id = ? AND po.status NOT IN ('received','closed','cancelled','rejected'))`, [tgt, src]),
+      db.prepare(`UPDATE purchase_order_lines SET product_id = ?2 WHERE product_id = ?1 AND po_id IN (${poLive})`).bind(src, tgt),
+      db.prepare(`UPDATE so_shortages SET product_id = ?2 WHERE product_id = ?1 AND status = 'open'`).bind(src, tgt),
       db.prepare(`UPDATE products SET merged_into = ?2, active = 0, published_online = 0, version = version + 1, updated_at = ?3 WHERE id = ?1 AND merged_into IS NULL`).bind(src, tgt, now),
       db.prepare(`INSERT INTO product_merges(source_id, target_id, reason, moved_json, merged_by) VALUES (?,?,?,?,?)`).bind(src, tgt, b.reason, JSON.stringify(moved), u.id),
       auditStmt(c, { action: "product.merge", entity: "product", entityId: src, before: { sku: s.sku, name: s.name }, after: { mergedInto: tgt, targetSku: t.sku, moved }, reason: b.reason }),

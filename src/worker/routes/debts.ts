@@ -256,32 +256,63 @@ debtRoutes.post("/bills/:id/finalize", requirePerm("debt.write"), async (c) => {
         .all<{ line_id: number; lot_id: number; amt: number; unit_cost: number; qty_in: number; on_hand: number }>()
     ).results;
     const weight = lines.reduce((n, l) => n + Math.max(0, l.amt), 0);
+    // K-KHO1: lô gốc của phiếu nhập + mọi lô con sinh ra do chuyển kho (theo chuỗi received_lot_id) + phần đang đi đường
+    const famRows = (
+      await db
+        .prepare(
+          `WITH RECURSIVE fam(root, lot) AS (
+             SELECT l.lot_id, l.lot_id FROM stock_doc_lines l WHERE l.doc_id = ? AND l.lot_id IS NOT NULL
+             UNION
+             SELECT f.root, sl.received_lot_id FROM fam f
+               JOIN stock_doc_lines sl ON sl.lot_id = f.lot AND sl.received_lot_id IS NOT NULL
+               JOIN stock_docs d ON d.id = sl.doc_id AND d.type = 'transfer' AND d.status = 'posted'
+           )
+           SELECT f.root AS root, lo.id AS lot_id, lo.unit_cost AS unit_cost, lo.qty_on_hand_milli AS on_hand,
+                  COALESCE((SELECT SUM(sl.qty_milli) FROM stock_doc_lines sl JOIN stock_docs d ON d.id = sl.doc_id
+                             WHERE sl.lot_id = lo.id AND d.type = 'transfer' AND d.status = 'posted' AND d.transfer_status = 'in_transit'), 0) AS transit
+             FROM fam f JOIN lots lo ON lo.id = f.lot ORDER BY lo.id`,
+        )
+        .bind(b.stock_doc_id)
+        .all<{ root: number; lot_id: number; unit_cost: number; on_hand: number; transit: number }>()
+    ).results;
     let left = diff;
     lines.forEach((l, i) => {
       const last = i === lines.length - 1;
       const share = last ? left : weight > 0 ? Number((BigInt(diff) * BigInt(Math.max(0, l.amt))) / BigInt(weight)) : 0; // cắt về 0, phần dư dồn dòng cuối
       left -= share;
       if (share === 0) return;
-      // phần còn tồn → đổi đơn giá lô (nguyên đồng/đơn vị); phần đã bán + làm tròn → chênh lệch giá mua vào giá vốn
-      let newUnit = l.unit_cost;
-      let reval = 0;
-      if (l.on_hand > 0 && l.qty_in > 0) {
-        const onhandShare = Math.round((share * l.on_hand) / l.qty_in);
-        newUnit = Math.max(0, l.unit_cost + Math.round((onhandShare * 1000) / l.on_hand));
-        reval = Math.round(((newUnit - l.unit_cost) * l.on_hand) / 1000);
+      // phần còn tồn ở mọi lô con (kể cả hàng đang đi đường) → đổi đơn giá lô; phần đã bán / hao hụt + làm tròn → chênh lệch giá mua vào giá vốn
+      const fam = famRows.filter((f) => f.root === l.lot_id);
+      const members = fam.some((f) => f.lot_id === l.lot_id) ? fam : [{ root: l.lot_id, lot_id: l.lot_id, unit_cost: l.unit_cost, on_hand: l.on_hand, transit: 0 }];
+      type Part = { lotId: number; oldUnit: number; newUnit: number; reval: number; onHand: number };
+      const parts: Part[] = members.map((m) => {
+        const stock = m.on_hand + m.transit;
+        let newUnit = m.unit_cost;
+        let reval = 0;
+        if (stock > 0 && l.qty_in > 0) {
+          const onhandShare = Math.round((share * stock) / l.qty_in);
+          newUnit = Math.max(0, m.unit_cost + Math.round((onhandShare * 1000) / stock));
+          reval = Math.round(((newUnit - m.unit_cost) * stock) / 1000);
+        }
+        return { lotId: m.lot_id, oldUnit: m.unit_cost, newUnit, reval, onHand: m.on_hand };
+      });
+      const totalReval = parts.reduce((n, p) => n + p.reval, 0);
+      for (const p of parts) {
+        const isRoot = p.lotId === l.lot_id;
+        const diffAmt = isRoot ? share - (totalReval - (parts.find((x) => x.lotId === l.lot_id)?.reval ?? 0)) : p.reval;
+        const cogs = isRoot ? share - totalReval : 0;
+        costDetail.push({ lotId: p.lotId, rootLotId: l.lot_id, share: diffAmt, reval: p.reval, cogs, oldUnitCost: p.oldUnit, newUnitCost: p.newUnit });
+        costStmts.push(
+          assertStmt(db, "bill.finalize.lot", `SELECT qty_on_hand_milli = ? AND unit_cost = ? FROM lots WHERE id = ?`, [p.onHand, p.oldUnit, p.lotId]),
+          db.prepare(`UPDATE lots SET unit_cost = ? WHERE id = ?`).bind(p.newUnit, p.lotId),
+          db
+            .prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) SELECT id, product_id, 0, ?, 'cost_adjust', 'supplier_bill', ?, ? FROM lots WHERE id = ?`)
+            .bind(p.newUnit, id, c.get("user").id, p.lotId),
+          db
+            .prepare(`INSERT INTO purchase_cost_adjustments(bill_id, lot_id, diff_amount, onhand_amount, cogs_amount, old_unit_cost, new_unit_cost, reason, created_by) VALUES (?,?,?,?,?,?,?,?,?)`)
+            .bind(id, p.lotId, diffAmt, p.reval, cogs, p.oldUnit, p.newUnit, body.reason ?? null, c.get("user").id),
+        );
       }
-      const cogs = share - reval;
-      costDetail.push({ lotId: l.lot_id, share, reval, cogs, oldUnitCost: l.unit_cost, newUnitCost: newUnit });
-      costStmts.push(
-        assertStmt(db, "bill.finalize.lot", `SELECT qty_on_hand_milli = ? AND unit_cost = ? FROM lots WHERE id = ?`, [l.on_hand, l.unit_cost, l.lot_id]),
-        db.prepare(`UPDATE lots SET unit_cost = ? WHERE id = ?`).bind(newUnit, l.lot_id),
-        db
-          .prepare(`INSERT INTO stock_moves(lot_id, product_id, qty_delta_milli, unit_cost, move_type, ref_type, ref_id, user_id) SELECT id, product_id, 0, ?, 'cost_adjust', 'supplier_bill', ?, ? FROM lots WHERE id = ?`)
-          .bind(newUnit, id, c.get("user").id, l.lot_id),
-        db
-          .prepare(`INSERT INTO purchase_cost_adjustments(bill_id, lot_id, diff_amount, onhand_amount, cogs_amount, old_unit_cost, new_unit_cost, reason, created_by) VALUES (?,?,?,?,?,?,?,?,?)`)
-          .bind(id, l.lot_id, share, reval, cogs, l.unit_cost, newUnit, body.reason ?? null, c.get("user").id),
-      );
     });
   }
   const r = await db.batch([
