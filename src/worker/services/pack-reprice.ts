@@ -34,18 +34,23 @@ export async function repriceAfterPack(db: D1Database, o: any, lines: RepriceLin
   const recalcPromo = o.channel === "online" && (await flag(db, "online.pack_recalc_promo"));
   const recalcShip = o.channel === "online" && o.zone_id != null && (await flag(db, "online.pack_recalc_shipping"));
 
-  if (recalcShip) {
+  // Ngưỡng miễn phí giao tính SAU giảm giá / voucher / điểm (chủ đã chốt): gọi sau khi biết giảm giá mới của đơn.
+  const reshipping = async () => {
+    if (!recalcShip) return;
     const z = await db.prepare(`SELECT fee, free_over FROM delivery_zones WHERE id = ?`).bind(o.zone_id).first<{ fee: number; free_over: number | null }>();
-    // chỉ xét lại khi phí giao hiện tại đúng là phí theo quy tắc khu vực lúc đặt (phí đặt tay/khác quy tắc thì giữ nguyên)
-    const atOrder = z && z.free_over != null && o.subtotal >= z.free_over ? 0 : z?.fee;
-    if (z && atOrder === o.shipping_fee) {
-      res.shippingFee = z.free_over != null && subtotal >= z.free_over ? 0 : z.fee;
-      res.info.shippingChanged = res.shippingFee !== o.shipping_fee;
-    }
-  }
+    if (!z) return;
+    const feeFor = (sub: number, disc: number) => (z.free_over != null && Math.max(0, sub - disc) >= z.free_over ? 0 : z.fee);
+    // chỉ xét lại khi phí giao hiện tại đúng là phí theo quy tắc khu vực lúc đặt (phí đặt tay/khác quy tắc thì giữ nguyên);
+    // đơn đặt trước khi đổi quy tắc (ngưỡng tính trên tiền hàng trước giảm) vẫn được coi là đúng quy tắc
+    const atOrder = feeFor(o.subtotal, o.discount ?? 0) === o.shipping_fee || feeFor(o.subtotal, 0) === o.shipping_fee;
+    if (!atOrder) return;
+    res.shippingFee = feeFor(subtotal, res.discount);
+    res.info.shippingChanged = res.shippingFee !== o.shipping_fee;
+  };
   if (!recalcPromo) {
     // giữ nguyên giảm giá cấp đơn; dòng giữ phần giảm đã ghi
     res.lineDiscounts = new Map();
+    await reshipping();
     return res;
   }
 
@@ -71,6 +76,7 @@ export async function repriceAfterPack(db: D1Database, o: any, lines: RepriceLin
   lines.forEach((l, i) => res.lineDiscounts.set(l.id, ev.lineDiscounts[i] + ptsLine[i]));
   res.discount = ev.total + pts;
   res.info.promoRecalc = true;
+  await reshipping();
 
   const sig = (rows: { promotion_id?: number | null; promotionId?: number; voucher_id?: number | null; voucherId?: number; amount: number }[]) =>
     rows.map((r) => `${r.promotion_id ?? r.promotionId}:${r.voucher_id ?? r.voucherId ?? 0}:${r.amount}`).sort().join("|");

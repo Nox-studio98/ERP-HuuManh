@@ -3,6 +3,7 @@ import { assertStmt } from "./guard";
 import { sysAuditStmt } from "./sysaudit";
 import { enqueueJobStmt } from "./outbox";
 import { AppError, conflict } from "../lib/errors";
+import { getSettingInt } from "./settings";
 
 /**
  * Giữ tồn cho đơn chưa giao (M2-06) — dùng chung cho đơn sỉ (M4), đơn sàn Fresco, đơn online (Đợt 3).
@@ -197,12 +198,14 @@ export async function swapBadReservations(
   if (opts.orderId != null) (where.push("r.order_id = ?"), binds.push(opts.orderId));
   const { results } = await db
     .prepare(
-      `SELECT r.id, r.order_id, r.order_line_id, r.lot_id, r.qty_milli, l.product_id, l.lot_code, o.code AS order_code
+      `SELECT r.id, r.order_id, r.order_line_id, r.lot_id, r.qty_milli, l.product_id, l.lot_code, o.code AS order_code, o.channel, o.status AS order_status,
+              COALESCE(o.delivery_date, o.slot_date) AS need_by
          FROM reservations r JOIN lots l ON l.id = r.lot_id JOIN locations loc ON loc.id = l.location_id JOIN orders o ON o.id = r.order_id
         WHERE ${where.join(" AND ")} ORDER BY r.id`,
     )
     .bind(...binds)
-    .all<{ id: number; order_id: number; order_line_id: number; lot_id: number; qty_milli: number; product_id: number; lot_code: string; order_code: string }>();
+    .all<{ id: number; order_id: number; order_line_id: number; lot_id: number; qty_milli: number; product_id: number; lot_code: string; order_code: string; channel: string; order_status: string; need_by: string | null }>();
+  const allowShort = (await getSettingInt(db, "po.allow_short_confirm", 1)) === 1;
   const swapped: number[] = [];
   const short: SwapShort[] = [];
   for (const r of results) {
@@ -218,6 +221,20 @@ export async function swapBadReservations(
       const body = `Thiếu ${missingMilli / 1000} (đơn vị chính) chưa có lô thay thế — cần liên hệ khách hoặc bổ sung hàng.`;
       stmts.push(
         db.prepare(`UPDATE orders SET reservation_short_milli = reservation_short_milli + ?, reservation_short_at = ? WHERE id = ?`).bind(missingMilli, now, r.order_id),
+        // K-KHO2: ghi phần thiếu để đơn hiện "Chờ hàng" và vào chốt đêm / PO (cộng dồn vào dòng thiếu đang mở của dòng đơn)
+        ...(allowShort && (r.channel === "b2b" || r.channel === "online") && ["confirmed", "preparing", "shipping", "delivery_failed"].includes(r.order_status)
+          ? [
+              db
+                .prepare(
+                  `INSERT INTO so_shortages(order_id, order_line_id, product_id, initial_milli, qty_milli, need_by) VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(order_line_id) DO UPDATE SET
+                     initial_milli = CASE WHEN status = 'open' THEN initial_milli + excluded.initial_milli ELSE excluded.initial_milli END,
+                     qty_milli = CASE WHEN status = 'open' THEN qty_milli + excluded.qty_milli ELSE excluded.qty_milli END,
+                     need_by = excluded.need_by, status = 'open', closed_at = NULL`,
+                )
+                .bind(r.order_id, r.order_line_id, r.product_id, missingMilli, missingMilli, r.need_by),
+            ]
+          : []),
         db.prepare(`INSERT INTO notifications(kind, title, body, audience_perm, ref_type, ref_id) VALUES ('reservation_short', ?, ?, 'inventory.approve', 'order', ?)`).bind(title, body, r.order_id),
         enqueueJobStmt(db, "notify.managers", "order", r.order_id, { title, body, url: "/orders" }),
         sysAuditStmt(db, { action: "reservation.short_after_swap", entity: "order", entityId: r.order_id, after: { lotId: r.lot_id, lotCode: r.lot_code, orderLineId: r.order_line_id, missingMilli } }, opts.actorId ?? null),

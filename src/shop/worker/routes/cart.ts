@@ -4,7 +4,7 @@ import { AppError } from "../../../worker/lib/errors";
 import { vnDate } from "../../../worker/lib/time";
 import type { ShopBindings } from "../env";
 import { applyStock, computeTotals, priceCart, priceCtxOf, promoForCart, redeemCustomerId, type CartIssue } from "../lib/cart";
-import { DATE_RE, activeSlots, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
+import { DATE_RE, activeSlots, addDaysStr, feeAfterDiscount, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { optionalAuth } from "../lib/session";
 import { onlineStoreId, parseBody } from "../lib/util";
 
@@ -63,6 +63,9 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
   }
   // Đợt 4: khuyến mãi tự động + voucher (cùng engine với POS)
   const promo = await promoForCart(db, lines, t.subtotal, redeemCustomerId(c.get("account"), b.redeemPoints), b.voucherCode, false, null, b.redeemPoints ?? 0);
+  // Ngưỡng miễn phí giao tính sau giảm giá / voucher / điểm
+  const orderDiscount = promo.promoTotal + promo.pointsAmount;
+  const shippingFee = t.zone ? feeAfterDiscount(t.zone, t.subtotal, orderDiscount) : 0;
   const voucherRejected = b.voucherCode ? promo.rejected.find((r) => r.reason !== "not_best_promotion") ?? promo.rejected[0] : undefined;
   return c.json({
     lines: lines.map((l, i) => ({
@@ -76,9 +79,9 @@ cartRoutes.post("/cart/quote", optionalAuth, async (c) => {
     ...(promo.maxRedeemPoints != null && c.get("account")?.kind === "retail" ? { pointsMax: promo.maxRedeemPoints, pointsBalance: promo.pointsBalance } : {}),
     discounts: promo.discounts.map((d) => ({ promotionId: d.promotionId, amount: d.amount, description: d.description })),
     ...(b.voucherCode ? { voucher: voucherRejected ? { code: b.voucherCode, applied: false, reason: voucherRejected.reason } : { code: b.voucherCode, applied: !!promo.voucher } } : {}),
-    shippingFee: t.shippingFee,
+    shippingFee,
     zone: t.zone ? { id: t.zone.id, name: t.zone.name } : null,
-    total: t.total - promo.promoTotal - promo.pointsAmount,
+    total: t.subtotal - orderDiscount + shippingFee,
     estimated: t.estimated,
     issues,
   });

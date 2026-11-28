@@ -8,7 +8,7 @@ import { kickJobs } from "../../../worker/services/outbox";
 import { applyStock, computeTotals, priceCart, priceCtxOf, promoForCart, publicRemaining, redeemCustomerId } from "../lib/cart";
 import { promoStatements } from "../../../worker/services/promo-checkout";
 import { isPointsInsufficient, isVoucherExhausted } from "../../../worker/services/loyalty-points";
-import { DATE_RE, addDaysStr, findZone, getSlot, slotProblem } from "../lib/delivery";
+import { DATE_RE, addDaysStr, feeAfterDiscount, findZone, getSlot, slotProblem } from "../lib/delivery";
 import { orderView } from "../lib/orderview";
 import { optionalAuth } from "../lib/session";
 import { verifyTurnstile } from "../lib/turnstile";
@@ -54,6 +54,14 @@ const ORD = `(SELECT id FROM orders WHERE code = ?1)`;
 
 const OPEN_STATUSES = `('new','awaiting_payment')`;
 const dayAgo = () => new Date(Date.now() - 86400_000).toISOString();
+/** Số đơn COD đang mở (new/awaiting_payment) của một tài khoản — không giới hạn thời gian: đơn treo cũ vẫn giữ tồn cho tới khi cron/nhân viên xử lý. */
+async function openCodByAccount(db: D1Database, accountId: number) {
+  const r = await db
+    .prepare(`SELECT COUNT(*) AS n FROM orders WHERE channel = 'online' AND shop_account_id = ? AND payment_method = 'cod' AND status IN ${OPEN_STATUSES}`)
+    .bind(accountId)
+    .first<{ n: number }>();
+  return r?.n ?? 0;
+}
 /** Số đơn online chưa hoàn tất xác nhận của một SĐT người nhận trong 24h. */
 async function openOrdersByPhone(db: D1Database, phone: string) {
   const r = await db
@@ -100,7 +108,8 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const r0 = await replay();
   if (r0) return r0;
 
-  if (!account) await verifyTurnstile(c);
+  // S-1: khách vãng lai và tài khoản CHƯA xác minh email (đặt COD) đều phải qua Turnstile
+  if (!account || (b.paymentMethod === "cod" && !account.emailVerified)) await verifyTurnstile(c);
 
   // --- địa chỉ nhận ---
   let addr: z.infer<typeof AddressSchema>;
@@ -116,10 +125,13 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   const phone = normalizePhone(addr.receiverPhone);
   if (!phone) throw new AppError(422, "invalid_phone", "Số điện thoại không hợp lệ");
 
-  // Chống giữ hàng bằng đơn ảo: mỗi SĐT người nhận tối đa N đơn chưa hoàn tất (new/awaiting_payment) trong 24h (khách vãng lai)
+  // Chống giữ hàng bằng đơn ảo (S-1): mỗi SĐT người nhận tối đa N đơn chưa hoàn tất (new/awaiting_payment) trong 24h,
+  // và mỗi tài khoản đăng nhập tối đa N đơn COD đang mở — áp cho cả khách vãng lai lẫn tài khoản.
   const maxOpen = await settingNum(db, "online.max_open_orders_per_phone", 3);
-  if (!account && (await openOrdersByPhone(db, phone)) >= maxOpen)
-    throw httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
+  const capByAccount = !!account && b.paymentMethod === "cod";
+  const overCap = async () => (await openOrdersByPhone(db, phone)) >= maxOpen || (capByAccount && (await openCodByAccount(db, account!.id)) >= maxOpen);
+  const capError = () => httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
+  if (await overCap()) throw capError();
 
   // --- khu vực + khung giờ ---
   const zone = await findZone(db, addr.district);
@@ -146,7 +158,10 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
   // --- khuyến mãi / voucher (Đợt 4): giảm tính trên tiền hàng, phí giao giữ nguyên ---
   const redeemCid = redeemCustomerId(account, b.redeemPoints);
   const promo = await promoForCart(db, lines, totals.subtotal, redeemCid, b.voucherCode, true, phone, b.redeemPoints ?? 0);
-  const finalTotal = totals.total - promo.promoTotal - promo.pointsAmount;
+  // Ngưỡng miễn phí giao tính SAU giảm giá / voucher / điểm
+  const orderDiscount = promo.promoTotal + promo.pointsAmount;
+  const shippingFee = zone ? feeAfterDiscount(zone, totals.subtotal, orderDiscount) : 0;
+  const finalTotal = totals.subtotal - orderDiscount + shippingFee;
 
   // --- thanh toán ---
   const methods = (await setting(db, "payment.methods", "cod,transfer")).split(",").map((x) => x.trim());
@@ -203,9 +218,12 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     stmts.push(
       slotCapacityGuard(db, "checkout.slot_capacity", b.slotDate, b.slotId, slot.capacity),
     );
-    if (!account)
+    stmts.push(
+      assertStmt(db, "checkout.phone_open_cap", `SELECT (SELECT COUNT(*) FROM orders WHERE channel = 'online' AND receiver_phone = ? AND status IN ${OPEN_STATUSES} AND created_at >= ?) < ?`, [phone, dayAgo(), maxOpen]),
+    );
+    if (capByAccount)
       stmts.push(
-        assertStmt(db, "checkout.phone_open_cap", `SELECT (SELECT COUNT(*) FROM orders WHERE channel = 'online' AND receiver_phone = ? AND status IN ${OPEN_STATUSES} AND created_at >= ?) < ?`, [phone, dayAgo(), maxOpen]),
+        assertStmt(db, "checkout.account_open_cap", `SELECT (SELECT COUNT(*) FROM orders WHERE channel = 'online' AND shop_account_id = ? AND payment_method = 'cod' AND status IN ${OPEN_STATUSES}) < ?`, [account!.id, maxOpen]),
       );
     if (guestCustomerCode)
       stmts.push(
@@ -218,14 +236,16 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
         .prepare(
           `INSERT INTO orders(code, client_uuid, channel, kind, store_id, customer_id, status, is_preorder, subtotal, discount, shipping_fee, total, note,
                               shop_account_id, tracking_token, receiver_name, receiver_phone, ship_address, zone_id, slot_date, slot_id,
-                              payment_method, payment_status, estimated_total, weight_adjust_status)
-           VALUES (?,?,'online','sale',?, COALESCE(?, (SELECT id FROM customers WHERE code = ?)), ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,'none')`,
+                              payment_method, payment_status, estimated_total, weight_adjust_status, contact_email)
+           VALUES (?,?,'online','sale',?, COALESCE(?, (SELECT id FROM customers WHERE code = ?)), ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,'none', ?)`,
         )
         .bind(
           code, b.clientUuid, storeId, account?.customerId ?? knownGuestId, guestCustomerCode, status, isPreorder ? 1 : 0,
-          totals.subtotal, promo.promoTotal + promo.pointsAmount, totals.shippingFee, finalTotal, b.note ?? null,
+          totals.subtotal, orderDiscount, shippingFee, finalTotal, b.note ?? null,
           account?.id ?? null, token, addr.receiverName, phone, shipAddress, zone.id, b.slotDate, b.slotId,
           b.paymentMethod, payStatus, finalTotal,
+          // S-2: email người mua lưu TRÊN ĐƠN ('' = khách vãng lai không để lại email → không gửi thông báo tới hồ sơ cũ)
+          account ? null : b.email ?? "",
         ),
     );
     for (const [li, l] of lines.entries())
@@ -243,7 +263,11 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
       ...(await promoStatements(
         db,
         { sql: "(SELECT id FROM orders WHERE code = ?)", bind: code },
-        { plan: promo, customerId: account?.customerId ?? null, receiverPhone: phone, payableTotal: finalTotal, userId: null, skipEarn: true, customerSql: { sql: "(SELECT id FROM customers WHERE code = ?)", bind: guestCustomerCode } },
+        {
+          plan: promo, customerId: account?.customerId ?? null, receiverPhone: phone, payableTotal: finalTotal, userId: null, skipEarn: true,
+          // Lượt dùng voucher của khách vãng lai ghi theo hồ sơ khách (cũ hoặc mới tạo) để giới hạn theo khách đếm đúng khi họ đăng nhập
+          customerSql: knownGuestId ? { sql: "(SELECT id FROM customers WHERE id = ?)", bind: knownGuestId } : { sql: "(SELECT id FROM customers WHERE code = ?)", bind: guestCustomerCode },
+        },
       )),
     );
     const ev = (st: string, note: string) =>
@@ -263,6 +287,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
     stmts.push(
       enqueueByRef(db, "notify.order_status", "order", code, {
         orderCode: code, status, accountId: account?.id ?? null, email: account ? null : guestMailOk ? b.email ?? null : null, link,
+        ...(!account && !guestMailOk ? { skipEmail: true } : {}), // bị mailguard chặn / không có email: không gửi tới hồ sơ cũ
       }),
       enqueueByRef(db, "notify.staff_new_order", "order", code, { orderCode: code, total: finalTotal, isPreorder }),
     );
@@ -279,7 +304,7 @@ checkoutRoutes.post("/checkout", optionalAuth, async (c) => {
       if (/state_changed/.test(String((e as Error)?.message ?? ""))) {
         // Chốt chặn trong batch bật: xác định nguyên nhân để báo đúng lỗi
         if ((await slotProblem(db, slot, b.slotDate)) === "full") throw conflict("slot_full", "Khung giờ đã đầy, vui lòng chọn khung khác");
-        if (!account && (await openOrdersByPhone(db, phone)) >= maxOpen) throw httpError(429, "too_many_open_orders", "Bạn đang có quá nhiều đơn chưa được xác nhận, vui lòng chờ cửa hàng xử lý hoặc liên hệ hotline");
+        if (await overCap()) throw capError();
         await promoForCart(db, lines, totals.subtotal, redeemCid, b.voucherCode, true, phone, b.redeemPoints ?? 0); // ném lỗi voucher cụ thể nếu có
       }
       if (isCheckFail(e)) {

@@ -591,6 +591,7 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
   }
   // C-12: giới hạn luỹ kế theo nhân viên + kỳ khấu trừ (tham số hr.advance_max_bp, % lương tháng; 0 = tắt)
   const maxBp = await getSettingInt(db, "hr.advance_max_bp", 5000);
+  let advGuard: D1PreparedStatement[] = [];
   if (maxBp > 0) {
     const std = Math.max(1, await getSettingInt(db, "hr.standard_workdays", 26));
     const monthly = emp.pay_type === "monthly" ? emp.base_salary : emp.pay_type === "hourly" ? emp.hourly_rate * 8 * std : emp.shift_rate * std;
@@ -611,6 +612,15 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
         { cap, used, requested: b.amount, remaining: Math.max(0, cap - used), deductPeriod: deduct },
       );
     }
+    // Kiểm lại luỹ kế ngay trong batch: hai yêu cầu đồng thời không cùng lọt giới hạn
+    advGuard = [
+      assertStmt(
+        db, "payroll.advance_limit",
+        `SELECT COALESCE(SUM(a.amount),0) + ? <= ? FROM salary_advances a LEFT JOIN cash_vouchers v ON v.id = a.cash_voucher_id
+          WHERE a.employee_id = ? AND a.deduct_period = ? AND a.status != 'cancelled' AND (v.id IS NULL OR v.status != 'cancelled')`,
+        [b.amount, cap, b.employeeId, deduct],
+      ),
+    ];
   }
   const code = await nextCode(db, PREFIX.cashOut);
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
@@ -619,6 +629,7 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
   const threshold = await getSettingInt(db, "approval.cash_out_vnd", 5_000_000);
   const needApproval = b.amount > threshold && !can(user.role, "finance.approve");
   const res = await db.batch([
+    ...advGuard,
     db
       .prepare(
         `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, counterparty, ref_type, status, period, note, created_by, approved_by)
@@ -640,7 +651,7 @@ payrollRoutes.post("/payroll/advances", requirePerm("payroll.write"), async (c) 
       .bind(b.employeeId, b.amount, today, deduct, b.fundId, code, b.reason ?? null, user.id),
     auditStmt(c, { action: "payroll.advance", entity: "employee", entityId: b.employeeId, after: { amount: b.amount, deductPeriod: deduct, voucher: code } }),
   ]);
-  const id = (res[needApproval ? 2 : 1].results as any[])[0]?.id;
+  const id = (res[advGuard.length + (needApproval ? 2 : 1)].results as any[])[0]?.id;
   return c.json({ id, employeeId: b.employeeId, amount: b.amount, deductPeriod: deduct, voucherCode: code, status: needApproval ? "pending_approval" : "paid" }, 201);
 });
 

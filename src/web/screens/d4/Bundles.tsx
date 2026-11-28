@@ -100,6 +100,9 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<any>(null);
   const [err, setErr] = useState("");
+  const [undo, setUndo] = useState<any>(null);
+  const [undoReason, setUndoReason] = useState("");
+  const [undoErr, setUndoErr] = useState("");
   const comp = useAsync(() => (pid ? get(`/bundles/${pid}/components`, undefined, { silent: true }).then((r) => r.components as any[]) : Promise.resolve([])), [pid, done]);
   const recent = useAsync(() => get("/assembly-orders").then((r) => items<any>(r)), [done]);
   const need = (comp.data ?? []).map((c) => {
@@ -117,8 +120,21 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
       setDone(r); toast(`Đã đóng ${qty} giỏ — ${r.code}`, "ok"); cat.reload();
     } catch (e) { if (e instanceof ApiError) setErr(e.code === "insufficient_stock" ? "Không đủ tồn thành phần để đóng giỏ." : e.message); } finally { setBusy(false); }
   };
+  const disassemble = async () => {
+    setBusy(true); setUndoErr("");
+    try {
+      await post(`/assembly-orders/${undo.id}/disassemble`, { reason: undoReason.trim() }, { silent: true });
+      toast(`Đã tháo giỏ ${undo.code}`, "ok"); setUndo(null); setUndoReason(""); setDone({ __undone: Date.now() }); cat.reload();
+    } catch (e) { if (e instanceof ApiError) setUndoErr(e.code === "bundle_in_use" ? "Giỏ đã bán hoặc đang giữ cho đơn, không tháo được." : e.message); } finally { setBusy(false); }
+  };
   return (
     <div className="two-col">
+      <Sheet open={!!undo} onClose={() => setUndo(null)} title={undo ? `Tháo giỏ ${undo.code}` : "Tháo giỏ"} footer={<div className="stack" style={{ width: "100%" }}>{undoErr && <div className="err" role="alert">{undoErr}</div>}<Button block size="lg" loading={busy} disabled={undoReason.trim().length < 3} onClick={disassemble}>Tháo giỏ, trả thành phần về kho</Button></div>}>
+        <div className="stack">
+          <Banner>Thành phần được trả về đúng lô đã lấy; giỏ bị trừ khỏi kho. Chỉ tháo được khi cả lô giỏ còn nguyên.</Banner>
+          <TextArea label="Lý do tháo giỏ" value={undoReason} onChange={(e) => setUndoReason(e.target.value)} />
+        </div>
+      </Sheet>
       <div className="stack">
       <BasketSelect value={pid} onChange={(v) => { setPid(v); setDone(null); }} />
       <Card title="Lệnh đóng giỏ">
@@ -142,7 +158,7 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
       </Card>
       </div>
       <div className="stack">
-      {done && (
+      {done && !done.__undone && (
         <Banner tone="info">Đã đóng giỏ <b>{done.code}</b>: {qtyText(done.qtyMilli)} × {done.productName}, giá vốn {money(done.unitCost)}/giỏ{done.expiresAt ? `, hạn ${fmtDate(done.expiresAt)}` : ""}. Tồn giỏ quà đã tăng.</Banner>
       )}
       <Card title="Lệnh đóng giỏ gần đây">
@@ -150,7 +166,8 @@ function Assembly({ canWrite }: { canWrite: boolean }) {
           { key: "c", label: "Mã", title: true, render: (a) => <b>{a.code}</b> },
           { key: "p", label: "Giỏ", render: (a) => a.productName },
           { key: "q", label: "Số lượng", right: true, render: (a) => qtyText(a.qtyMilli) },
-          { key: "s", label: "Trạng thái", render: (a) => <Badge tone={a.status === "posted" ? "ok" : "danger"}>{a.status === "posted" ? "Đã ghi sổ" : "Không ghi được"}</Badge> },
+          { key: "s", label: "Trạng thái", render: (a) => <Badge tone={a.disassembledAt ? "warn" : a.status === "posted" ? "ok" : "danger"}>{a.disassembledAt ? "Đã tháo" : a.status === "posted" ? "Đã ghi sổ" : "Không ghi được"}</Badge> },
+          { key: "u", label: "", render: (a) => (canWrite && a.status === "posted" && !a.disassembledAt ? <Button size="sm" variant="ghost" onClick={() => { setUndo(a); setUndoReason(""); setUndoErr(""); }}>Tháo giỏ</Button> : null) },
         ]} />}
       </Card>
       </div>

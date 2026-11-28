@@ -161,7 +161,9 @@ export function calculatePayslip(input: PayslipInput, s: PayrollSettings = DEFAU
 
   // Bậc công: chỉ khi bật và mọi ngày đã chốt kèm số công theo bậc (kỳ chốt trước khi bật thì giữ cách cũ)
   const tiersOn = e.payType === "monthly" && !!s.workdayTiersOn && input.days.length > 0 && input.days.every((d) => d.workUnitsX10 != null);
-  const tierWorkX10 = sum(input.days.map((d) => d.workUnitsX10 ?? 0));
+  // Ngày có phép có lương: công bậc + phép không vượt 1 ngày (ngày không phép vẫn có thể >1 công theo bậc)
+  const tierDayX10 = (d: TimesheetDayInput) => (d.leavePaidX10 > 0 ? Math.min(10, (d.workUnitsX10 ?? 0) + d.leavePaidX10) - Math.min(10, d.leavePaidX10) : (d.workUnitsX10 ?? 0));
+  const tierWorkX10 = sum(input.days.map(tierDayX10));
   let paidDaysX10 = Math.min(std * 10, (tiersOn ? tierWorkX10 + leaveX10 : e.payType === "monthly" && proportional ? propDaysX10 : workedDays * 10 + leaveX10) + holidayOff * 10);
   let basePay = 0;
   if (e.payType === "monthly") {

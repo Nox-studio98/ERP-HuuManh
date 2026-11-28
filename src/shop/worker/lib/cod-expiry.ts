@@ -5,7 +5,7 @@ import { releaseOrderStmts } from "../../../worker/services/reservations";
 import { sysAuditStmt } from "../../../worker/services/sysaudit";
 
 /**
- * Cron (gợi ý mỗi 30 phút): đơn COD của khách vãng lai ở trạng thái 'new' (chưa ai xác nhận) quá `online.cod_unconfirmed_hours`
+ * Cron (gợi ý mỗi 30 phút): đơn COD (khách vãng lai VÀ tài khoản đăng nhập) ở trạng thái 'new' (chưa ai xác nhận) quá `online.cod_unconfirmed_hours`
  * giờ (mặc định 72; đặt 0 để tắt) → tự huỷ và NHẢ TỒN, tránh giữ hàng vô hạn bằng đơn ảo. Trả số đơn đã huỷ.
  */
 export async function cancelStaleCodOrders(env: Pick<Env, "DB"> & Partial<Env>, now = new Date()): Promise<number> {
@@ -17,7 +17,7 @@ export async function cancelStaleCodOrders(env: Pick<Env, "DB"> & Partial<Env>, 
   const cutoff = new Date(now.getTime() - hours * 3600_000).toISOString();
   const { results } = await db
     .prepare(
-      `SELECT id, code FROM orders WHERE channel = 'online' AND status = 'new' AND payment_method = 'cod' AND shop_account_id IS NULL AND created_at <= ? ORDER BY id LIMIT 100`,
+      `SELECT id, code FROM orders WHERE channel = 'online' AND status = 'new' AND payment_method = 'cod' AND created_at <= ? ORDER BY id LIMIT 100`,
     )
     .bind(cutoff)
     .all<{ id: number; code: string }>();

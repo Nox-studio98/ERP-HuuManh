@@ -3,8 +3,12 @@
  * `where` là điều kiện SQL trên bảng orders (alias o); luôn chỉ tính đơn status='completed'
  * (đơn bán trừ đơn trả). Đơn nháp/huỷ không bao giờ được tính.
  */
-export async function salesSummary(db: D1Database, where: string, params: unknown[]) {
-  const base = `o.status = 'completed' AND (${where})`;
+export async function salesSummary(db: D1Database, where: string, params: unknown[], opts: { closedAt?: string | null } = {}) {
+  // R2-INV-01: ca ĐÃ CHỐT tính đơn theo trạng thái lúc chốt — đơn huỷ SAU khi chốt (voided_at > closed_at) vẫn thuộc ca
+  const snap = !!opts.closedAt;
+  const base = snap ? `(o.status = 'completed' OR (o.status = 'cancelled' AND o.voided_at > ?)) AND (${where})` : `o.status = 'completed' AND (${where})`;
+  if (snap) params = [opts.closedAt, ...params];
+  const payOk = snap ? `(p.status = 'confirmed' OR (p.status = 'refunded' AND o.status = 'cancelled'))` : `p.status = 'confirmed'`;
   const totals = await db
     .prepare(
       `SELECT
@@ -28,7 +32,7 @@ export async function salesSummary(db: D1Database, where: string, params: unknow
     .prepare(
       `SELECT p.method, SUM(p.amount) AS amount
          FROM payments p JOIN orders o ON o.id = p.order_id
-        WHERE p.status = 'confirmed' AND ${base} GROUP BY p.method ORDER BY amount DESC`,
+        WHERE ${payOk} AND ${base} GROUP BY p.method ORDER BY amount DESC`,
     )
     .bind(...params)
     .all();

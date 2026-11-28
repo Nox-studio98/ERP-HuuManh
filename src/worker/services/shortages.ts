@@ -131,10 +131,91 @@ interface OpenShort {
 
 const CHECK_FAIL = /CHECK constraint failed/i;
 
+const OPEN_ORDER_SQL = `'confirmed','preparing','shipping','delivery_failed'`;
+const IN_FLIGHT_PO_SQL = `'pending_approval','sent','supplier_proposed','confirmed','partially_received'`;
+
 /**
- * Nhận hàng theo PO xong → giữ FEFO cho phần thiếu của các SO liên kết với dòng PO, ưu tiên ngày giao sớm rồi đơn tạo trước.
- * Mỗi phần thiếu là một batch riêng, tự kiểm lại trạng thái (assertStmt) và giữ đúng phần tồn đang có;
- * chỉ giữ tối đa số lượng vừa nhận của dòng PO đó. Đủ → `filled` + thông báo cho người xử lý đơn.
+ * Giữ FEFO từ tồn TỰ DO cho các phần thiếu đang mở (K-PO1b), ưu tiên ngày giao sớm rồi đơn tạo trước (K-PO1).
+ * Dùng khi nhận hàng theo PO, trước khi chốt đêm / "Chốt ngay" tính nhu cầu, và trước khi xác nhận giao đơn sỉ.
+ * Mỗi phần thiếu là một batch riêng, tự kiểm lại trạng thái (assertStmt) và chỉ giữ phần tồn đang có (CHECK reserved ≤ on_hand: EC-02).
+ * Đủ → `filled` + thông báo cho người xử lý đơn.
+ */
+export async function fillShortagesFromStock(
+  db: D1Database,
+  opts: { productIds?: number[]; orderId?: number; actorUserId: number | null; poCode?: string | null },
+) {
+  const filled: { orderId: number; orderCode: string; productId: number; productName: string; baseUnit: string; qtyMilli: number; done: boolean }[] = [];
+  const where = [`s.status = 'open'`, `s.qty_milli > 0`, `o.status IN (${OPEN_ORDER_SQL})`];
+  const binds: unknown[] = [];
+  if (opts.productIds) {
+    if (!opts.productIds.length) return filled;
+    where.push(`s.product_id IN (${opts.productIds.map(() => "?").join(",")})`);
+    binds.push(...opts.productIds);
+  }
+  if (opts.orderId != null) (where.push(`s.order_id = ?`), binds.push(opts.orderId));
+  const { results } = await db
+    .prepare(
+      `SELECT s.id, s.order_id, s.order_line_id, s.product_id, s.qty_milli, s.need_by, o.code AS order_code, o.channel, o.store_id, o.status, p.name AS product_name, p.base_unit
+         FROM so_shortages s JOIN orders o ON o.id = s.order_id JOIN products p ON p.id = s.product_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY s.product_id, (s.need_by IS NULL), s.need_by, s.created_at, s.id`,
+    )
+    .bind(...binds)
+    .all<OpenShort>();
+  const dry = new Set<string>(); // sản phẩm + kho đã hết tồn tự do: bỏ qua các phần thiếu sau
+  for (const s of results) {
+    const key = `${s.product_id}:${s.store_id}`;
+    if (dry.has(key)) continue;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const cur = await db.prepare(`SELECT qty_milli, status FROM so_shortages WHERE id = ?`).bind(s.id).first<{ qty_milli: number; status: string }>();
+      if (!cur || cur.status !== "open" || cur.qty_milli <= 0) break;
+      const { alloc, missingMilli } = await allocateFefoPartial(db, s.product_id, cur.qty_milli, s.store_id);
+      const got = cur.qty_milli - missingMilli;
+      if (got <= 0) {
+        dry.add(key);
+        break;
+      }
+      const left = cur.qty_milli - got;
+      const title = `Đơn ${s.order_code} đã đủ hàng`;
+      const body = opts.poCode ? `Hàng theo ${opts.poCode} đã về và được giữ cho đơn. Có thể soạn / giao.` : `Kho đã có hàng và được giữ cho đơn. Có thể soạn / giao.`;
+      const stmts: D1PreparedStatement[] = [
+        assertStmt(db, "so_shortage.fill", `SELECT status = 'open' AND qty_milli = ? FROM so_shortages WHERE id = ?`, [cur.qty_milli, s.id]),
+        ...reserveStmts(db, s.order_id, [{ orderLineId: s.order_line_id, productId: s.product_id, alloc }]),
+        db
+          .prepare(`UPDATE so_shortages SET qty_milli = ?, status = ?, closed_at = ? WHERE id = ? AND status = 'open'`)
+          .bind(left, left === 0 ? "filled" : "open", left === 0 ? new Date().toISOString() : null, s.id),
+        sysAuditStmt(db, { action: "so_shortage.fill", entity: "order", entityId: s.order_id, after: { shortageId: s.id, po: opts.poCode ?? null, source: opts.poCode ? "po" : "free_stock", filledMilli: got, leftMilli: left } }, opts.actorUserId),
+      ];
+      if (left === 0) {
+        // thông báo khi đơn không còn dòng thiếu nào
+        stmts.push(
+          db
+            .prepare(
+              `INSERT INTO notifications(kind, title, body, audience_perm, ref_type, ref_id)
+               SELECT 'so_filled', ?, ?, ?, 'order', ? WHERE NOT EXISTS (SELECT 1 FROM so_shortages WHERE order_id = ? AND status = 'open' AND id <> ? AND qty_milli > 0)`,
+            )
+            .bind(title, body, s.channel === "b2b" ? "b2b.write" : "orders.online.manage", s.order_id, s.order_id, s.id),
+          enqueueJobStmt(db, "notify.managers", "order", s.order_id, { title, body, url: s.channel === "b2b" ? "/b2b/orders" : "/online-orders" }),
+        );
+      }
+      try {
+        await db.batch(stmts);
+      } catch (e) {
+        const m = String((e as Error)?.message);
+        if ((CHECK_FAIL.test(m) || m.includes("state_changed")) && attempt === 0) continue; // tồn / dòng thiếu vừa đổi: tính lại một lần
+        if (CHECK_FAIL.test(m) || m.includes("state_changed")) break;
+        throw e;
+      }
+      filled.push({ orderId: s.order_id, orderCode: s.order_code, productId: s.product_id, productName: s.product_name, baseUnit: s.base_unit, qtyMilli: got, done: left === 0 });
+      break;
+    }
+  }
+  return filled;
+}
+
+/**
+ * Nhận hàng theo PO xong → giữ FEFO cho phần thiếu mở của các mặt hàng vừa nhận (không chỉ phần có liên kết với dòng PO này:
+ * K-PO1), ưu tiên ngày giao sớm rồi đơn tạo trước. Phần thiếu đã có tồn tự do (nhập thường...) cũng được giữ luôn (K-PO1b).
  */
 export async function allocateReceivedToShortages(
   db: D1Database,
@@ -142,65 +223,71 @@ export async function allocateReceivedToShortages(
   actorUserId: number | null,
   poCode: string,
 ) {
-  const filled: { orderId: number; orderCode: string; productId: number; productName: string; baseUnit: string; qtyMilli: number; done: boolean }[] = [];
-  for (const r of received) {
-    let remaining = r.qtyMilli;
-    const { results } = await db
+  return fillShortagesFromStock(db, { productIds: [...new Set(received.map((r) => r.productId))], actorUserId, poCode });
+}
+
+/**
+ * Gắn phần thiếu đang mở vào dòng PO đang chạy còn "chỗ" (K-PO1): theo thứ tự ngày giao sớm → muộn, mỗi dòng PO chỉ gắn tối đa
+ * số còn chờ nhận. Phần thiếu được coi là "đã có hàng sắp về" nhờ đó luôn có PO cụ thể (hiện trên chi tiết đơn, không đặt trùng).
+ * Gọi lại nhiều lần an toàn (chỉ gắn phần chưa gắn).
+ */
+export async function linkCoveredShortages(db: D1Database, actorUserId: number | null, productIds?: number[]) {
+  if (productIds && !productIds.length) return;
+  const pf = productIds ? ` AND pl.product_id IN (${productIds.map(() => "?").join(",")})` : "";
+  const lines = (
+    await db
       .prepare(
-        `SELECT s.id, s.order_id, s.order_line_id, s.product_id, s.qty_milli, s.need_by, o.code AS order_code, o.channel, o.store_id, o.status, p.name AS product_name, p.base_unit
-           FROM po_shortage_links l JOIN so_shortages s ON s.id = l.shortage_id JOIN orders o ON o.id = s.order_id JOIN products p ON p.id = s.product_id
-          WHERE l.po_line_id = ? AND s.status = 'open' AND s.qty_milli > 0 AND o.status IN ('confirmed','preparing','shipping','delivery_failed')
-          ORDER BY (s.need_by IS NULL), s.need_by, s.created_at, s.id`,
+        `SELECT pl.id, pl.product_id,
+                MAX(COALESCE(pl.confirmed_qty_milli, pl.qty_milli) - pl.received_milli, 0) AS remaining
+           FROM purchase_order_lines pl JOIN purchase_orders po ON po.id = pl.po_id
+          WHERE po.status IN (${IN_FLIGHT_PO_SQL})${pf} ORDER BY pl.id`,
       )
-      .bind(r.poLineId)
-      .all<OpenShort>();
-    for (const s of results) {
-      if (remaining <= 0) break;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const cur = await db.prepare(`SELECT qty_milli, status FROM so_shortages WHERE id = ?`).bind(s.id).first<{ qty_milli: number; status: string }>();
-        if (!cur || cur.status !== "open" || cur.qty_milli <= 0) break;
-        const want = Math.min(cur.qty_milli, remaining);
-        const { alloc, missingMilli } = await allocateFefoPartial(db, s.product_id, want, s.store_id);
-        const got = want - missingMilli;
-        if (got <= 0) break;
-        const left = cur.qty_milli - got;
-        const title = `Đơn ${s.order_code} đã đủ hàng`;
-        const body = `Hàng theo ${poCode} đã về và được giữ cho đơn. Có thể soạn / giao.`;
-        const stmts: D1PreparedStatement[] = [
-          assertStmt(db, "so_shortage.fill", `SELECT status = 'open' AND qty_milli = ? FROM so_shortages WHERE id = ?`, [cur.qty_milli, s.id]),
-          ...reserveStmts(db, s.order_id, [{ orderLineId: s.order_line_id, productId: s.product_id, alloc }]),
+      .bind(...(productIds ?? []))
+      .all<{ id: number; product_id: number; remaining: number }>()
+  ).results;
+  const cap = new Map<number, { id: number; free: number }[]>();
+  for (const l of lines) cap.set(l.product_id, [...(cap.get(l.product_id) ?? []), { id: l.id, free: l.remaining }]);
+  if (!cap.size) return;
+  const sf = productIds ? ` AND s.product_id IN (${productIds.map(() => "?").join(",")})` : "";
+  const shorts = (
+    await db
+      .prepare(
+        `SELECT s.id, s.product_id, s.qty_milli FROM so_shortages s JOIN orders o ON o.id = s.order_id
+          WHERE s.status = 'open' AND s.qty_milli > 0 AND o.status IN (${OPEN_ORDER_SQL})${sf}
+          ORDER BY s.product_id, (s.need_by IS NULL), s.need_by, s.created_at, s.id`,
+      )
+      .bind(...(productIds ?? []))
+      .all<{ id: number; product_id: number; qty_milli: number }>()
+  ).results;
+  // Gán lại từ đầu theo thứ tự ngày giao: đơn giao sớm được phủ trước, liên kết cũ lệch thứ tự (hoặc cũ do hàng đã về) được sắp lại
+  const byProduct = new Map<number, D1PreparedStatement[]>();
+  for (const [productId, slots] of cap) {
+    const stmts: D1PreparedStatement[] = [
+      db
+        .prepare(
+          `DELETE FROM po_shortage_links WHERE po_line_id IN (${slots.map(() => "?").join(",")}) AND shortage_id IN (SELECT id FROM so_shortages WHERE status = 'open')`,
+        )
+        .bind(...slots.map((x) => x.id)),
+    ];
+    for (const s of shorts.filter((x) => x.product_id === productId)) {
+      let need = s.qty_milli;
+      for (const slot of slots) {
+        if (need <= 0) break;
+        if (slot.free <= 0) continue;
+        const take = Math.min(slot.free, need);
+        slot.free -= take;
+        need -= take;
+        stmts.push(
           db
-            .prepare(`UPDATE so_shortages SET qty_milli = ?, status = ?, closed_at = ? WHERE id = ? AND status = 'open'`)
-            .bind(left, left === 0 ? "filled" : "open", left === 0 ? new Date().toISOString() : null, s.id),
-          sysAuditStmt(db, { action: "so_shortage.fill", entity: "order", entityId: s.order_id, after: { shortageId: s.id, po: poCode, filledMilli: got, leftMilli: left } }, actorUserId),
-        ];
-        if (left === 0) {
-          // thông báo khi đơn không còn dòng thiếu nào
-          stmts.push(
-            db
-              .prepare(
-                `INSERT INTO notifications(kind, title, body, audience_perm, ref_type, ref_id)
-                 SELECT 'so_filled', ?, ?, ?, 'order', ? WHERE NOT EXISTS (SELECT 1 FROM so_shortages WHERE order_id = ? AND status = 'open' AND id <> ? AND qty_milli > 0)`,
-              )
-              .bind(title, body, s.channel === "b2b" ? "b2b.write" : "orders.online.manage", s.order_id, s.order_id, s.id),
-            enqueueJobStmt(db, "notify.managers", "order", s.order_id, { title, body, url: s.channel === "b2b" ? "/b2b/orders" : "/online-orders" }),
-          );
-        }
-        try {
-          await db.batch(stmts);
-        } catch (e) {
-          const m = String((e as Error)?.message);
-          if ((CHECK_FAIL.test(m) || m.includes("state_changed")) && attempt === 0) continue; // tồn / dòng thiếu vừa đổi: tính lại một lần
-          if (CHECK_FAIL.test(m) || m.includes("state_changed")) break;
-          throw e;
-        }
-        remaining -= got;
-        filled.push({ orderId: s.order_id, orderCode: s.order_code, productId: s.product_id, productName: s.product_name, baseUnit: s.base_unit, qtyMilli: got, done: left === 0 });
-        break;
+            .prepare(`INSERT INTO po_shortage_links(po_line_id, shortage_id, qty_milli) VALUES (?,?,?) ON CONFLICT(po_line_id, shortage_id) DO UPDATE SET qty_milli = qty_milli + excluded.qty_milli`)
+            .bind(slot.id, s.id, take),
+        );
       }
     }
+    byProduct.set(productId, stmts);
   }
-  return filled;
+  for (const [productId, stmts] of byProduct)
+    await db.batch([...stmts, sysAuditStmt(db, { action: "so_shortage.link_po", entity: "product", entityId: productId, after: { links: stmts.length - 1 } }, actorUserId)]);
 }
 
 /** Phần thiếu đang mở của nhiều đơn (cho nhãn "Chờ hàng X" ở danh sách): orderId → [{ productName, qtyMilli, baseUnit }]. */

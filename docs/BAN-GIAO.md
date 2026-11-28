@@ -11,10 +11,11 @@ Tài liệu này dành cho **người/tài khoản tiếp nhận** (kể cả m�
 | `main` | Gồm mọi thứ tới PR #22 (Bảng chấm công + tài liệu bàn giao), gộp ngày 26/11/2026 | `origin/main` |
 | **Bảng chấm công dạng lưới (kiểu KiotViet)** | ✅ **Đã gộp** (26/11/2026) | PR [#21](https://github.com/Nox-studio98/ERP-HuuManh/pull/21) |
 | Nhập nhanh đơn sỉ (Zalo + bảng nhiều chi nhánh + đọc ảnh) | ⏸ **Làm sau** — chỉ làm khi mọi phần khác đã sửa chuẩn; hiện có thiết kế + PoC, chưa code | nhánh `claude/zalo-order-design` (`docs/ZALO-ORDER.md`, `docs/concept-nhap-nhanh-don-si.html`, `tools/ocr-poc/`) — chưa có PR |
-| **PR #23 (nhánh `claude/dazzling-ptolemy-f44jju`)** | 🟡 **CI xanh, chờ chủ dự án đồng ý gộp** | PR [#23](https://github.com/Nox-studio98/ERP-HuuManh/pull/23) — nội dung ở mục 1b |
+| PR #23 (POS-KV A+B, audit đợt 8–9, SePay ↔ sổ quỹ) | ✅ **Đã gộp** vào `main` (28/11/2026) | PR [#23](https://github.com/Nox-studio98/ERP-HuuManh/pull/23) — nội dung ở mục 1b |
+| **PR #24 (nhánh `claude/dazzling-ptolemy-f44jju`)** — audit đợt 10 (nghiệp vụ còn lại) + test bất biến liên module | 🟡 **Chờ chủ dự án đồng ý gộp** | PR [#24](https://github.com/Nox-studio98/ERP-HuuManh/pull/24) — nội dung ở mục 1c |
 | Bán hàng tại quầy theo KiotViet — đợt A (A1–A6) và đợt B (bán nợ khách lẻ, thu khác, giao hàng tại quầy) | ✅ Xong trong PR #23 (E2E `pos-kv`, `pos-kv-b`, `pos-kv-b-delivery`) | `docs/POS-KV.md`, `docs/POS-KV-B.md` |
 | Tài liệu bàn giao (file này, hướng dẫn Bảng chấm công, script E2E) | ✅ **Đã gộp** (26/11/2026) | PR [#22](https://github.com/Nox-studio98/ERP-HuuManh/pull/22) |
-| Bản demo | Chưa có PR #18–#23 — sau khi gộp #23 cần **tạo release** `demo-YYYY-MM-DD` | xem mục 6 |
+| Bản demo | Chưa có PR #18–#24 — sau khi gộp #24 cần **tạo release** `demo-YYYY-MM-DD` | xem mục 6 |
 
 Kiểm thử ở thời điểm gộp #21 (nhánh `claude/hr-board`): `tsc` sạch, **881 test vitest đạt**, E2E `hr`, `hr-swap`, `hr-board` (mới), `settings` đạt trên DB mới.
 
@@ -30,6 +31,12 @@ Kiểm thử ở thời điểm gộp #21 (nhánh `claude/hr-board`): `tsc` sạ
 - **Đợt 9** (migration 0044): trả hàng nhanh không cần hoá đơn gốc (giá hiện hành, chỉ giảm; thu ngân luôn cần quản lý duyệt), sửa hoá đơn POS đã lập (phiếu trả + đơn mới, chuyển khoản đã thu), xuất Excel chi tiết dòng hàng + chọn cột bảng Đơn hàng, nhập kết quả kiểm kho từ Excel vào phiếu kiểm kê nháp, đơn giao từ quầy nhận giảm giá tay, chuyển việc khi nhân viên nghỉ (EC-39), vùng chạm checkbox 390px. Bộ lọc danh sách đơn (`services/order-filter.ts`) và duyệt giảm giá (`services/discount-approval.ts`) mỗi thứ chỉ một nguồn.
 - Đối chiếu KiotViet trong mã: `docs/KIOTVIET-KHOANG-TRONG.md`.
 - Giả định đã chọn, cần chủ xác nhận: hoa hồng chỉ tính đơn tại quầy; chỉ chủ sửa quy tắc hoa hồng; màn khách lẻ dùng quyền xem khách sỉ (thủ kho thấy danh sách, SĐT bị che); chuyển quỹ không cho quỹ nguồn âm và không dùng quỹ chờ đối soát; nhập Excel tối đa 1000 dòng/lần.
+
+
+### 1c. Nội dung PR #24 (28/11/2026) — audit đợt 10
+Chi tiết ở `docs/audit/README.md` mục **Đợt 10**. Migration 0046–0048. Quyết định của chủ (28/11): bậc công chỉ tính giờ thường; tài khoản website chịu giới hạn COD như khách vãng lai (chưa xác minh email phải qua Turnstile); chốt ca lệch két tự lập phiếu thừa/thiếu quỹ; ngưỡng miễn phí giao tính sau giảm giá (mọi kênh).
+- Test bất biến liên module `test/invariants-cross-module.test.ts` (tồn kho, tiền két, công nợ, điểm, lương… khớp nhau qua 13 bước nghiệp vụ).
+- Giả định đã chọn, cần chủ xác nhận: chủ cũng không tự chấm công/ghi thưởng cho chính mình trừ khi không còn chủ/quản lý nào khác; chỉ chủ ghi được thưởng tiền, mỗi khoản tối đa `hr.bonus_max_vnd` (2.000.000đ); không chặn quỹ âm ở phiếu thu/chi (chỉ chặn ở chuyển quỹ); nhận PO có thể giữ cả tồn sẵn có cho phần thiếu đơn sỉ.
 
 ---
 

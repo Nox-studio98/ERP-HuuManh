@@ -14,6 +14,7 @@ import { parseBody } from "../services/http";
 import { addDays, assertPeriodsOpen, eachDate, hrSettings, isDate, leaveBalance, minutesBetween, vnLocalToUtc, weekStart } from "../services/hr-common";
 import { loadBoard, selectCellPunches, type BoardCell } from "../services/hr-board";
 import { punchFlags } from "../services/hr-timesheet";
+import { getSettingInt } from "../services/settings";
 
 type Ctx = Context<AppBindings>;
 
@@ -22,6 +23,9 @@ const timeS = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Giờ không hợp 
 const optTime = z.union([timeS, z.literal(""), z.null()]).optional();
 const MAX_BOARD_DAYS = 42;
 const MAX_VND_EACH = 100_000_000;
+const MAX_INCIDENT_TIMES = 20;
+/** K-HR2: trần mặc định tổng một khoản phạt/thưởng (tham số hr.bonus_max_vnd). */
+const DEFAULT_BONUS_MAX_VND = 2_000_000;
 
 /** Người xem có quyền thấy số tiền phạt/thưởng (dữ liệu lương): hr.sensitive hoặc hr.schedule. */
 const moneyOf = (c: Ctx) => {
@@ -48,6 +52,24 @@ function auditAfterInsert(c: Ctx, e: AuditEntry): D1PreparedStatement {
       u?.id ?? null, e.action, e.entity ?? null, e.before !== undefined ? JSON.stringify(e.before) : null, e.after !== undefined ? JSON.stringify(e.after) : null,
       e.reason ?? null, c.req.header("cf-connecting-ip") ?? null, u?.deviceId ?? c.req.header("x-device-id") ?? null, c.get("requestId") ?? null,
     );
+}
+
+/**
+ * K-HR1: không ai tự chấm công / tự ghi phép / tự ghi thưởng cho CHÍNH MÌNH (NV gắn với tài khoản người gọi).
+ * Chủ cũng bị chặn (cần người khác có quyền hr.schedule: chủ khác hoặc quản lý đang hoạt động);
+ * chỉ khi không còn ai khác có quyền thì chủ mới được tự làm (không thì hệ thống kẹt).
+ */
+async function assertNotSelfEmployee(c: Ctx, employeeIds: (number | null | undefined)[]) {
+  const u = c.get("user");
+  const ids = employeeIds.filter((x): x is number => x != null);
+  if (!ids.length) return;
+  const mine = await c.env.DB.prepare(`SELECT id FROM employees WHERE user_id = ?`).bind(u.id).first<{ id: number }>();
+  if (!mine || !ids.includes(mine.id)) return;
+  if (u.role === "owner") {
+    const other = await c.env.DB.prepare(`SELECT COUNT(*) n FROM users WHERE active = 1 AND id != ? AND role IN ('owner','manager')`).bind(u.id).first<{ n: number }>();
+    if (!other?.n) return;
+  }
+  throw new AppError(403, "self_approval", "Không được tự chấm công / ghi phép / ghi phạt-thưởng cho chính mình — nhờ người khác có quyền xếp ca");
 }
 
 function boardRange(c: Ctx) {
@@ -216,6 +238,7 @@ export function registerBoardRoutes(hrRoutes: Hono<AppBindings>) {
       if (!e) throw new AppError(422, "employee_not_found", `Nhân viên #${t.employeeId} không tồn tại`);
       if (t.workDate < e.hire_date || (e.termination_date && t.workDate > e.termination_date)) throw new AppError(422, "employee_inactive", `Nhân viên #${t.employeeId} không làm việc ngày ${t.workDate}`);
     }
+    await assertNotSelfEmployee(c, [...empIds, b.substituteEmployeeId]);
     await assertPeriodsOpen(db, targets.map((t) => t.workDate));
 
     const flagList = [b.applyLate === false ? "noLate" : "", b.applyEarly === false ? "noEarly" : "", b.applyOt === false ? "noOt" : ""].filter(Boolean);
@@ -358,6 +381,7 @@ export function registerBoardRoutes(hrRoutes: Hono<AppBindings>) {
     if (!a) throw notFound("assignment_not_found", "Không tìm thấy ca");
     if (a.status !== "scheduled") throw conflict("assignment_cancelled", "Ca đã bị huỷ");
     if (a.employee_id === b.employeeId) throw new AppError(422, "validation_error", "Nhân viên mới trùng nhân viên hiện tại");
+    await assertNotSelfEmployee(c, [a.employee_id, b.employeeId]);
     await assertPeriodsOpen(db, [a.work_date]);
     const e = await db.prepare(`SELECT id, full_name, status, hire_date, termination_date FROM employees WHERE id = ?`).bind(b.employeeId).first<any>();
     if (!e) throw new AppError(422, "employee_not_found", "Nhân viên không tồn tại");
@@ -444,7 +468,7 @@ export function registerBoardRoutes(hrRoutes: Hono<AppBindings>) {
         workDate: dateS,
         assignmentId: z.number().int().positive().optional(),
         typeId: z.number().int().positive(),
-        times: z.number().int().min(1).max(100),
+        times: z.number().int().min(1).max(MAX_INCIDENT_TIMES),
         amountEach: z.number().int().min(0).max(MAX_VND_EACH).optional(),
         note: z.string().trim().max(300).optional(),
       }),
@@ -460,8 +484,16 @@ export function registerBoardRoutes(hrRoutes: Hono<AppBindings>) {
       const a = await db.prepare(`SELECT employee_id, work_date FROM shift_assignments WHERE id = ?`).bind(b.assignmentId).first<any>();
       if (!a || a.employee_id !== b.employeeId || a.work_date !== b.workDate) throw new AppError(422, "assignment_mismatch", "Ca không thuộc nhân viên/ngày này");
     }
+    await assertNotSelfEmployee(c, [b.employeeId]);
+    const role = c.get("user").role;
+    const sensitive = can(role, "hr.sensitive");
+    // K-HR2: người chỉ có hr.schedule không ghi thưởng tiền, và với phạt chỉ dùng mức có sẵn của loại (không sửa mức)
+    if (!sensitive && t.kind === "bonus") throw new AppError(403, "bonus_forbidden", "Chỉ chủ cửa hàng (quyền dữ liệu nhạy cảm) mới được ghi thưởng bằng tiền");
+    if (!sensitive && b.amountEach !== undefined && b.amountEach !== t.default_amount) throw new AppError(403, "amount_override_forbidden", "Chỉ được dùng mức tiền có sẵn của loại, không sửa mức");
     const amountEach = b.amountEach ?? t.default_amount;
     const amount = amountEach * b.times;
+    const maxVnd = await getSettingInt(db, "hr.bonus_max_vnd", DEFAULT_BONUS_MAX_VND);
+    if (maxVnd > 0 && amount > maxVnd && role !== "owner") throw new AppError(403, "incident_over_limit", `Khoản ${t.kind === "bonus" ? "thưởng" : "phạt"} vượt trần ${maxVnd.toLocaleString("vi-VN")} đ — cần chủ cửa hàng ghi`);
     const locked = await db.prepare(`SELECT 1 x FROM payroll_periods WHERE period = ? AND status IN ('approved','paid')`).bind(b.workDate.slice(0, 7)).first();
     if (locked) throw conflict("payroll_locked", "Kỳ lương đã duyệt/đã chi: không ghi thêm phạt/thưởng cho kỳ này");
     const res = await db.batch([
@@ -482,6 +514,7 @@ export function registerBoardRoutes(hrRoutes: Hono<AppBindings>) {
     const i = await db.prepare(`SELECT * FROM attendance_incidents WHERE id = ?`).bind(id).first<any>();
     if (!i) throw notFound("incident_not_found", "Không tìm thấy phạt/thưởng");
     if (i.voided_at) throw conflict("already_voided", "Đã huỷ trước đó");
+    await assertNotSelfEmployee(c, [i.employee_id]);
     const locked = await db.prepare(`SELECT 1 x FROM payroll_periods WHERE period = ? AND status IN ('approved','paid')`).bind(i.work_date.slice(0, 7)).first();
     if (locked) throw conflict("payroll_locked", "Kỳ lương đã duyệt/đã chi: không huỷ được phạt/thưởng của kỳ này");
     const uid = c.get("user").id;

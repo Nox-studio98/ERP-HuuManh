@@ -23,7 +23,8 @@
   "queues": { "producers": [{ "binding": "JOBS", "queue": "huu-manh-erp-jobs" }] },
   "ratelimits": [
     { "name": "RL_AUTH", "namespace_id": "2201", "simple": { "limit": 10, "period": 60 } },
-    { "name": "RATE_LIMITER", "namespace_id": "2202", "simple": { "limit": 120, "period": 60 } }
+    { "name": "RATE_LIMITER", "namespace_id": "2202", "simple": { "limit": 120, "period": 60 } },
+    { "name": "RL_CHECKOUT", "namespace_id": "2207", "simple": { "limit": 20, "period": 60 } }
   ],
   "vars": { "APP_ENV": "production" },
   "observability": { "enabled": true },
@@ -35,7 +36,8 @@
       "name": "huu-manh-shop-demo",
       "ratelimits": [
         { "name": "RL_AUTH", "namespace_id": "2203", "simple": { "limit": 10, "period": 60 } },
-        { "name": "RATE_LIMITER", "namespace_id": "2204", "simple": { "limit": 120, "period": 60 } }
+        { "name": "RATE_LIMITER", "namespace_id": "2204", "simple": { "limit": 120, "period": 60 } },
+        { "name": "RL_CHECKOUT", "namespace_id": "2208", "simple": { "limit": 20, "period": 60 } }
       ],
       "routes": [{ "pattern": "huumanhfruit.noxelis.co", "custom_domain": true }],
       "vars": { "APP_ENV": "demo", "TURNSTILE_SECRET": "1x0000000000000000000000000000000AA", "SHOP_BASE_URL": "https://huumanhfruit.noxelis.co" },
@@ -54,7 +56,8 @@
       "name": "huu-manh-shop-staging",
       "ratelimits": [
         { "name": "RL_AUTH", "namespace_id": "2205", "simple": { "limit": 10, "period": 60 } },
-        { "name": "RATE_LIMITER", "namespace_id": "2206", "simple": { "limit": 120, "period": 60 } }
+        { "name": "RATE_LIMITER", "namespace_id": "2206", "simple": { "limit": 120, "period": 60 } },
+        { "name": "RL_CHECKOUT", "namespace_id": "2209", "simple": { "limit": 20, "period": 60 } }
       ],
       "vars": { "APP_ENV": "staging" },
       "d1_databases": [
