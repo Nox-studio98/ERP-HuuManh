@@ -830,7 +830,6 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   let shippingFee = b.shippingFee ?? 0;
   if (b.shippingFee == null && zone) {
     if (subtotal < zone.min_order) throw new AppError(422, "min_order", "Chưa đạt giá trị đơn tối thiểu của khu vực", { minOrder: zone.min_order });
-    shippingFee = zone.free_over != null && subtotal >= zone.free_over ? 0 : zone.fee;
   }
   let slotCapacity = 0;
   if (b.slotDate && b.slotId) {
@@ -841,6 +840,8 @@ export async function createSocialOrder(c: Ctx, b: SocialOrderInput): Promise<{ 
   }
   const lineDisc = items.map((_, i) => Math.min(b.pos?.lineDiscounts?.[i] ?? 0, lineAmount(items[i].unitPrice, items[i].qtyMilli)));
   const discountTotal = lineDisc.reduce((s, x) => s + x, 0);
+  // Ngưỡng miễn phí giao tính sau giảm giá (cùng quy tắc với checkout website).
+  if (b.shippingFee == null && zone) shippingFee = zone.free_over != null && subtotal - discountTotal >= zone.free_over ? 0 : zone.fee;
   const total = subtotal - discountTotal + shippingFee;
   const code = await nextOnlineCode(db);
   const token = newTrackingToken();

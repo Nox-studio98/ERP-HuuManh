@@ -60,7 +60,7 @@ export function PosDeliverySheet({ lines, customer, orderDiscount = 0, onClose, 
   const pickZone = (id: number) => {
     setZoneId(id);
     const z = zones.data?.find((x) => x.id === id);
-    if (z) setFee(z.freeOver != null && subtotal >= z.freeOver ? 0 : z.fee);
+    if (z) setFee(z.freeOver != null && subtotal - discount >= z.freeOver ? 0 : z.fee);
   };
   const prepay = mode === "cod" ? 0 : mode === "full" ? total : Math.min(prepayAmt, total);
   const cod = total - prepay;
