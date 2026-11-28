@@ -670,6 +670,23 @@ export async function cancelFeePolicy(db: D1Database, status: string): Promise<"
 
 // ---------------------------------------------------------------- cancel (EC-06)
 
+/**
+ * Phần dọn dùng chung cho MỌI đường huỷ đơn (ERP, khách tự huỷ / từ chối cân lại ở shop): phí giao theo A-28,
+ * nghĩa vụ hoàn `refund_due`, xoá chênh lệch cân, đóng phần thiếu (PO). `extraSet` đặt vào transitionStmts với ?3 = lý do huỷ, ?4/?5 theo `extraBinds`.
+ */
+export async function cancelSettlement(db: D1Database, o: { id: number; status: string; shipping_fee: number | null }) {
+  const policy = await cancelFeePolicy(db, o.status);
+  const keepFee = policy === "customer" ? o.shipping_fee ?? 0 : 0;
+  const due = await refundObligation(db, o.id, keepFee);
+  return {
+    policy,
+    due,
+    extraSet: ["shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0", "refund_due = ?5"],
+    extraBinds: [policy, due] as unknown[],
+    closeShortages: closeOrderShortagesStmt(db, o.id),
+  };
+}
+
 export async function cancelOrder(c: Ctx, id: number, reason: string) {
   const db = c.env.DB;
   const user = c.get("user");
@@ -683,18 +700,16 @@ export async function cancelOrder(c: Ctx, id: number, reason: string) {
     const p = takeFromLots(sh.lots, line!.qty_milli, 0);
     restock.push(...restockStmts(db, sh.productId, p.restock, [], "order_cancel", id, user.id));
   }
-  // A-28: phí giao khi huỷ theo giai đoạn (xem cancelFeePolicy)
-  const policy = await cancelFeePolicy(db, o.status);
-  const keepFee = policy === "customer" ? o.shipping_fee ?? 0 : 0;
-  // A-14: huỷ chỉ ghi nghĩa vụ hoàn tiền (refund_due); không chèn dòng quỹ. Hoàn thực tế do finance.write qua /refund. COD chưa thu → 0.
-  const due = await refundObligation(db, id, keepFee);
-  const set = ["cancel_reason = ?3", "shipping_fee_policy = ?4", "diff_status = 'none'", "diff_amount = 0", "refund_due = ?5"];
-  const binds: unknown[] = [reason, policy, due];
+  // A-28 + A-14: phí giao theo giai đoạn; huỷ chỉ ghi nghĩa vụ hoàn tiền (refund_due), không chèn dòng quỹ. COD chưa thu → 0.
+  const st = await cancelSettlement(db, o);
+  const due = st.due;
+  const set = ["cancel_reason = ?3", ...st.extraSet];
+  const binds: unknown[] = [reason, ...st.extraBinds];
   const t = transitionStmts(db, id, o.status, "cancelled", staff(c), { note: "Đơn đã được huỷ", internalNote: reason, extraSet: set.join(", "), extraBinds: binds });
   const stmts = [
     t[0],
     ...release,
-    closeOrderShortagesStmt(db, id),
+    st.closeShortages,
     ...restock,
     db.prepare(`UPDATE payment_intents SET status='cancelled' WHERE order_id=? AND status='pending'`).bind(id),
     ...t.slice(1),
