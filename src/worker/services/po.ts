@@ -12,7 +12,7 @@ import { getSettingInt } from "./settings";
 import { sysAuditStmt } from "./sysaudit";
 import { enqueueJobStmt } from "./outbox";
 import { unitFactor } from "./http";
-import { allocateReceivedToShortages, sweepDeadShortagesStmt } from "./shortages";
+import { allocateReceivedToShortages, fillShortagesFromStock, linkCoveredShortages, sweepDeadShortagesStmt } from "./shortages";
 
 /**
  * Đơn đặt NCC (PO) — docs/PO-NCC.md.
@@ -142,6 +142,8 @@ export async function runPoCutoffIfDue(db: D1Database, now = new Date()) {
 async function buildDrafts(db: D1Database, cutoffDay: string, now: Date, opts: { mode: CutoffMode; actor: PoActor }, result: CutoffResult) {
   const today = vnDate(now);
   await sweepDeadShortagesStmt(db).run(); // phần thiếu của đơn đã huỷ/hoàn tất ở nơi khác
+  // K-PO1b: tồn tự do (nhập thường, đơn khác huỷ, chuyển kho về) giữ cho phần thiếu đang mở TRƯỚC khi tính nhu cầu đặt NCC
+  await fillShortagesFromStock(db, { actorUserId: opts.actor.userId });
   const horizon = Math.max(0, await getSettingInt(db, "po.horizon_days", 2));
   const until = addDays(today, horizon);
 
@@ -276,6 +278,8 @@ async function buildDrafts(db: D1Database, cutoffDay: string, now: Date, opts: {
     ]);
     result.cancelled.push({ id: ex.id, code: ex.code });
   }
+  // K-PO1: phần thiếu được coi là "đã có hàng sắp về" phải gắn vào dòng PO đang chạy cụ thể (ưu tiên ngày giao sớm)
+  await linkCoveredShortages(db, opts.actor.userId, [...needs.keys()]);
 }
 
 function lineStmts(
@@ -467,7 +471,9 @@ export async function approvePo(db: D1Database, c: Ctx, poId: number, version?: 
   const lineCount = (await db.prepare(`SELECT COUNT(*) AS n FROM purchase_order_lines WHERE po_id = ?`).bind(poId).first<{ n: number }>())!.n;
   if (!lineCount) throw new AppError(422, "empty_po", "PO chưa có dòng nào");
   const threshold = await getSettingInt(db, "approval.po_vnd", 20_000_000);
-  const high = po.total > threshold && !can(user.role, "purchasing.approve_high");
+  // K-PO3: PO còn dòng chưa có giá (total tính 0) không được lọt ngưỡng — coi như vượt, cần chủ duyệt
+  const unpriced = (await db.prepare(`SELECT COUNT(*) AS n FROM purchase_order_lines WHERE po_id = ? AND COALESCE(confirmed_unit_cost, unit_cost) IS NULL`).bind(poId).first<{ n: number }>())!.n;
+  const high = (po.total > threshold || unpriced > 0) && !can(user.role, "purchasing.approve_high");
   const a: PoActor = { type: "staff", userId: user.id, role: user.role, c };
 
   if (po.status === "pending_approval" && high) throw conflict("owner_approval_required", "PO vượt ngưỡng đang chờ chủ duyệt", { approvalId: po.approval_id });
@@ -476,9 +482,9 @@ export async function approvePo(db: D1Database, c: Ctx, poId: number, version?: 
       assertStmt(db, "po.request_approval", `SELECT status = 'draft' AND version = ? FROM purchase_orders WHERE id = ?`, [po.version, poId]),
       db
         .prepare(`INSERT INTO approvals(type, ref_type, ref_id, payload_json, reason, requested_by) VALUES ('purchase_order.approve','purchase_order',?,?,?,?)`)
-        .bind(String(poId), JSON.stringify({ code: po.code, supplierName: po.supplier_name }), `PO vượt ngưỡng ${threshold.toLocaleString("vi-VN")} đ`, user.id),
+        .bind(String(poId), JSON.stringify({ code: po.code, supplierName: po.supplier_name }), unpriced > 0 ? `PO còn ${unpriced} dòng chưa có giá, cần chủ duyệt` : `PO vượt ngưỡng ${threshold.toLocaleString("vi-VN")} đ`, user.id),
       db.prepare(`UPDATE purchase_orders SET status = 'pending_approval', approval_id = (SELECT MAX(id) FROM approvals WHERE type = 'purchase_order.approve' AND ref_id = ? AND status = 'pending'), version = version + 1 WHERE id = ? AND status = 'draft'`).bind(String(poId), poId),
-      audit(db, a, { action: "po.request_approval", entityId: poId, before: { status: "draft" }, after: { status: "pending_approval", total: po.total, threshold } }),
+      audit(db, a, { action: "po.request_approval", entityId: poId, before: { status: "draft" }, after: { status: "pending_approval", total: po.total, threshold, unpricedLines: unpriced } }),
     ]);
     return { status: "pending_approval" as const };
   }
@@ -633,6 +639,14 @@ export async function decideProposal(db: D1Database, actor: PoActor, poId: numbe
   if (b.version != null && b.version !== po.version) throw conflict("version_conflict", "PO vừa được thay đổi, vui lòng tải lại", { version: po.version });
   const guard = assertStmt(db, "po.proposal", `SELECT status = 'supplier_proposed' AND version = ? FROM purchase_orders WHERE id = ?`, [po.version, poId]);
   if (b.accept) {
+    // K-PO2: đề xuất của NCC làm tổng PO vượt ngưỡng duyệt (và tăng so với lúc duyệt) → cần chủ (purchasing.approve_high) chấp nhận
+    if (actor.type === "staff" && actor.role && !can(actor.role, "purchasing.approve_high")) {
+      const threshold = await getSettingInt(db, "approval.po_vnd", 20_000_000);
+      const ls = await poLines(db, poId);
+      const newTotal = ls.reduce((sum, l) => sum + lineValue(l.proposed_qty_milli ?? l.qty_milli, l.proposed_unit_cost ?? l.unit_cost), 0);
+      if (newTotal > threshold && newTotal > po.total)
+        throw conflict("owner_approval_required", "Đề xuất của NCC làm tổng PO vượt ngưỡng duyệt, cần chủ cửa hàng chấp nhận", { total: po.total, proposedTotal: newTotal, threshold });
+    }
     await db.batch([
       guard,
       db.prepare(`UPDATE purchase_order_lines SET confirmed_qty_milli = COALESCE(proposed_qty_milli, qty_milli), confirmed_unit_cost = COALESCE(proposed_unit_cost, unit_cost) WHERE po_id = ?`).bind(poId),
@@ -686,17 +700,28 @@ export async function receivePo(db: D1Database, c: Ctx, poId: number, input: Rec
   const now = new Date();
   const nowIso = now.toISOString();
   const rows: { pl: any; qty: number; cost: number; expires: string | null }[] = [];
+  let typedValue = 0; // giá trị các dòng do người nhận tự nhập giá (PO chưa có giá)
   for (const l of input.lines) {
     const pl = poL.find((x) => x.id === l.poLineId);
     if (!pl) throw new AppError(422, "line_not_in_po", "Dòng nhận không thuộc PO", { poLineId: l.poLineId });
     if (!Number.isInteger(l.qtyMilli) || l.qtyMilli <= 0) throw new AppError(422, "invalid_qty", "Số lượng nhận phải lớn hơn 0", { poLineId: l.poLineId });
     const remaining = targetQty(pl) - pl.received_milli;
     if (l.qtyMilli > remaining) throw new AppError(422, "over_receive", "Số nhận vượt phần còn lại của PO", { poLineId: l.poLineId, remainingMilli: remaining });
-    const cost = l.unitCost ?? pl.confirmed_unit_cost ?? pl.unit_cost;
+    // K-PO3: giá đã chốt không bị ghi đè khi nhận (sai giá → hoá đơn mua khác giá B-09); chỉ dòng chưa có giá mới nhập giá nhận
+    const fixed: number | null = pl.confirmed_unit_cost ?? pl.unit_cost ?? null;
+    if (fixed != null && l.unitCost != null && l.unitCost !== fixed)
+      throw new AppError(422, "unit_cost_locked", `Mặt hàng ${pl.product_name} đã có giá chốt ${fixed}, không sửa khi nhận hàng. Nếu NCC tính khác giá, hãy chốt hoá đơn mua khác giá`, { poLineId: l.poLineId, unitCost: fixed });
+    const cost = fixed ?? l.unitCost ?? null;
     if (cost == null) throw new AppError(422, "missing_cost", `Mặt hàng ${pl.product_name} chưa có giá chốt, hãy nhập đơn giá`, { poLineId: l.poLineId });
+    if (fixed == null) typedValue += lineValue(l.qtyMilli, cost);
     const prod = await db.prepare(`SELECT shelf_life_days FROM products WHERE id = ?`).bind(pl.product_id).first<{ shelf_life_days: number | null }>();
     const expires = l.expiresAt ?? (prod?.shelf_life_days ? new Date(now.getTime() + prod.shelf_life_days * 86400_000).toISOString() : null);
     rows.push({ pl, qty: l.qtyMilli, cost, expires });
+  }
+  if (typedValue > 0 && !can(user.role, "purchasing.approve_high")) {
+    const threshold = await getSettingInt(db, "approval.po_vnd", 20_000_000);
+    if (typedValue > threshold)
+      throw conflict("owner_approval_required", "Giá nhận cho dòng PO chưa có giá vượt ngưỡng duyệt, cần chủ cửa hàng nhập giá hoặc chốt giá với NCC trước", { value: typedValue, threshold });
   }
   const total = rows.reduce((s, r) => s + lineValue(r.qty, r.cost), 0);
   const vat = input.vatAmount ?? 0;

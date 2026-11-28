@@ -266,6 +266,8 @@ export async function confirmOrderFlow(c: Ctx, orderId: number, overrideApproval
               ),
             ]),
         ...reserveStmts(db, orderId, plans),
+        // K-B2B1: xác nhận lại (vd. sau giao thất bại) khi đã đủ tồn → đóng mọi phần thiếu cũ của đơn; upsert ngay sau đây mở lại đúng dòng còn thiếu
+        db.prepare(`UPDATE so_shortages SET status = 'filled', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE order_id = ? AND status = 'open'`).bind(orderId),
         ...shortageUpsertStmts(db, orderId, o.delivery_date ?? null, short),
         db.prepare(`UPDATE orders SET status='confirmed', credit_override_approval_id = COALESCE(?, credit_override_approval_id) WHERE id = ? AND status IN ('new','delivery_failed')`).bind(override, orderId),
         auditStmt(c, {

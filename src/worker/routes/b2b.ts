@@ -21,7 +21,7 @@ import {
 } from "../services/b2b-orders";
 import { enqueueJobByInvoiceCode, invoiceStmts } from "../services/b2b-invoice";
 import { assertPeriodOpen } from "../services/period";
-import { closeOrderShortagesStmt, deleteOrderShortagesStmts, openShortByLine, openShortLinesFor } from "../services/shortages";
+import { closeOrderShortagesStmt, deleteOrderShortagesStmts, fillShortagesFromStock, linkCoveredShortages, openShortByLine, openShortLinesFor } from "../services/shortages";
 
 export const b2bRoutes = new Hono<AppBindings>();
 type Ctx = Context<AppBindings>;
@@ -172,7 +172,11 @@ b2bRoutes.put("/b2b/orders/:id", requirePerm("b2b.write"), async (c) => {
     after: { addressId: b.addressId ?? o.address_id, deliveryDate: b.deliveryDate ?? o.delivery_date, total, relines: !!b.lines },
   }));
   await db.batch(stmts);
-  if (b.lines && o.status === "confirmed") await confirmOrderFlow(c, oid);
+  if (b.lines && o.status === "confirmed") {
+    await confirmOrderFlow(c, oid);
+    // K-PO1: dòng thiếu mới nối lại với PO đang chạy (liên kết cũ bị xoá cùng dòng cũ), ưu tiên ngày giao sớm
+    await linkCoveredShortages(db, c.get("user").id, b.lines.map((l) => l.productId));
+  }
   return c.json(await loadOrderDetail(db, oid));
 });
 
@@ -240,6 +244,7 @@ b2bRoutes.get("/deliveries/:id", requirePerm("b2b.view"), async (c) => c.json(aw
 b2bRoutes.post("/b2b/orders/:id/pick", requirePerm("b2b.deliver"), async (c) => {
   const db = c.env.DB;
   const oid = id(c);
+  await fillShortagesFromStock(db, { orderId: oid, actorUserId: c.get("user").id }); // K-PO1b: tồn tự do phủ phần thiếu thì giữ trước khi soạn
   const o = await orderRow(db, oid);
   if (o.status !== "confirmed") throw conflict("invalid_status", "Chỉ soạn hàng cho đơn đã xác nhận (đã giữ tồn)", { status: o.status });
   const open = await db.prepare(`SELECT id FROM deliveries WHERE order_id = ? AND status IN ('picking','ready','shipping')`).bind(oid).first<{ id: number }>();
@@ -404,6 +409,8 @@ b2bRoutes.post("/deliveries/:id/confirm", requirePerm("b2b.deliver"), async (c) 
   ).results;
   for (const x of b.lines) if (!olines.some((l) => l.id === x.orderLineId)) throw new AppError(422, "line_not_in_order", "Dòng không thuộc đơn", { orderLineId: x.orderLineId });
   // PO: phần chưa có hàng (so_shortages còn mở) không giao được — chỉ giao phần đã giữ, không lấy trộm tồn tự do của đơn khác
+  // K-PO1b: nếu kho đã có tồn tự do phủ phần thiếu (nhập thường, đơn khác huỷ...) thì giữ luôn cho đơn trước khi kiểm
+  await fillShortagesFromStock(db, { orderId: order.id, actorUserId: user.id });
   const awaiting = await openShortByLine(db, order.id);
 
   const per = olines.map((l) => {
