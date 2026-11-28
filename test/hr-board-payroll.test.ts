@@ -35,7 +35,7 @@ describe("phạt/thưởng → lương", () => {
   it("cộng vào penalties/bonus, diễn giải từng dòng, inputs_hash đổi khi thêm/huỷ, kỳ đã duyệt → khoá", async () => {
     const pen = await call("manager", "POST", `${V}/attendance/incidents`, { employeeId: 970, workDate: "2025-03-03", assignmentId: 97001, typeId: 900, times: 2 });
     expect(pen.status).toBe(201);
-    expect((await call("manager", "POST", `${V}/attendance/incidents`, { employeeId: 970, workDate: "2025-03-04", typeId: 903, times: 1 })).status).toBe(201);
+    expect((await call("owner", "POST", `${V}/attendance/incidents`, { employeeId: 970, workDate: "2025-03-04", typeId: 903, times: 1 })).status).toBe(201);
     expect((await call("accountant", "POST", `${V}/timesheets/2025-03/close`, {})).status).toBe(200);
     expect((await call("accountant", "POST", `${V}/payroll/periods/2025-03/calculate`)).status).toBe(200);
     const item = (await call("accountant", "GET", `${V}/payroll/periods/2025-03`)).body.items.find((i: any) => i.employeeId === 970);

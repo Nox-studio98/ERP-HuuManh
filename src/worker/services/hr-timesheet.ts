@@ -429,9 +429,9 @@ export function computeEmployeeTimesheet(period: string, emp: TsEmployee, data: 
   }
   if (!otAuto) for (const [d, c] of lastWorkedCell) c.otMinutes = days.get(d)?.overtimeMinutes ?? 0;
 
-  // 7) quy đổi ra công theo bậc giờ làm
+  // 7) quy đổi ra công theo bậc giờ THƯỜNG (đã trừ tăng ca; K-HR3)
   const tiers = s.workdayTiers ?? [];
-  if (tiers.length) for (const r of days.values()) r.workUnitsX10 = tierUnitsX10(r.workedMinutes, tiers);
+  if (tiers.length) for (const r of days.values()) r.workUnitsX10 = tierUnitsX10(Math.max(0, r.workedMinutes - r.overtimeMinutes), tiers); // K-HR3: bậc công chỉ tính giờ thường, tăng ca trả riêng
 
   const list = [...days.values()].sort((a, b) => (a.workDate < b.workDate ? -1 : 1));
   const cellList = [...cells.values()].filter((c) => inRange(c.workDate)).sort((a, b) => (a.workDate === b.workDate ? ((a.startAt ?? "") < (b.startAt ?? "") ? -1 : 1) : a.workDate < b.workDate ? -1 : 1));

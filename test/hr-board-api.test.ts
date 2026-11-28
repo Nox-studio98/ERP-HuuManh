@@ -208,7 +208,7 @@ describe("Phạt / thưởng", () => {
     const r = await call("manager", "POST", `${V}/attendance/incidents`, { employeeId: A, workDate: "2026-11-02", assignmentId: a1, typeId: 900, times: 2, note: "muộn" });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ kind: "penalty", times: 2, amountEach: 20000, amount: 40000 });
-    const b2 = await call("manager", "POST", `${V}/attendance/incidents`, { employeeId: A, workDate: "2026-11-02", assignmentId: a1, typeId: 903, times: 1, amountEach: 30000 });
+    const b2 = await call("owner", "POST", `${V}/attendance/incidents`, { employeeId: A, workDate: "2026-11-02", assignmentId: a1, typeId: 903, times: 1, amountEach: 30000 });
     expect(b2.body.amount).toBe(30000);
     const mismatch = await call("manager", "POST", `${V}/attendance/incidents`, { employeeId: B, workDate: "2026-11-02", assignmentId: a1, typeId: 900, times: 1 });
     expect(mismatch.body.error.code).toBe("assignment_mismatch");
