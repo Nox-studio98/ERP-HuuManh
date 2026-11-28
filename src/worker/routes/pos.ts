@@ -124,15 +124,22 @@ posRoutes.post("/shifts/open", requirePerm("pos.shift"), async (c) => {
     .bind(storeId)
     .first<{ id: number }>();
   if (!fund) throw new AppError(422, "no_fund", "Chưa cấu hình quỹ tiền mặt");
-  let id: number;
+  // L-1: ghi ca + audit trong MỘT batch (id ca lấy theo người mở + trạng thái open; chỉ một ca mở/người nhờ unique index)
   try {
-    const r = await db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash).run();
-    id = r.meta.last_row_id as number;
+    await db.batch([
+      db.prepare(`INSERT INTO shifts(store_id, user_id, fund_id, opening_cash) VALUES (?,?,?,?)`).bind(storeId, user.id, fund.id, body.openingCash),
+      db
+        .prepare(
+          `INSERT INTO audit_log(user_id, action, entity, entity_id, after_json, ip, device_id, request_id)
+           VALUES (?, 'shift.open', 'shift', (SELECT CAST(id AS TEXT) FROM shifts WHERE user_id = ? AND status = 'open'), ?, ?, ?, ?)`,
+        )
+        .bind(user.id, user.id, JSON.stringify({ openingCash: body.openingCash }), c.req.header("cf-connecting-ip") ?? null, user.deviceId ?? c.req.header("x-device-id") ?? null, c.get("requestId") ?? null),
+    ]);
   } catch (e) {
     if (/UNIQUE/i.test(String((e as Error)?.message))) throw conflict("shift_already_open", "Bạn đang có ca đang mở");
     throw e;
   }
-  await auditStmt(c, { action: "shift.open", entity: "shift", entityId: id, after: { openingCash: body.openingCash } }).run();
+  const id = (await openShiftOf(db, user.id))!.id;
   const shift = await db.prepare(`SELECT * FROM shifts WHERE id = ?`).bind(id).first();
   return c.json({ shift }, 201);
 });
@@ -156,6 +163,28 @@ posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
   if (diff !== 0 && !body.diffReason) {
     throw new AppError(422, "diff_reason_required", "Tiền kiểm đếm chênh lệch so với dự kiến, vui lòng nhập lý do", { expectedCash: expected, diff });
   }
+  // L-3: có lệch tiền → phiếu thu (thừa)/chi (thiếu) vào quỹ tiền mặt của ca, cùng batch chốt ca; kiểm khoá sổ
+  if (diff !== 0) await assertPeriodOpen(db, new Date(), "chênh lệch tiền khi chốt ca");
+  const diffStmts: D1PreparedStatement[] = [];
+  if (diff !== 0) {
+    const dir = diff > 0 ? "in" : "out";
+    const catCode = diff > 0 ? "THUA_KET" : "THIEU_KET";
+    const vCode = await nextCode(db, dir === "in" ? PREFIX.cashIn : PREFIX.cashOut);
+    diffStmts.push(
+      db
+        .prepare(
+          `INSERT INTO cash_vouchers(code, direction, fund_id, category_id, amount, ref_type, ref_id, status, period, note, created_by, approved_by)
+           VALUES (?,?,?, (SELECT id FROM cash_categories WHERE code = ?), ?, 'shift', ?, 'posted', ?, ?, ?, ?)`,
+        )
+        .bind(vCode, dir, shift.fund_id, catCode, Math.abs(diff), id, vnPeriod(), `Chênh lệch két ca #${id} (${diff > 0 ? "thừa" : "thiếu"} ${Math.abs(diff)}đ), chốt bởi ${user.id}: ${body.diffReason}`, user.id, user.id),
+      db
+        .prepare(
+          `INSERT INTO audit_log(user_id, action, entity, entity_id, after_json, ip, device_id, request_id)
+           VALUES (?, 'voucher.create', 'cash_voucher', (SELECT CAST(id AS TEXT) FROM cash_vouchers WHERE code = ?), ?, ?, ?, ?)`,
+        )
+        .bind(user.id, vCode, JSON.stringify({ code: vCode, direction: dir, amount: Math.abs(diff), refType: "shift", shiftId: id }), c.req.header("cf-connecting-ip") ?? null, user.deviceId ?? c.req.header("x-device-id") ?? null, c.get("requestId") ?? null),
+    );
+  }
   try {
   await db.batch([
     // Chốt ca bấm 2 lần / hai người cùng chốt: chỉ một lần chạy (lần sau 409), không ghi 2 audit
@@ -174,6 +203,7 @@ posRoutes.post("/shifts/:id/close", requirePerm("pos.shift"), async (c) => {
       after: { expectedCash: expected, countedCash: body.countedCash, diff },
       reason: body.diffReason,
     }),
+    ...diffStmts,
   ]);
   } catch (e) {
     if (/state_changed/.test(String((e as Error)?.message))) throw conflict("shift_closed", "Ca đã được chốt");

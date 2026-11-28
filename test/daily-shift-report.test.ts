@@ -129,6 +129,18 @@ describe("Lịch sử ca: phân quyền + phân trang", () => {
   });
 });
 
+describe("L-3 chênh lệch két vào sổ quỹ", () => {
+  it("ca cashier chốt thiếu 10.000đ có phiếu chi THIEU_KET ref_type=shift, có audit, không đảo lẻ được", async () => {
+    const v = await db().prepare(`SELECT v.*, c.code AS cat FROM cash_vouchers v JOIN cash_categories c ON c.id = v.category_id WHERE v.ref_type='shift' AND v.ref_id = ?`).bind(cashierShift.id).first<any>();
+    expect(v).toMatchObject({ direction: "out", amount: 10000, status: "posted", cat: "THIEU_KET" });
+    const au = await db().prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action='voucher.create' AND entity='cash_voucher' AND entity_id = ?`).bind(String(v.id)).first<any>();
+    expect(au.n).toBe(1);
+    const rv = await api("owner", "POST", `${V}/vouchers/${v.id}/reverse`, { reason: "thử đảo" });
+    expect(rv.status).toBe(409);
+    expect(rv.body.error?.code ?? rv.body.code).toBe("managed_voucher");
+  });
+});
+
 describe("Báo cáo cuối ngày", () => {
   it("theo hình thức thanh toán, trả hàng, huỷ, thu/chi quỹ; khớp đơn/phiếu", async () => {
     const o = await sell("manager", [{ productId: 1, qty: 1 }], [{ method: "cash", amount: 100000 }]);
@@ -150,8 +162,10 @@ describe("Báo cáo cuối ngày", () => {
     expect(b.byPayment.filter((p: any) => p.kind === "payment").reduce((s: number, p: any) => s + p.net, 0)).toBe(b.revenue);
     expect(b.returns).toMatchObject({ count: 1, total: 100000, byMethod: [{ method: "cash", amount: 100000 }] });
     expect(b.cancelled).toMatchObject({ count: 1, total: 100000 });
-    expect(b.cashFlow.out).toBe(300000);
+    // L-3: ca thu ngân chốt thiếu 10.000đ → phiếu chi hệ thống "Chênh lệch két (thiếu)" vào quỹ tiền mặt, hiện ở thu/chi cuối ngày
+    expect(b.cashFlow.out).toBe(310000);
     expect(b.cashFlow.byCategory.find((x: any) => x.direction === "out").category).toBe("Điện nước");
+    expect(b.cashFlow.byCategory.find((x: any) => x.category === "Chênh lệch két (thiếu)")).toMatchObject({ direction: "out", amount: 10000 });
     expect(b.shifts.length).toBeGreaterThanOrEqual(2);
     // quản lý (có prices.view_cost) thấy giá vốn; tính từ dòng đơn
     expect(typeof b.cogs).toBe("number");

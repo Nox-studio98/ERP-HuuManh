@@ -263,7 +263,7 @@ async function invShift(shiftId: number) {
   );
   const vou = await one<{ s: number }>(
     `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) s FROM cash_vouchers
-      WHERE fund_id=? AND status='posted' AND created_by=? AND created_at >= ? AND created_at <= ? AND COALESCE(ref_type,'') NOT IN ('fund_transfer','manual')`,
+      WHERE fund_id=? AND status='posted' AND created_by=? AND created_at >= ? AND created_at <= ? AND COALESCE(ref_type,'') NOT IN ('fund_transfer','manual','shift')`,
     s.fund_id, s.user_id, s.opened_at, to,
   );
   // huỷ đơn của ca đã chốt: tiền mặt hoàn lấy từ két ca đang mở của người huỷ (refund_shift_id)
@@ -769,7 +769,7 @@ describe("Ngày làm việc mô phỏng — đối chiếu chéo toàn hệ th�
    * (đầu ca + bán tiền mặt − hoàn …) không còn cộng ra expectedCash đã lưu, phiếu bàn giao in lại lệch với số đã chốt/đếm.
    * Bỏ it.fails khi đã sửa.
    */
-  it.fails("10b. [R2-INV-01] phiếu bàn giao của ca đã chốt giữ nguyên công thức tiền mặt sau khi huỷ đơn ở ca khác", async () => {
+  it("10b. [R2-INV-01] phiếu bàn giao của ca đã chốt giữ nguyên công thức tiền mặt sau khi huỷ đơn ở ca khác", async () => {
     expect(closedShiftSnapshot).toBeTruthy();
     const sum = await must("owner", "GET", `${V}/shifts/${cashierShift}/summary`);
     expect(sum.shift.expectedCash).toBe(closedShiftSnapshot!.expected);
