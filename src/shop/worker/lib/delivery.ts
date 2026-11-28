@@ -30,6 +30,9 @@ export async function findZone(db: D1Database, district: string | null | undefin
 
 export const shippingFee = (z: Zone, subtotal: number) => (z.freeOver != null && subtotal >= z.freeOver ? 0 : z.fee);
 
+/** Phí giao khi xét ngưỡng miễn phí trên tiền hàng SAU giảm giá / voucher / điểm (chủ đã chốt). */
+export const feeAfterDiscount = (z: Zone, subtotal: number, discount: number) => shippingFee(z, Math.max(0, subtotal - discount));
+
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export { isoWeekday };

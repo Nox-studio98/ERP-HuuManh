@@ -71,7 +71,7 @@ authRoutes.post("/register", async (c) => {
         .prepare(`INSERT INTO customers(code, type, name, phone, email, customer_group_id, created_at) VALUES (?, 'retail', ?, ?, ?, ?, ?)`)
         .bind(ccode, b.fullName, phone, b.email, groupId, new Date().toISOString()),
       db
-        .prepare(`INSERT INTO shop_accounts(customer_id, email, phone, full_name, pass_hash, kind, marketing_opt_in) VALUES ((SELECT id FROM customers WHERE code = ?), ?, ?, ?, ?, 'retail', ?)`)
+        .prepare(`INSERT INTO shop_accounts(customer_id, retail_customer_id, email, phone, full_name, pass_hash, kind, marketing_opt_in) VALUES ((SELECT id FROM customers WHERE code = ?1), (SELECT id FROM customers WHERE code = ?1), ?2, ?3, ?4, ?5, 'retail', ?6)`)
         .bind(ccode, b.email, phone, b.fullName, passHash, b.marketingOptIn ? 1 : 0),
       db
         .prepare(`INSERT INTO shop_tokens(id, account_id, purpose, expires_at) VALUES (?, (SELECT id FROM shop_accounts WHERE email = ?), 'verify_email', ?)`)

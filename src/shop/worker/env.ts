@@ -10,9 +10,14 @@ export interface ShopEnv {
   JOBS?: Queue<{ jobId: number }>;
   APP_ENV: "dev" | "staging" | "demo" | "production";
   TURNSTILE_SECRET?: string;
-  /** Workers Rate Limiting: chung (120/phút) và nhóm đăng nhập/đăng ký/quên mật khẩu (10/phút). */
+  /** Workers Rate Limiting: chung (120/phút), checkout (20/phút, RL_CHECKOUT) và nhóm đăng nhập/đăng ký/quên mật khẩu (10/phút). */
   RATE_LIMITER?: RateLimiterBinding;
   RL_AUTH?: RateLimiterBinding;
+  /** Checkout: 20 lượt/phút/IP (tài liệu bảo mật). Thiếu binding → rơi về RATE_LIMITER. */
+  RL_CHECKOUT?: RateLimiterBinding;
+  /** Tuỳ chọn: nếu đặt, Turnstile phải trả đúng hostname / action này (chống token của site khác cùng secret). */
+  TURNSTILE_HOSTNAME?: string;
+  TURNSTILE_ACTION?: string;
   PAYMENT_WEBHOOK_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
   /** Tuỳ chọn: origin công khai của website (dùng dựng link trong email). Mặc định lấy từ URL request. */

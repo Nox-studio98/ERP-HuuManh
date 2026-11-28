@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { AppError, conflict, notFound } from "../../../worker/lib/errors";
 import { transitionStmts } from "../../../worker/services/online-orders";
+import { cancelSettlement } from "../../../worker/services/online-ops";
 import { releaseOrderStmts } from "../../../worker/services/reservations";
 import { sysAuditStmt } from "../../../worker/services/sysaudit";
 import { kickJobs } from "../../../worker/services/outbox";
@@ -38,13 +39,16 @@ orderRoutes.post("/orders/track/:token/weight-decision", async (c) => {
         enqueueByRef(db, "notify.staff_new_order", "order", o.code, { orderCode: o.code, event: "weight_accepted" }),
       ]);
     } else {
+      // S-4: dùng chung logic huỷ của ERP (đóng so_shortages, xoá chênh lệch cân, phí giao A-28, refund_due)
+      const st = await cancelSettlement(db, o);
       await db.batch([
         ...(await releaseOrderStmts(db, o.id)),
         ...transitionStmts(db, o.id, o.status, "cancelled", actor, {
           note: "Khách không đồng ý giá theo khối lượng thực tế, đơn đã huỷ",
-          extraSet: "weight_adjust_status = 'rejected', cancel_reason = ?3",
-          extraBinds: ["Khách từ chối chênh lệch khối lượng"],
+          extraSet: ["weight_adjust_status = 'rejected'", "cancel_reason = ?3", ...st.extraSet].join(", "),
+          extraBinds: ["Khách từ chối chênh lệch khối lượng", ...st.extraBinds],
         }),
+        st.closeShortages,
         db.prepare(`UPDATE payment_intents SET status = 'cancelled' WHERE order_id = ? AND status = 'pending'`).bind(o.id),
         enqueueByRef(db, "notify.order_status", "order", o.code, { orderCode: o.code, status: "cancelled", accountId: o.shop_account_id ?? null, link: `${baseUrl(c)}/track/${o.tracking_token}` }),
       ]);
@@ -80,15 +84,17 @@ orderRoutes.post("/me/orders/:code/cancel", requireAccount, async (c) => {
   if (o.channel !== "online" || !CANCELLABLE.includes(o.status))
     throw conflict("not_cancellable", "Đơn không thể huỷ ở trạng thái hiện tại, vui lòng liên hệ cửa hàng", { status: o.status });
   const paid = o.payment_status === "paid" || o.payment_status === "partially_refunded";
+  const st = await cancelSettlement(db, o); // S-4: dùng chung logic huỷ của ERP
   try {
     await db.batch([
       ...(await releaseOrderStmts(db, o.id)),
       ...transitionStmts(db, o.id, o.status, "cancelled", { type: "customer", id: a.id }, {
         note: "Khách huỷ đơn",
         internalNote: paid ? "Đơn đã thanh toán trước khi khách huỷ: cần hoàn tiền cho khách" : undefined,
-        extraSet: "cancel_reason = ?3",
-        extraBinds: ["Khách tự huỷ"],
+        extraSet: ["cancel_reason = ?3", ...st.extraSet].join(", "),
+        extraBinds: ["Khách tự huỷ", ...st.extraBinds],
       }),
+      st.closeShortages,
       db.prepare(`UPDATE payment_intents SET status = 'cancelled' WHERE order_id = ? AND status = 'pending'`).bind(o.id),
       ...(paid ? [sysAuditStmt(db, { action: "shop.order_cancel_refund_needed", entity: "order", entityId: o.code, after: { paymentStatus: o.payment_status, total: o.total } })] : []),
       enqueueByRef(db, "notify.order_status", "order", o.code, { orderCode: o.code, status: "cancelled", accountId: a.id, link: `${baseUrl(c)}/track/${o.tracking_token}` }),

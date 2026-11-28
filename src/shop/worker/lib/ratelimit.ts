@@ -1,10 +1,10 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { MiddlewareHandler } from "hono";
 import type { ShopBindings } from "../env";
 import { clientIp, httpError } from "./util";
 
 let warnedMissing = false;
 
-/** Nhóm khoá theo đường dẫn: auth → RL_AUTH (chặt); checkout/báo giá/còn lại → RATE_LIMITER. */
+/** Nhóm khoá theo đường dẫn: auth → RL_AUTH (chặt); checkout → RL_CHECKOUT (20/phút, rơi về RATE_LIMITER nếu thiếu); báo giá/còn lại → RATE_LIMITER. */
 export function rateBucket(method: string, path: string): { bucket: string; strict: boolean } {
   if (/^\/api\/auth\/(login|register|forgot|reset|verify-email)$/.test(path)) return { bucket: `auth:${path.slice(10)}`, strict: true };
   if (path.startsWith("/api/auth/")) return { bucket: "auth", strict: true };
@@ -22,7 +22,7 @@ export function rateBucket(method: string, path: string): { bucket: string; stri
  */
 export const rateLimit: MiddlewareHandler<ShopBindings> = async (c, next) => {
   const { bucket, strict } = rateBucket(c.req.method, c.req.path);
-  const rl = strict ? (c.env.RL_AUTH ?? c.env.RATE_LIMITER) : c.env.RATE_LIMITER;
+  const rl = strict ? (c.env.RL_AUTH ?? c.env.RATE_LIMITER) : bucket === "checkout" ? (c.env.RL_CHECKOUT ?? c.env.RATE_LIMITER) : c.env.RATE_LIMITER;
   if (rl) {
     const r = await rl.limit({ key: `${bucket}:${clientIp(c)}` });
     if (!r.success) throw httpError(429, "rate_limited", "Bạn thao tác quá nhanh, vui lòng thử lại sau ít phút");
@@ -32,14 +32,6 @@ export const rateLimit: MiddlewareHandler<ShopBindings> = async (c, next) => {
   }
   await next();
 };
-
-/** Dùng trong route (vd. checkout khách vãng lai): tính thêm một lượt vào nhóm riêng. */
-export async function limitBy(c: Context<ShopBindings>, bucket: string, key: string, strict = false) {
-  const rl = strict ? (c.env.RL_AUTH ?? c.env.RATE_LIMITER) : c.env.RATE_LIMITER;
-  if (!rl) return;
-  const r = await rl.limit({ key: `${bucket}:${key}` });
-  if (!r.success) throw httpError(429, "rate_limited", "Bạn thao tác quá nhanh, vui lòng thử lại sau ít phút");
-}
 
 /** Chỉ cho test: đặt lại cờ cảnh báo. */
 export const _resetRateLimitWarn = () => { warnedMissing = false; };

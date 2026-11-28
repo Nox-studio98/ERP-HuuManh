@@ -65,6 +65,9 @@ meRoutes.delete("/me", async (c) => {
     .bind(a.id)
     .first<{ n: number }>();
   if ((open?.n ?? 0) > 0) throw conflict("active_orders", "Bạn còn đơn hàng đang xử lý, vui lòng chờ hoàn tất hoặc huỷ trước khi xoá tài khoản");
+  // Còn khoản tiền cửa hàng cần hoàn cho khách: giữ tài khoản (email liên hệ) tới khi hoàn xong
+  const owed = await db.prepare(`SELECT COUNT(*) AS n FROM orders WHERE shop_account_id = ? AND refund_due > 0`).bind(a.id).first<{ n: number }>();
+  if ((owed?.n ?? 0) > 0) throw conflict("refund_pending", "Cửa hàng còn khoản tiền cần hoàn lại cho bạn, vui lòng chờ nhận được tiền hoàn rồi hãy xoá tài khoản");
   const now = new Date().toISOString();
   const stmts = [
     db
@@ -76,8 +79,10 @@ meRoutes.delete("/me", async (c) => {
     db.prepare(`UPDATE shop_sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL`).bind(now, a.id),
     sysAuditStmt(db, { action: "shop.account_delete", entity: "shop_account", entityId: a.id, after: { customerId: a.customerId, anonymized: true } }),
   ];
-  if (a.kind === "retail")
-    stmts.push(db.prepare(`UPDATE customers SET name = ?, phone = NULL, email = NULL, active = 0 WHERE id = ? AND type = 'retail'`).bind(`Khách đã xoá #${a.id}`, a.customerId));
+  // NĐ13 (S-3): ẩn danh hồ sơ khách lẻ hiện tại VÀ hồ sơ khách lẻ tạo lúc đăng ký (kể cả khi đã liên kết khách sỉ — hồ sơ sỉ giữ nguyên)
+  stmts.push(
+    db.prepare(`UPDATE customers SET name = ?, phone = NULL, email = NULL, active = 0 WHERE type = 'retail' AND id IN (SELECT customer_id FROM shop_accounts WHERE id = ? UNION SELECT retail_customer_id FROM shop_accounts WHERE id = ?)`).bind(`Khách đã xoá #${a.id}`, a.id, a.id),
+  );
   await db.batch(stmts);
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
   return c.json({ ok: true });

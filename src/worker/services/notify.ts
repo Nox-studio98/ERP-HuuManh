@@ -34,11 +34,11 @@ export async function pushAll(env: Env, subs: Sub[], message: unknown) {
 }
 
 /** notify.order_status: email + push cho khách. Nội dung chỉ gồm mã đơn, nhãn trạng thái và link tra cứu. */
-export async function notifyOrderStatus(env: Env, orderId: number, payload: { status?: string; email?: string | null; event?: string; link?: string; accountId?: number | null; orderCode?: string }) {
+export async function notifyOrderStatus(env: Env, orderId: number, payload: { status?: string; email?: string | null; skipEmail?: boolean; event?: string; link?: string; accountId?: number | null; orderCode?: string }) {
   const o = await env.DB
-    .prepare(`SELECT id, code, status, tracking_token, shop_account_id, customer_id FROM orders WHERE id=?`)
+    .prepare(`SELECT id, code, status, tracking_token, shop_account_id, customer_id, contact_email FROM orders WHERE id=?`)
     .bind(orderId)
-    .first<{ id: number; code: string; status: string; tracking_token: string | null; shop_account_id: number | null; customer_id: number | null }>();
+    .first<{ id: number; code: string; status: string; tracking_token: string | null; shop_account_id: number | null; customer_id: number | null; contact_email: string | null }>();
   if (!o) throw new Error("Không tìm thấy đơn để thông báo");
   const status = (payload.status ?? o.status) as OnlineStatus;
   const label = payload.event === "weight_pending" ? "Cần xác nhận lại khối lượng" : CUSTOMER_LABEL[status] ?? status;
@@ -49,7 +49,9 @@ export async function notifyOrderStatus(env: Env, orderId: number, payload: { st
 
   let email = payload.email ?? null;
   if (!email && o.shop_account_id) email = (await env.DB.prepare(`SELECT email FROM shop_accounts WHERE id=?`).bind(o.shop_account_id).first<{ email: string }>())?.email ?? null;
-  if (!email && o.customer_id) email = (await env.DB.prepare(`SELECT email FROM customers WHERE id=?`).bind(o.customer_id).first<{ email: string | null }>())?.email ?? null;
+  // S-2: email người mua lưu trên đơn ('' = khách vãng lai không để lại email) được ưu tiên; không dùng email hồ sơ khách cũ trùng SĐT
+  if (!email && o.contact_email != null) email = o.contact_email || null;
+  else if (!email && !payload.skipEmail && o.customer_id) email = (await env.DB.prepare(`SELECT email FROM customers WHERE id=?`).bind(o.customer_id).first<{ email: string | null }>())?.email ?? null;
   if (email) {
     const base = (env.SHOP_BASE_URL ?? "").replace(/\/$/, "");
     const r = await sendEmail(env, {

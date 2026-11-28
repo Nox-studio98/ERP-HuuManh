@@ -12,7 +12,7 @@ Quy ước như `docs/API.md` + `docs/API-dot2.md` (camelCase, `{items, nextCurs
 - Phiên khách: cookie `__Host-hm_shop` HttpOnly Secure SameSite=Lax, token lưu SHA-256 ở `shop_sessions`, TTL 30 ngày, xoay vòng khi đăng nhập. Request ghi phải có header `X-Requested-With: hm-shop` (CSRF).
 - Mật khẩu PBKDF2 (`lib/crypto`), ≥ 8 ký tự; khoá 15' sau 5 lần sai; phản hồi đăng nhập/quên mật khẩu không tiết lộ email có tồn tại.
 - **Turnstile** bắt buộc ở đăng ký, đăng nhập, quên mật khẩu, đặt hàng khách vãng lai: header `X-Turnstile-Token`, xác minh `https://challenges.cloudflare.com/turnstile/v0/siteverify` với secret `TURNSTILE_SECRET`. Nếu secret chưa đặt và `APP_ENV=dev` → bỏ qua; production thiếu secret → 503.
-- Rate limit theo IP bằng binding `RATE_LIMITER` (Workers Rate Limiting) nếu có: auth 10/phút, checkout 20/phút, còn lại 120/phút → 429.
+- Rate limit theo IP bằng binding `RL_AUTH` / `RL_CHECKOUT` / `RATE_LIMITER` (Workers Rate Limiting) nếu có: auth 10/phút, checkout 20/phút (`RL_CHECKOUT`), còn lại 120/phút → 429.
 - Giá, tồn, phí giao, tổng tiền **luôn tính lại ở server**; client chỉ gửi productId/unit/qty.
 - Dữ liệu trả cho khách chỉ là của chính khách; tra cứu đơn khách vãng lai bằng `trackingToken` (không đoán được) + 4 số cuối SĐT.
 - CSP như ERP; ảnh phục vụ qua `/img/<key>` từ R2 (chỉ prefix `products/`, `cms/`), cache 1 ngày.

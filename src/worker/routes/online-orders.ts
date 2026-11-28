@@ -467,7 +467,7 @@ async function linkStmts(db: D1Database, accountId: number, customerId: number) 
   const cu = await db.prepare(`SELECT id, type FROM customers WHERE id=? AND active=1`).bind(customerId).first<{ id: number; type: string }>();
   if (!cu) throw new AppError(422, "customer_not_found", "Không tìm thấy khách hàng");
   if (cu.type !== "b2b") throw new AppError(422, "not_b2b_customer", "Chỉ gắn với khách sỉ (type b2b)");
-  return [db.prepare(`UPDATE shop_accounts SET customer_id=?, kind='b2b', b2b_status='approved' WHERE id=?`).bind(customerId, accountId)];
+  return [db.prepare(`UPDATE shop_accounts SET retail_customer_id = COALESCE(retail_customer_id, CASE WHEN kind = 'retail' THEN customer_id END), customer_id=?, kind='b2b', b2b_status='approved' WHERE id=?`).bind(customerId, accountId)];
 }
 
 onlineOrderRoutes.post("/shop-accounts/:id/b2b-link", requirePerm("b2b.approve"), async (c) => {
